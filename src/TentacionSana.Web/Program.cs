@@ -430,9 +430,10 @@ app.UseRateLimiter();
 app.UseAntiforgery();
 
 app.MapStaticAssets();
-app.MapGet("/js/blazor.web.js", (IWebHostEnvironment environment) =>
-    Results.File(
-        Path.Combine(environment.WebRootPath, "_framework", "blazor.web.js"),
+app.MapGet("/js/blazor.web.js", () =>
+    Results.Stream(
+        typeof(Program).Assembly.GetManifestResourceStream("TentacionSana.BlazorWebRuntime")
+            ?? throw new InvalidOperationException("El runtime de Blazor no fue incluido en la publicación."),
         "text/javascript"))
     .AllowAnonymous();
 app.MapRazorComponents<App>()
