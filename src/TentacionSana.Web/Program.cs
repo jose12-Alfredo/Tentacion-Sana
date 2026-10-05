@@ -431,10 +431,7 @@ app.UseAntiforgery();
 
 app.MapStaticAssets();
 app.MapGet("/js/blazor.web.js", () =>
-    Results.Stream(
-        typeof(Program).Assembly.GetManifestResourceStream("TentacionSana.BlazorWebRuntime")
-            ?? throw new InvalidOperationException("El runtime de Blazor no fue incluido en la publicación."),
-        "text/javascript"))
+    Results.File(BlazorWebRuntime.Content, "text/javascript"))
     .AllowAnonymous();
 app.MapRazorComponents<App>()
     .AddInteractiveServerRenderMode();
