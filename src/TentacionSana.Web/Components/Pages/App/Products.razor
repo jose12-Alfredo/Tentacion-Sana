@@ -1,0 +1,117 @@
+@page "/app/productos"
+@rendermode InteractiveServer
+@attribute [Authorize(Policy = AppPolicies.ManageSales)]
+@layout AdminLayout
+@inject IProductManagementService ProductService
+@inject IProductImageManagementService ProductImageService
+@inject AuthenticationStateProvider AuthenticationStateProvider
+
+<PageTitle>Productos | Tentación Sana</PageTitle>
+
+<header class="catalog-heading">
+ <div><p class="eyebrow">Catálogo</p><h1>Productos</h1><p class="heading-copy">Administrá tus productos, precios, visibilidad e imágenes.</p></div>
+ <button class="primary-action" @onclick="StartCreating"><span>＋</span> Nuevo producto</button>
+</header>
+
+@if (_showForm)
+{
+ <section class="product-form" aria-labelledby="form-title">
+  <div class="form-heading"><div><p class="eyebrow">@(_editingProductId is null ? "Nuevo registro" : "Edición")</p><h2 id="form-title">@(_editingProductId is null ? "Crear producto" : $"Editar {_form.Name}")</h2></div><button class="close-action" @onclick="CloseForm" aria-label="Cerrar">×</button></div>
+  <EditForm Model="_form" OnValidSubmit="SaveProductAsync">
+   <DataAnnotationsValidator/><ValidationSummary/>
+   @if (_errors.Count > 0) { <div class="error-summary" role="alert">@foreach(var error in _errors){<p>@error</p>}</div> }
+   <div class="form-grid">
+    <label>Nombre <InputText @bind-Value="_form.Name"/></label>
+    @if (_editingProductId is not null) { <label>Dirección pública <InputText @bind-Value="_form.Slug"/></label> }
+    <label>Presentación <InputText @bind-Value="_form.Presentation"/></label>
+    <label>Precio estándar (Bs) <InputNumber @bind-Value="_form.StandardPrice"/></label>
+    <label class="wide">Descripción pública <InputTextArea @bind-Value="_form.PublicDescription"/></label>
+    <label class="wide">Beneficios públicos <InputText @bind-Value="_form.ApprovedBenefits"/><small>Separalos con comas, por ejemplo: 23 g de proteína, Sin azúcar, Sin lactosa.</small></label>
+    <div class="wide image-field">
+     <label class="file-button"><span>Elegir imagen</span><InputFile OnChange="SelectPendingImage" accept="image/jpeg,image/png,image/webp"/></label>
+     <div><strong>@(_pendingImage?.Name ?? "Imagen opcional")</strong><small>JPG, PNG o WebP. Máximo 10 MB.</small></div>
+     @if (_pendingImage is not null) { <label class="image-alt">Texto alternativo <InputText @bind-Value="_form.ImageAltText"/></label> }
+    </div>
+    <label class="check"><InputCheckbox @bind-Value="_form.ShowPublicPrice"/> Mostrar precio público</label>
+    <label class="check"><InputCheckbox @bind-Value="_form.IsFeatured"/> Producto destacado</label>
+    <label class="check"><InputCheckbox @bind-Value="_form.Publish"/> Publicar inmediatamente</label>
+    <fieldset class="wide landing-fields">
+     <legend>Hero de la landing</legend>
+     <label class="check"><InputCheckbox @bind-Value="_form.IsLandingFeatured"/> Mostrar en landing</label>
+     <div class="landing-grid">
+      <label>Orden en landing <InputNumber @bind-Value="_form.LandingOrder"/></label>
+      <label>Insignia <InputText @bind-Value="_form.LandingBadgeText" placeholder="Ej. Nuevo sabor"/></label>
+      <label>Frases del hero <InputText @bind-Value="_form.LandingTitle" placeholder="Separalas con | para que vayan cambiando"/><small>Ejemplo: Cuidarte también se disfruta | Energía real para tu día</small></label>
+      <label>Subtítulo <InputText @bind-Value="_form.LandingSubtitle" placeholder="Opcional; usa la descripción pública"/></label>
+     </div>
+     <small>Para aparecer, el producto también debe estar activo, publicado y tener imagen principal.</small>
+    </fieldset>
+   </div>
+   <div class="form-actions"><button class="secondary-action" type="button" @onclick="CloseForm">Cancelar</button><button class="save" disabled="@_saving">@(_saving ? "Guardando…" : "Guardar producto")</button></div>
+  </EditForm>
+ </section>
+}
+
+<section class="filters" aria-label="Filtros de productos">
+ <label class="search-filter"><span aria-hidden="true">⌕</span><span class="sr-only">Buscar</span><input @bind="_search" @bind:event="oninput" placeholder="Buscar productos…"/></label>
+ <label><span class="sr-only">Estado</span><select @bind="_activeFilter"><option value="">Todos los estados</option><option value="active">Activos</option><option value="inactive">Inactivos</option></select></label>
+ <label><span class="sr-only">Publicación</span><select @bind="_publicationFilter"><option value="">Todas las publicaciones</option><option value="published">Publicados</option><option value="hidden">Ocultos</option></select></label>
+</section>
+
+<section class="stats-grid" aria-label="Resumen de productos">
+ <article><span class="stat-icon">◇</span><div><small>Total productos</small><strong>@TotalProducts</strong></div></article>
+ <article><span class="stat-icon">✓</span><div><small>Activos</small><strong>@ActiveProducts</strong></div></article>
+ <article><span class="stat-icon">◉</span><div><small>Publicados</small><strong>@PublishedProducts</strong></div></article>
+ <article><span class="stat-icon hidden">⊘</span><div><small>Ocultos</small><strong>@HiddenProducts</strong></div></article>
+</section>
+
+@if (!string.IsNullOrWhiteSpace(_pageMessage)){<div class="page-message" role="status">@_pageMessage</div>}
+
+<section class="product-list" aria-live="polite">
+ @if (_products is null){<div class="empty-state">Cargando productos…</div>}
+ else if (_products.Count == 0){<div class="empty-state"><strong>Tu catálogo está vacío.</strong><span>Creá el primer producto para comenzar.</span></div>}
+ else if (FilteredProducts.Count == 0){<div class="empty-state"><strong>No encontramos coincidencias.</strong><span>Probá con otros filtros.</span></div>}
+ else
+ {
+  <div class="product-columns" aria-hidden="true"><span>Producto</span><span>Precio</span><span>Estado</span><span>Publicación</span><span>Acciones</span></div>
+  @foreach(var product in FilteredProducts)
+  {
+   <article class="product-row">
+    <div class="product-identity">
+     <div class="product-media">
+      @if(!string.IsNullOrWhiteSpace(product.ImageUrl)){<img src="@product.ImageUrl" alt="@(product.ImageAltText ?? product.Name)"/>}else{<div class="image-placeholder" aria-label="Sin imagen"><span>TS</span></div>}
+      <label class="change-image"><span>▧ Cambiar imagen</span><InputFile OnChange="@(args => UploadImageAsync(product,args))" accept="image/jpeg,image/png,image/webp"/></label>
+     </div>
+     <div class="product-copy"><h2>@product.Name</h2><p class="product-path">@product.Presentation · /productos/@product.Slug</p><p>@ShortDescription(product.PublicDescription)</p>@if(_imageMessages.TryGetValue(product.Id,out var message)){<small>@message</small>}</div>
+    </div>
+    <div class="data-cell price" data-label="Precio">Bs @product.StandardPrice.ToString("0.00")</div>
+    <div class="data-cell" data-label="Estado"><label class="switch-control"><input type="checkbox" checked="@product.IsActive" @onchange="args => ChangeActiveAsync(product,args)" disabled="@IsUpdating(product.Id)"/><span class="switch-track"><span></span></span><strong>@(product.IsActive?"Activo":"Inactivo")</strong></label></div>
+    <div class="data-cell" data-label="Publicación"><label class="switch-control"><input type="checkbox" checked="@product.IsPublished" @onchange="args => ChangePublishedAsync(product,args)" disabled="@IsUpdating(product.Id)"/><span class="switch-track"><span></span></span><strong>@(product.IsPublished?"Publicado":"Oculto")</strong></label></div>
+    <div class="row-actions"><button class="edit-action" @onclick="()=>EditProduct(product)">✎ <span>Editar</span></button><details class="more-actions"><summary aria-label="Más acciones">•••</summary><a href="/productos/@product.Slug" target="_blank">Ver ficha pública</a></details></div>
+   </article>
+  }
+  <p class="results-count">Mostrando @FilteredProducts.Count de @_products.Count productos</p>
+ }
+</section>
+
+@code{
+ private IReadOnlyList<ManagedProductSummary>? _products; private ProductForm _form=new(); private readonly List<string> _errors=[]; private readonly HashSet<Guid> _updatingProducts=[]; private readonly Dictionary<Guid,string> _altTexts=[]; private readonly Dictionary<Guid,string> _imageMessages=[];
+ private bool _showForm,_saving; private Guid? _editingProductId; private IBrowserFile? _pendingImage; private string _search="",_activeFilter="",_publicationFilter=""; private string? _pageMessage;
+ private int TotalProducts=>_products?.Count??0; private int ActiveProducts=>_products?.Count(x=>x.IsActive)??0; private int PublishedProducts=>_products?.Count(x=>x.IsPublished)??0; private int HiddenProducts=>TotalProducts-PublishedProducts;
+ private IReadOnlyList<ManagedProductSummary> FilteredProducts=>(_products??[]).Where(x=>string.IsNullOrWhiteSpace(_search)||x.Name.Contains(_search,StringComparison.OrdinalIgnoreCase)||x.Presentation.Contains(_search,StringComparison.OrdinalIgnoreCase)||x.PublicDescription.Contains(_search,StringComparison.OrdinalIgnoreCase)).Where(x=>_activeFilter switch{"active"=>x.IsActive,"inactive"=>!x.IsActive,_=>true}).Where(x=>_publicationFilter switch{"published"=>x.IsPublished,"hidden"=>!x.IsPublished,_=>true}).ToList();
+ protected override async Task OnInitializedAsync()=>await LoadProductsAsync();
+ private void StartCreating(){_editingProductId=null;_form=new();_pendingImage=null;_errors.Clear();_showForm=true;} private void CloseForm(){_showForm=false;_editingProductId=null;_pendingImage=null;_errors.Clear();} private bool IsUpdating(Guid id)=>_updatingProducts.Contains(id);
+ private async Task SaveProductAsync(){_saving=true;_errors.Clear();var user=await CurrentUserIdAsync();var slug=string.IsNullOrWhiteSpace(_form.Slug)?CreateSlug(_form.Name):_form.Slug;var request=new CreateProductRequest(_form.Name,slug,_form.Presentation,_form.PublicDescription,_form.StandardPrice,_form.ShowPublicPrice,_form.Publish,_form.IsFeatured,_form.ApprovedBenefits,_form.IsLandingFeatured,_form.LandingOrder,_form.LandingTitle,_form.LandingSubtitle,_form.LandingBadgeText);var result=_editingProductId is null?await ProductService.CreateProductAsync(request,user):await ProductService.UpdateProductAsync(_editingProductId.Value,request,user);if(result.Succeeded){if(_pendingImage is not null&&result.ProductId is not null&&!await UploadPendingImageAsync(result.ProductId.Value,user)){await LoadProductsAsync();_saving=false;return;}_pageMessage=_editingProductId is null?"Producto creado.":"Cambios guardados.";CloseForm();await LoadProductsAsync();}else _errors.AddRange(result.Errors);_saving=false;}
+ private async Task<bool> UploadPendingImageAsync(Guid id,Guid? user){try{await using var content=_pendingImage!.OpenReadStream(10*1024*1024);var result=await ProductImageService.UploadAsync(new(id,content,_pendingImage.Name,_pendingImage.ContentType,_pendingImage.Size,string.IsNullOrWhiteSpace(_form.ImageAltText)?_form.Name:_form.ImageAltText),user);if(result.Succeeded)return true;_errors.Add($"El producto se guardó, pero la imagen no: {string.Join(" ",result.Errors)}");}catch(IOException){_errors.Add("El producto se guardó, pero no se pudo leer la imagen o supera 10 MB.");}return false;}
+ private void SelectPendingImage(InputFileChangeEventArgs args){_pendingImage=args.File;if(string.IsNullOrWhiteSpace(_form.ImageAltText))_form.ImageAltText=_form.Name;}
+ private static string ShortDescription(string value)=>value.Length<=145?value:$"{value[..142]}…";
+ private static string CreateSlug(string value){var d=value.Trim().ToLowerInvariant().Normalize(System.Text.NormalizationForm.FormD);var chars=d.Where(c=>System.Globalization.CharUnicodeInfo.GetUnicodeCategory(c)!=System.Globalization.UnicodeCategory.NonSpacingMark).Select(c=>char.IsLetterOrDigit(c)?c:'-').ToArray();return string.Join('-',new string(chars).Split('-',StringSplitOptions.RemoveEmptyEntries));}
+ private void EditProduct(ManagedProductSummary p){_editingProductId=p.Id;_form=new(){Name=p.Name,Slug=p.Slug,Presentation=p.Presentation,PublicDescription=p.PublicDescription,StandardPrice=p.StandardPrice,ShowPublicPrice=p.ShowPublicPrice,Publish=p.IsPublished,IsFeatured=p.IsFeatured,ApprovedBenefits=p.ApprovedBenefits??"",IsLandingFeatured=p.IsLandingFeatured,LandingOrder=p.LandingOrder,LandingTitle=p.LandingTitle??"",LandingSubtitle=p.LandingSubtitle??"",LandingBadgeText=p.LandingBadgeText??"",ImageAltText=p.ImageAltText??p.Name};_pendingImage=null;_errors.Clear();_showForm=true;}
+ private async Task LoadProductsAsync(){_products=await ProductService.GetProductsAsync();foreach(var p in _products)_altTexts[p.Id]=p.ImageAltText??$"{p.Name}, {p.Presentation}";}
+ private async Task ChangeActiveAsync(ManagedProductSummary p,ChangeEventArgs e)=>await ChangeStateAsync(p,Convert.ToBoolean(e.Value),ProductService.SetActiveAsync,"Estado actualizado.");
+ private async Task ChangePublishedAsync(ManagedProductSummary p,ChangeEventArgs e)=>await ChangeStateAsync(p,Convert.ToBoolean(e.Value),ProductService.SetPublishedAsync,"Publicación actualizada.");
+ private async Task ChangeStateAsync(ManagedProductSummary p,bool value,Func<Guid,bool,Guid?,CancellationToken,Task<ProductStateResult>> operation,string success){_updatingProducts.Add(p.Id);var result=await operation(p.Id,value,await CurrentUserIdAsync(),CancellationToken.None);_pageMessage=result.Succeeded?success:string.Join(" ",result.Errors);await LoadProductsAsync();_updatingProducts.Remove(p.Id);}
+ private async Task UploadImageAsync(ManagedProductSummary p,InputFileChangeEventArgs args){var file=args.File;_imageMessages[p.Id]="Subiendo imagen…";try{await using var content=file.OpenReadStream(10*1024*1024);var result=await ProductImageService.UploadAsync(new(p.Id,content,file.Name,file.ContentType,file.Size,_altTexts[p.Id]),await CurrentUserIdAsync());_imageMessages[p.Id]=result.Succeeded?"Imagen guardada.":string.Join(" ",result.Errors);if(result.Succeeded)await LoadProductsAsync();}catch(IOException){_imageMessages[p.Id]="No se pudo leer la imagen o supera 10 MB.";}}
+ private async Task<Guid?> CurrentUserIdAsync(){var state=await AuthenticationStateProvider.GetAuthenticationStateAsync();return Guid.TryParse(state.User.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value,out var id)?id:null;}
+ private sealed class ProductForm{[System.ComponentModel.DataAnnotations.Required]public string Name{get;set;}="";public string Slug{get;set;}="";[System.ComponentModel.DataAnnotations.Required]public string Presentation{get;set;}="";[System.ComponentModel.DataAnnotations.Required]public string PublicDescription{get;set;}="";[System.ComponentModel.DataAnnotations.Range(0,100000)]public decimal StandardPrice{get;set;}public bool ShowPublicPrice{get;set;}=true;public bool Publish{get;set;}public bool IsFeatured{get;set;}public string ApprovedBenefits{get;set;}="";public bool IsLandingFeatured{get;set;}[System.ComponentModel.DataAnnotations.Range(0,10000)]public int LandingOrder{get;set;}public string LandingTitle{get;set;}="";public string LandingSubtitle{get;set;}="";public string LandingBadgeText{get;set;}="";public string ImageAltText{get;set;}="";}
+}

@@ -1,0 +1,872 @@
+@page "/app/entregas"
+@layout AdminLayout
+@rendermode InteractiveServer
+@attribute [Authorize(Policy=AppPolicies.ManageSales)]
+@inject IDeliveryService Service
+@inject IDeliveryPointImageService PointImages
+@inject AuthenticationStateProvider Auth
+@inject Microsoft.JSInterop.IJSRuntime JS
+@implements IAsyncDisposable
+
+<PageTitle>Entregas | Tentación Sana</PageTitle>
+
+<style>
+    .delivery-tabs { display: none !important; }
+    .deliveries-workspace { grid-template-columns: minmax(0, 1fr) clamp(18rem, 22vw, 21rem) !important; gap: 1rem; }
+    .deliveries-workspace > .deliveries-list-card { grid-column: 1; grid-row: 1; min-width: 0; }
+    .deliveries-workspace > .route-map-card { grid-column: 1; grid-row: 2; margin-top: 0; min-width: 0; }
+    .deliveries-workspace > .route-panel { grid-column: 2; grid-row: 1 / span 2; top: 1rem; }
+    .interactive-route-map, .route-map-frame { height: 32rem; min-height: 32rem; }
+    .delivery-table { overflow-x: visible; }
+    .delivery-table table { min-width: 0; table-layout: fixed; }
+    .delivery-table th:nth-child(1) { width: 2.35rem; }
+    .delivery-table th:nth-child(2) { width: 5.75rem; }
+    .delivery-table th:nth-child(3) { width: auto; }
+    .delivery-table th:nth-child(4) { width: 8.4rem; }
+    .delivery-table th:nth-child(5) { width: 6.4rem; }
+    .delivery-table th:nth-child(6) { width: 7.4rem; }
+    .delivery-table th:nth-child(7) { width: 8.2rem; }
+    .delivery-table th:nth-child(8) { width: 8.4rem; }
+    .delivery-table th:nth-child(9) { width: 5rem; }
+    .delivery-table td { min-width: 0; }
+    .delivery-table .order-cell { position: relative; z-index: 1; }
+    .delivery-table .customer-cell { min-width: 0; }
+    .delivery-table .customer-cell > span { min-width: 0; }
+    .delivery-table .customer-cell strong { white-space: normal; line-height: 1.25; }
+    .delivery-table .customer-cell small { overflow: hidden; text-overflow: ellipsis; white-space: normal; line-height: 1.3; }
+    .view-pin { display: grid; place-items: center; width: 2rem; height: 2rem; border: 1px solid #9bcf9b; border-radius: .55rem; padding: 0; background: #f2fbef; color: #237a2a; font: 900 1rem var(--font-body); cursor: pointer; }
+    .view-pin:hover, .view-pin:focus-visible { background: #dff4d9; outline: 2px solid #7fc778; outline-offset: 2px; }
+    .promise-date { display: inline-flex; align-items: center; min-height: 1.7rem; border: 1px solid #dfe5dc; border-radius: 999px; padding: 0 .58rem; background: #f5f7f3; color: #58665b; font-size: .67rem; font-weight: 850; white-space: nowrap; }
+    .promise-date.overdue { border-color: #edc6c8; background: #fcebec; color: #a92d36; }
+    .promise-date.today { border-color: #b9ddaa; background: #eaf7e5; color: #28752e; }
+    .promise-date.tomorrow { border-color: #ead39d; background: #fff6dd; color: #8a610f; }
+    .promise-date.no-date { border-style: dashed; color: #768078; }
+    .driver-trigger { max-width: 100%; border: 0; padding: .28rem .35rem; background: transparent; color: #33423a; font: 800 .71rem var(--font-body); text-align: left; cursor: pointer; }
+    .driver-trigger:hover, .driver-trigger:focus-visible { border-radius: .4rem; background: #edf5e9; color: #22742a; outline: none; }
+    .driver-trigger.unassigned { color: #8a6a2a; }
+    .delivery-status.route-prepared { background: #e7eefb; color: #345e9f; }
+    .row-actions { display: flex; align-items: center; justify-content: flex-end; gap: .35rem; }
+    .bulk-action-bar { display: flex; align-items: center; gap: .55rem; position: sticky; z-index: 12; top: .5rem; margin: .7rem .85rem 0; padding: .65rem .75rem; border: 1px solid #b9d8b2; border-radius: .72rem; background: rgba(240,248,236,.97); box-shadow: 0 8px 22px rgba(36,76,38,.11); backdrop-filter: blur(8px); }
+    .bulk-action-bar strong { margin-right: auto; color: #245d2a; font-size: .76rem; }
+    .bulk-action-bar button { min-height: 2.1rem; border: 1px solid #b6cdb1; border-radius: .52rem; padding: 0 .68rem; background: #fff; color: #315437; font: 800 .68rem var(--font-body); cursor: pointer; }
+    .bulk-action-bar button.primary { border-color: #2c842e; background: #2c842e; color: #fff; }
+    .bulk-action-bar button:disabled { opacity: .45; cursor: default; }
+    .delivery-filters { grid-template-columns: minmax(14rem,1.35fr) repeat(3,minmax(9rem,.65fr)) !important; }
+    .delivery-filters .custom-date { min-width: 9.5rem; }
+    .delivery-table tr.map-highlighted td { background: #edf8e8 !important; }
+    .delivery-table tr.map-highlighted td:first-child { box-shadow: inset 4px 0 #2e922e; }
+    .delivery-table tr.route-selected td { background: #f4faef; }
+    .route-card h2 { letter-spacing: -.02em; }
+    .route-stops li { transition: background .16s ease, transform .16s ease; }
+    .route-stops li:hover { background: #f7faf5; }
+    .route-map-card > header { background: linear-gradient(100deg, #fbfdf9 0%, #f2f8ed 100%); }
+    .route-map-frame .route-map-popup a { display: inline-flex; margin-top: .35rem; padding: .35rem .5rem; border-radius: .4rem; background: #e8f5e4; color: #227a29; font-weight: 800; text-decoration: none; }
+    .route-map-frame ::deep .route-map-photo-pin { position: relative; display: block; box-sizing: border-box; width: 2.65rem; height: 2.65rem; overflow: visible; border: 3px solid #fff; border-radius: 50% 50% 50% 12%; background: #fff; box-shadow: 0 5px 14px rgba(25,47,29,.3); transform: rotate(-45deg); }
+    .route-map-frame ::deep .route-map-photo-pin img { width: 100%; height: 100%; border-radius: inherit; object-fit: cover; }
+    .route-map-frame ::deep .route-map-photo-pin b { position: absolute; top: -.38rem; right: -.38rem; display: grid; place-items: center; width: 1.25rem; height: 1.25rem; border: 2px solid #fff; border-radius: 50%; background: #247fdd; color: #fff; font-size: .62rem; transform: rotate(45deg); }
+    .assignment-dialog { width: min(27rem,100%); }
+    .assignment-dialog > div { padding: 1rem 1.15rem; }
+    .assignment-dialog label { display: grid; gap: .35rem; color: #5d695f; font-size: .72rem; font-weight: 800; }
+    .assignment-dialog select { min-height: 2.7rem; padding: .55rem .65rem; border: 1px solid #ccd7ca; border-radius: .58rem; background: #fff; font: inherit; }
+    .assignment-dialog footer .assign-confirm { min-height: 2.45rem; border: 0; border-radius: .62rem; padding: 0 .9rem; background: #278a20; color: #fff; font-weight: 850; cursor: pointer; }
+    @@media (max-width: 1400px) {
+        .deliveries-workspace { grid-template-columns: 1fr !important; }
+        .deliveries-workspace > .deliveries-list-card { grid-column: 1; grid-row: 1; }
+        .deliveries-workspace > .route-map-card { grid-column: 1; grid-row: 2; }
+        .deliveries-workspace > .route-panel { grid-column: 1; grid-row: 3; position: static; }
+    }
+    @@media (max-width: 900px) {
+        .delivery-filters { grid-template-columns: 1fr 1fr !important; }
+        .delivery-search { grid-column: 1 / -1 !important; }
+        .bulk-action-bar { align-items: stretch; position: static; flex-wrap: wrap; margin: .65rem .75rem 0; }
+        .bulk-action-bar strong { width: 100%; margin: 0; }
+        .bulk-action-bar button { flex: 1 1 9rem; }
+        .delivery-table { display: none; }
+        .mobile-deliveries { display: grid; gap: 0; padding: 0 .75rem .65rem; }
+        .interactive-route-map, .route-map-frame { height: 23rem; min-height: 23rem; }
+        .route-map-card > header { align-items: flex-start; flex-direction: column; }
+        .route-map-card > header a { width: 100%; box-sizing: border-box; text-align: center; }
+        .mobile-delivery { display: grid; position: relative; gap: .7rem !important; padding: 1rem .15rem !important; border: 0; border-bottom: 1px solid #e4e9e1; border-radius: 0; background: transparent; }
+        .mobile-delivery header { align-items: flex-start !important; }
+        .mobile-delivery header label { display: flex; align-items: center; gap: .45rem; color: #24362a; font-size: .88rem; }
+        .mobile-order-body { grid-template-columns: minmax(0,1fr) !important; padding-left: 1.55rem !important; }
+        .mobile-customer strong, .mobile-customer span { white-space: normal !important; }
+        .mobile-customer strong { font-size: .87rem; }
+        .mobile-customer span { margin-top: .08rem; font-size: .74rem; }
+        .mobile-promise { margin-top: .5rem; }
+        .mobile-facts { display: grid; grid-template-columns: 1fr 1fr; gap: .55rem; padding-left: 1.55rem; }
+        .mobile-fact { display: grid; gap: .12rem; padding: .58rem .65rem; border-radius: .58rem; background: #f6f8f4; }
+        .mobile-fact small { color: #758078; font-size: .61rem; font-weight: 800; text-transform: uppercase; }
+        .mobile-fact strong { color: #2b392e; font-size: .82rem; }
+        .mobile-fact span { color: #707b73; font-size: .65rem; }
+        .mobile-driver { display: flex; align-items: center; justify-content: space-between; gap: .75rem; padding-left: 1.55rem; color: #657067; font-size: .69rem; }
+        .mobile-actions { align-items: center; padding-left: 1.55rem !important; }
+        .mobile-actions .view-pin { display: inline-flex; width: auto; height: 2.15rem; padding: 0 .72rem; font-size: .7rem; }
+        .mobile-actions .row-menu { margin-left: auto; }
+    }
+    @@media (max-width: 460px) {
+        .delivery-filters { grid-template-columns: 1fr !important; }
+        .delivery-search { grid-column: auto !important; }
+        .mobile-facts { grid-template-columns: 1fr; }
+    }
+</style>
+
+<header class="deliveries-heading">
+    <div>
+        <span>LOGÍSTICA</span>
+        <h1>ENTREGAS</h1>
+        <p>Organiza todos los pedidos que todavía tienen unidades por entregar, sin ocultar las entregas futuras.</p>
+    </div>
+</header>
+
+@if (!string.IsNullOrWhiteSpace(_message))
+{
+    <div class="delivery-message @(_isError ? "error" : "success")">@_message</div>
+}
+
+@if (_board is null)
+{
+    <div class="deliveries-loading">Cargando pedidos pendientes…</div>
+}
+else
+{
+    <section class="delivery-summary" aria-label="Resumen de entregas">
+        <article>
+            <i class="metric-icon orders">▣</i>
+            <div><small>PENDIENTES DE ENTREGA</small><strong>@ReadyOrderCount</strong><span>con unidades por entregar</span></div>
+        </article>
+        <article>
+            <i class="metric-icon units">□</i>
+            <div><small>UNIDADES TOTALES</small><strong>@TotalPhysical</strong><span>@TotalSale venta · @TotalReplacement rep. · @TotalTasting deg.</span></div>
+        </article>
+        <article>
+            <i class="metric-icon money">Bs</i>
+            <div><small>TOTAL A COBRAR</small><strong>@Money(TotalToCollect)</strong><span>saldo pendiente real</span></div>
+        </article>
+        <article>
+            <i class="metric-icon delivered">✓</i>
+            <div><small>ENTREGADOS HOY</small><strong>@_board.DeliveredTodayCount</strong><span>@Money(_board.CollectedToday) cobrados en entrega</span></div>
+        </article>
+    </section>
+
+    <section class="delivery-filters" aria-label="Filtros de entregas">
+        <label class="delivery-search"><span>⌕</span><input @bind="_search" @bind:event="oninput" placeholder="Buscar cliente, sucursal o pedido…" /></label>
+        <label><span>ESTADO</span><select @bind="_statusFilter"><option value="Open">Todos los pendientes</option><option value="Pending">Pendiente de salida</option><option value="RoutePrepared">Ruta preparada</option><option value="InRoute">En reparto</option><option value="Incident">Incidencia</option></select></label>
+        <label><span>FECHA PROMETIDA</span><select @bind="_dateFilter"><option value="All">Todas</option><option value="Overdue">Vencidas</option><option value="Today">Hoy</option><option value="Tomorrow">Mañana</option><option value="ThisWeek">Esta semana</option><option value="Custom">Elegir fecha</option></select></label>
+        @if (_dateFilter == "Custom")
+        {
+            <label class="custom-date"><span>FECHA ELEGIDA</span><input type="date" @bind="_customDate" /></label>
+        }
+        <label><span>REPARTIDOR</span><select @bind="_driverFilter"><option value="">Todos</option>@foreach (var driver in _drivers) { <option value="@driver.Id">@DriverLabel(driver)</option> }</select></label>
+    </section>
+
+    <nav class="delivery-tabs" aria-label="Estados de entrega">
+        <button class='@TabClass("Pending")' @onclick='() => SetStatus("Pending")'>Pendientes de salida <b>@StatusCount("Pending")</b></button>
+        <button class='@TabClass("InRoute")' @onclick='() => SetStatus("InRoute")'>En reparto <b>@StatusCount("InRoute")</b></button>
+        <button class='@TabClass("Delivered")' @onclick='() => SetStatus("Delivered")'>Entregados <b>@StatusCount("Delivered")</b></button>
+        <button class='@TabClass("Incident")' @onclick='() => SetStatus("Incident")'>Con incidencias <b>@StatusCount("Incident")</b></button>
+        <button class='@TabClass("All")' @onclick='() => SetStatus("All")'>Todos <b>@_board.Items.Count</b></button>
+    </nav>
+
+    <div class="deliveries-workspace">
+        <section class="route-map-card" aria-labelledby="route-map-title">
+            <header>
+                <div><span>MAPA DE ENTREGAS</span><h2 id="route-map-title">Pedidos visibles en el mapa</h2><p>Los filtros de estado y fecha controlan los pines mostrados.</p></div>
+                @if (RouteStops.Count > 0) { <a href="@RouteGoogleMapsUrl" target="_blank" rel="noopener noreferrer">Abrir ruta en Google Maps ↗</a> }
+            </header>
+            <div class="route-map-frame">
+                <div id="delivery-route-map" class="interactive-route-map"><div class="map-loading">Ubicando los puntos…</div></div>
+                @if (RouteStops.Count == 0 && HasMapCandidates)
+                {
+                    <div class="map-builder-help"><strong>Arma una ruta desde el mapa</strong><span>Selecciona un pin o usa las casillas de la lista.</span></div>
+                }
+            </div>
+        </section>
+        <section class="deliveries-list-card">
+            <header>
+                <div>
+                    <h2>Pedidos pendientes de entrega</h2>
+                    <p>Todos los pedidos que aún tienen unidades por entregar, ordenados por fecha prometida.</p>
+                </div>
+                @if (SelectableItems.Any())
+                {
+                    <button class="table-action" @onclick="SelectVisible">@(SelectableItems.All(x => IsSelected(x.OrderId)) ? "Quitar selección" : "Seleccionar visibles")</button>
+                }
+            </header>
+
+            @if (_selectedOrderIds.Count > 0)
+            {
+                <div class="bulk-action-bar" role="region" aria-label="Acciones para pedidos seleccionados">
+                    <strong>@_selectedOrderIds.Count pedido@(_selectedOrderIds.Count == 1 ? "" : "s") seleccionado@(_selectedOrderIds.Count == 1 ? "" : "s")</strong>
+                    <button class="primary" disabled="@(SelectedRouteItems.Count == 0)" @onclick="OpenRoutePlannerAsync">Agregar a ruta</button>
+                    <button @onclick="OpenBulkDriverDialog">Asignar repartidor</button>
+                    <button @onclick="ViewSelectedOnMapAsync">Ver seleccionados en mapa</button>
+                </div>
+            }
+
+            @if (FilteredItems.Any())
+            {
+                <div class="delivery-table">
+                    <table>
+                        <thead>
+                            <tr><th></th><th>Pedido</th><th>Cliente / sucursal</th><th>Fecha prometida</th><th>Unidades</th><th>Total a cobrar</th><th>Estado</th><th>Repartidor</th><th>Acciones</th></tr>
+                        </thead>
+                        <tbody>
+                            @foreach (var item in FilteredItems)
+                            {
+                                <tr id="@($"delivery-row-{item.OrderId}")" class="@($"{RowClass(item)} {(item.OrderId == _highlightedOrderId ? "map-highlighted" : "")} {(IsSelected(item.OrderId) ? "route-selected" : "")}")">
+                                    <td><input type="checkbox" checked="@IsSelected(item.OrderId)" disabled="@(!CanSelect(item))" @onchange="e => ToggleSelection(item.OrderId, e.Value)" aria-label="Seleccionar pedido @item.OrderNumber" /></td>
+                                    <td class="order-cell"><a class="order-link" href="@($"/app/pedidos/{item.OrderId}")">#@item.OrderNumber</a></td>
+                                    <td>
+                                        <div class="customer-cell">
+                                            @if (ImageUrl(item.DeliveryPointId) is { } imageUrl) { <img src="@imageUrl" alt="" /> }
+                                            else { <span class="point-avatar">@PointInitials(item.DeliveryPoint)</span> }
+                                            <span><strong>@item.Customer</strong><small>@(item.DeliveryPoint ?? "Sin sucursal")</small></span>
+                                        </div>
+                                    </td>
+                                    <td><span class="promise-date @DueClass(item)">@DueText(item)</span></td>
+                                    <td><strong>@Physical(item) uds</strong><small>@Breakdown(item)</small></td>
+                                    <td><strong class="money-value">@Money(item.Balance)</strong>@if (HasPartialPayment(item)) { <small>saldo pendiente</small> }</td>
+                                    <td><span class="@($"delivery-status {StatusClass(BoardStatusKey(item))}")">@BoardStatusText(item)</span></td>
+                                    <td>@if (CanAssignDriver(item)) { <button class="driver-trigger @(item.DriverUserId is null ? "unassigned" : null)" @onclick="() => OpenDriverDialog(item)">@DriverName(item)</button> } else { <span class="driver-readonly">@DriverName(item)</span> }</td>
+                                    <td>
+                                        <div class="row-actions">
+                                            @if (item.HasLocation) { <button class="view-pin" title="Ver en mapa" aria-label="Ver pedido @item.OrderNumber en el mapa" @onclick="() => ViewPinAsync(item.OrderId)">⌖</button> }
+                                            <div class="row-menu">
+                                                <summary role="button" tabindex="0" aria-label="Acciones del pedido @item.OrderNumber" aria-expanded="@(_openMenuOrderId == item.OrderId)" @onclick="() => ToggleRowMenu(item.OrderId)">•••</summary>
+                                                @if (_openMenuOrderId == item.OrderId)
+                                                {
+                                                    <nav>
+                                                        @if (item.HasLocation) { <button @onclick="() => ViewPinAndCloseAsync(item.OrderId)">Ver en mapa</button> }
+                                                        @if (MapUrl(item.Location) is { } actionMap) { <a href="@actionMap" target="_blank" rel="noopener noreferrer" @onclick="CloseRowMenu">Abrir ubicación</a> }
+                                                        <a href="@($"/app/pedidos/{item.OrderId}")" @onclick="CloseRowMenu">Ver pedido</a>
+                                                        @if (CanAssignDriver(item)) { <button @onclick="() => OpenDriverDialogFromMenu(item)">@(item.DriverUserId is null ? "Asignar repartidor" : "Cambiar repartidor")</button> }
+                                                        @if (item.CanAddToRoute) { <button @onclick="() => ToggleOneAndClose(item.OrderId)">@(!IsSelected(item.OrderId) ? "Agregar a ruta" : "Quitar de selección")</button> }
+                                                        @if (item.RouteId is not null && item.Status == "Pending") { <button @onclick="() => ReturnOrderToPendingAndCloseAsync(item)">Quitar de ruta</button> }
+                                                        @if (item.Status == "InRoute") { <button @onclick="() => ReturnOrderToPendingAndCloseAsync(item)">Volver a pendiente de salida</button> }
+                                                        @if (item.DeliveryId is not null) { <button @onclick="() => OpenIncidentAndClose(item)">Reportar incidencia</button> }
+                                                    </nav>
+                                                }
+                                            </div>
+                                        </div>
+                                    </td>
+                                </tr>
+                            }
+                        </tbody>
+                    </table>
+                </div>
+
+                <div class="mobile-deliveries">
+                    @foreach (var item in FilteredItems)
+                    {
+                        <article class="mobile-delivery @RowClass(item)">
+                            <header><label><input type="checkbox" checked="@IsSelected(item.OrderId)" disabled="@(!CanSelect(item))" @onchange="e => ToggleSelection(item.OrderId, e.Value)" /> #@item.OrderNumber</label><span class="@($"delivery-status {StatusClass(BoardStatusKey(item))}")">@BoardStatusText(item)</span></header>
+                            <div class="mobile-order-body">
+                                <div class="mobile-customer"><strong>@item.Customer</strong><span>@(item.DeliveryPoint ?? "Sin sucursal")</span><div class="mobile-promise"><span class="promise-date @DueClass(item)">@DueText(item)</span></div></div>
+                            </div>
+                            <div class="mobile-facts">
+                                <div class="mobile-fact"><small>Unidades</small><strong>@Physical(item) uds</strong><span>@Breakdown(item)</span></div>
+                                <div class="mobile-fact"><small>Total a cobrar</small><strong>@Money(item.Balance)</strong>@if (HasPartialPayment(item)) { <span>saldo pendiente</span> }</div>
+                            </div>
+                            <div class="mobile-driver"><span>Repartidor</span>@if (CanAssignDriver(item)) { <button class="driver-trigger @(item.DriverUserId is null ? "unassigned" : null)" @onclick="() => OpenDriverDialog(item)">@DriverName(item)</button> } else { <strong>@DriverName(item)</strong> }</div>
+                            <div class="mobile-actions">
+                                @if (item.HasLocation) { <button class="view-pin" type="button" @onclick="() => ViewPinAsync(item.OrderId)">⌖ Ver en mapa</button> }
+                                <div class="row-menu">
+                                    <summary role="button" tabindex="0" aria-label="Acciones del pedido @item.OrderNumber" aria-expanded="@(_openMenuOrderId == item.OrderId)" @onclick="() => ToggleRowMenu(item.OrderId)">•••</summary>
+                                    @if (_openMenuOrderId == item.OrderId)
+                                    {
+                                        <nav>
+                                            @if (item.HasLocation) { <button @onclick="() => ViewPinAndCloseAsync(item.OrderId)">Ver en mapa</button> }
+                                            @if (MapUrl(item.Location) is { } mobileMap) { <a href="@mobileMap" target="_blank" rel="noopener noreferrer" @onclick="CloseRowMenu">Abrir ubicación</a> }
+                                            <a href="@($"/app/pedidos/{item.OrderId}")" @onclick="CloseRowMenu">Ver pedido</a>
+                                            @if (CanAssignDriver(item)) { <button @onclick="() => OpenDriverDialogFromMenu(item)">@(item.DriverUserId is null ? "Asignar repartidor" : "Cambiar repartidor")</button> }
+                                            @if (item.CanAddToRoute) { <button @onclick="() => ToggleOneAndClose(item.OrderId)">@(!IsSelected(item.OrderId) ? "Agregar a ruta" : "Quitar de selección")</button> }
+                                            @if (item.RouteId is not null && item.Status == "Pending") { <button @onclick="() => ReturnOrderToPendingAndCloseAsync(item)">Quitar de ruta</button> }
+                                            @if (item.Status == "InRoute") { <button @onclick="() => ReturnOrderToPendingAndCloseAsync(item)">Volver a pendiente de salida</button> }
+                                            @if (item.DeliveryId is not null) { <button @onclick="() => OpenIncidentAndClose(item)">Reportar incidencia</button> }
+                                        </nav>
+                                    }
+                                </div>
+                            </div>
+                        </article>
+                    }
+                </div>
+            }
+            else { <div class="deliveries-empty"><strong>No hay pedidos para este filtro.</strong><span>Prueba otro estado o busca por cliente, sucursal o número.</span></div> }
+        </section>
+
+        <aside class="route-panel">
+            @if (_routes.Count > 0)
+            {
+                <section class="saved-routes">
+                    <header><span>RUTAS DEL DÍA</span><small>@_routes.Count guardada@(_routes.Count == 1 ? "" : "s")</small></header>
+                    <div>
+                        @foreach (var route in _routes)
+                        {
+                            <button class="@(_currentRoute?.Id == route.Id ? "active" : null)" @onclick="() => OpenRouteAsync(route.Id)">
+                                <strong>@RouteStatusText(route.Status)</strong>
+                                <span>@route.StopCount parada@(route.StopCount == 1 ? "" : "s") · @((route.StartedAtUtc ?? route.CreatedAtUtc).ToLocalTime().ToString("HH:mm"))</span>
+                            </button>
+                        }
+                    </div>
+                </section>
+            }
+            <section id="delivery-route-planner" class="route-card">
+                <header><div><span>DESPACHO MANUAL</span><h2>MI RUTA DEL DÍA</h2></div><i>⌁</i></header>
+                @if (RouteStops.Count == 0)
+                {
+                    <div class="route-empty"><b>Selecciona pedidos desde el mapa o la lista.</b><span>Después ordénalos con las flechas y asigna el repartidor.</span></div>
+                }
+                else
+                {
+                    <div class="route-overview"><span><b>@RouteStops.Count</b> paradas</span><span><b>@RoutePhysical</b> unidades</span><span><b>@Money(RouteToCollect)</b> a cobrar</span></div>
+                    @if (_currentRoute is null)
+                    {
+                        <label class="route-driver">Asignar a<select @bind="_routeDriverId"><option value="">Selecciona repartidor</option>@foreach (var driver in _drivers) { <option value="@driver.Id">@DriverLabel(driver)</option> }</select></label>
+                    }
+                    else { <p class="route-driver-name">Repartidor: <strong>@_currentRoute.DriverName</strong> · @RouteStatusText(_currentRoute.Status)</p> }
+
+                    <ol class="route-stops">
+                        @foreach (var stop in RouteStops)
+                        {
+                            <li><span class="stop-number">@stop.Position</span><div><strong>#@stop.OrderNumber · @stop.Customer</strong><small>@(stop.DeliveryPoint ?? ShortAddress(stop.Address))</small><span>@stop.Physical uds · @Money(stop.Balance)</span></div>
+                                @if (_currentRoute?.Status == "Planned")
+                                {
+                                    <div class="order-controls"><button title="Subir" disabled="@(stop.Position == 1)" @onclick="() => MoveStopAsync(stop.DeliveryId, -1)">↑</button><button title="Bajar" disabled="@(stop.Position == RouteStops.Count)" @onclick="() => MoveStopAsync(stop.DeliveryId, 1)">↓</button></div>
+                                }
+                                else if (_currentRoute is null)
+                                {
+                                    <div class="order-controls"><button title="Subir" disabled="@(stop.Position == 1)" @onclick="() => MoveSelected(stop.OrderId, -1)">↑</button><button title="Bajar" disabled="@(stop.Position == RouteStops.Count)" @onclick="() => MoveSelected(stop.OrderId, 1)">↓</button></div>
+                                }
+                            </li>
+                        }
+                    </ol>
+
+                    <a class="maps-route" href="@RouteGoogleMapsUrl" target="_blank" rel="noopener noreferrer">⌖ Abrir ruta en Google Maps</a>
+                    @if (_currentRoute is null)
+                    {
+                        <button class="primary-route" disabled="@(_saving || _routeDriverId is null)" @onclick="PlanRouteAsync">@(_saving ? "Guardando…" : "Guardar orden")</button>
+                    }
+                    else if (_currentRoute.Status == "Planned")
+                    {
+                        <button class="primary-route" disabled="@_saving" @onclick="StartRouteAsync">@(_saving ? "Iniciando…" : "Iniciar ruta")</button>
+                        <button class="secondary-route" disabled="@_saving" @onclick="() => ReturnRouteToPendingAsync(_currentRoute.Id)">@(_saving ? "Eliminando…" : "Eliminar ruta y liberar pedidos")</button>
+                    }
+                    else
+                    {
+                        <div class="route-started">Ruta iniciada @(_currentRoute.StartedAtUtc?.ToLocalTime().ToString("t") ?? "")</div>
+                        @if (_currentRoute.DriverUserId == _currentUserId) { <a class="my-route-link" href="/app/mis-entregas">Ver mi ruta y confirmar entregas</a> }
+                        @if (_currentRoute.Status == "InRoute") { <button class="secondary-route" disabled="@_saving" @onclick="() => ReturnRouteToPendingAsync(_currentRoute.Id)">@(_saving ? "Cambiando…" : "Quitar estado en reparto")</button> }
+                        <button class="secondary-route new-route" @onclick="ClearRoute">Armar otra ruta</button>
+                    }
+                }
+            </section>
+
+            <section class="load-card">
+                <header><span>RESUMEN DE CARGA</span><small>Pedidos seleccionados</small></header>
+                <dl><div><dt>Venta</dt><dd>@RouteSale unidades</dd></div><div><dt>Reposición</dt><dd>@RouteReplacement unidades</dd></div><div><dt>Degustación</dt><dd>@RouteTasting unidades</dd></div><div class="load-total"><dt>TOTAL FÍSICO</dt><dd>@RoutePhysical unidades</dd></div><div class="load-money"><dt>TOTAL A COBRAR</dt><dd>@Money(RouteToCollect)</dd></div></dl>
+            </section>
+
+            <p class="route-map-note">Los pines usan únicamente las coordenadas reales guardadas en los enlaces de Google Maps.</p>
+        </aside>
+    </div>
+}
+
+@if (_incidentDeliveryId is not null)
+{
+    <div class="incident-backdrop">
+        <section class="incident-dialog" role="dialog" aria-modal="true" aria-labelledby="incident-title">
+            <header><div><span>ENTREGA</span><h2 id="incident-title">Reportar incidencia</h2></div><button @onclick="CloseIncident" aria-label="Cerrar">×</button></header>
+            <div>
+                <label>Tipo de incidencia<select @bind="_incidentType"><option>Local cerrado</option><option>Cliente ausente</option><option>Dirección incorrecta</option><option>Rechazo</option><option>Producto dañado</option><option>Entrega parcial</option><option>Otro</option></select></label>
+                <label>Observación<textarea @bind="_incidentNotes" placeholder="Describe lo ocurrido"></textarea></label>
+                <p>La evidencia puede adjuntarla el repartidor desde Mis entregas.</p>
+            </div>
+            <footer><button class="secondary-route" @onclick="CloseIncident">Cancelar</button><button class="incident-action" disabled="@_saving" @onclick="ReportIncidentAsync">@(_saving ? "Guardando…" : "Registrar incidencia")</button></footer>
+        </section>
+    </div>
+}
+
+@if (_assignmentOrderIds.Count > 0)
+{
+    <div class="incident-backdrop">
+        <section class="incident-dialog assignment-dialog" role="dialog" aria-modal="true" aria-labelledby="assignment-title">
+            <header><div><span>REPARTIDOR</span><h2 id="assignment-title">@(_assignmentOrderIds.Count == 1 ? "Asignar pedido" : $"Asignar {_assignmentOrderIds.Count} pedidos")</h2></div><button @onclick="CloseDriverDialog" aria-label="Cerrar">×</button></header>
+            <div>
+                <label>Repartidor<select @bind="_assignmentDriverId"><option value="">Selecciona repartidor</option>@foreach (var driver in _drivers) { <option value="@driver.Id">@DriverLabel(driver)</option> }</select></label>
+            </div>
+            <footer><button class="secondary-route" @onclick="CloseDriverDialog">Cancelar</button><button class="assign-confirm" disabled="@(_saving || _assignmentDriverId is null)" @onclick="AssignDriverDialogAsync">@(_saving ? "Asignando…" : "Asignar repartidor")</button></footer>
+        </section>
+    </div>
+}
+
+@code {
+    private static readonly System.Globalization.CultureInfo BolivianCulture = System.Globalization.CultureInfo.GetCultureInfo("es-BO");
+    private DeliveryBoard? _board;
+    private IReadOnlyList<DriverOption> _drivers = [];
+    private IReadOnlyList<DeliveryRouteListItem> _routes = [];
+    private readonly List<Guid> _selectedOrderIds = [];
+    private readonly List<Guid> _assignmentOrderIds = [];
+    private Dictionary<Guid, string> _pointImages = [];
+    private DeliveryRouteDetail? _currentRoute;
+    private DateTime _selectedDate = DateTime.Today;
+    private DateTime _customDate = DateTime.Today;
+    private string _search = string.Empty, _statusFilter = "Open", _dateFilter = "All", _driverFilter = string.Empty;
+    private Guid? _routeDriverId;
+    private Guid? _assignmentDriverId;
+    private Guid? _incidentDeliveryId;
+    private Guid? _highlightedOrderId;
+    private int _incidentVersion;
+    private string _incidentType = "Local cerrado", _incidentNotes = string.Empty;
+    private string? _message;
+    private bool _isError, _saving;
+    private Guid _currentUserId;
+    private Microsoft.JSInterop.IJSObjectReference? _mapModule;
+    private Microsoft.JSInterop.DotNetObjectReference<Deliveries>? _mapReference;
+
+    protected override async Task OnInitializedAsync()
+    {
+        _currentUserId = await UserIdAsync();
+        await ReloadAsync();
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (_board is null) return;
+        try
+        {
+            _mapModule ??= await JS.InvokeAsync<Microsoft.JSInterop.IJSObjectReference>("import", "./js/delivery-route-map.js?v=4");
+            _mapReference ??= Microsoft.JSInterop.DotNetObjectReference.Create(this);
+            await _mapModule.InvokeVoidAsync("renderDeliveryRouteMap", "delivery-route-map", BuildMapPoints(), _mapReference);
+        }
+        catch (Microsoft.JSInterop.JSDisconnectedException) { }
+    }
+
+    private async Task ReloadAsync()
+    {
+        var routeId = _currentRoute?.Id;
+        _board = await Service.GetBoardAsync(DateOnly.FromDateTime(_selectedDate));
+        _drivers = await Service.DriverOptionsAsync(_currentUserId);
+        _routes = await Service.ListRoutesAsync(DateOnly.FromDateTime(_selectedDate));
+        if (_currentRoute is null && _routeDriverId is null && _drivers.Any(x => x.Id == _currentUserId)) _routeDriverId = _currentUserId;
+        _selectedOrderIds.RemoveAll(id => _board.Items.All(item => item.OrderId != id || !CanSelect(item)));
+        if (routeId is not null) _currentRoute = await Service.GetRouteAsync(routeId.Value);
+        await LoadPointImagesAsync();
+    }
+
+    private async Task LoadPointImagesAsync()
+    {
+        if (_board is null) return;
+        var ids = _board.Items.Where(x => x.DeliveryPointId is not null).Select(x => x.DeliveryPointId!.Value).Distinct().ToList();
+        var images = await Task.WhenAll(ids.Select(async id =>
+        {
+            try { return (Id: id, Url: await PointImages.GetUrlAsync(id)); }
+            catch { return (Id: id, Url: (string?)null); }
+        }));
+        _pointImages = images.Where(x => !string.IsNullOrWhiteSpace(x.Url)).ToDictionary(x => x.Id, x => x.Url!);
+    }
+
+    private IReadOnlyList<DeliveryBoardItem> SelectedItems => _selectedOrderIds.Select(id => _board?.Items.FirstOrDefault(x => x.OrderId == id)).Where(x => x is not null).Cast<DeliveryBoardItem>().ToList();
+    private IReadOnlyList<DeliveryBoardItem> SelectedRouteItems => SelectedItems.Where(x => x.CanAddToRoute).ToList();
+    private IEnumerable<DeliveryBoardItem> FilteredItems => (_board?.Items ?? []).Where(item =>
+        MatchesStatusFilter(item) &&
+        MatchesDateFilter(item) &&
+        (string.IsNullOrWhiteSpace(_driverFilter) || item.DriverUserId?.ToString() == _driverFilter) &&
+        Physical(item) > 0 &&
+        (string.IsNullOrWhiteSpace(_search) || item.Customer.Contains(_search, StringComparison.OrdinalIgnoreCase) || (item.DeliveryPoint?.Contains(_search, StringComparison.OrdinalIgnoreCase) ?? false) || item.OrderNumber.ToString().Contains(_search, StringComparison.OrdinalIgnoreCase))
+    ).OrderBy(item => item.PromisedAtUtc is null ? 1 : 0).ThenBy(item => item.PromisedAtUtc?.ToLocalTime().Date).ThenBy(item => item.OrderNumber);
+    private IReadOnlyList<DeliveryBoardItem> SelectableItems => FilteredItems.Where(CanSelect).ToList();
+    private int ReadyOrderCount => _board!.Items.Count(x => Physical(x) > 0);
+    private int TotalSale => _board!.Items.Sum(x => x.SalePending);
+    private int TotalReplacement => _board!.Items.Sum(x => x.ReplacementPending);
+    private int TotalTasting => _board!.Items.Sum(x => x.TastingPending);
+    private int TotalPhysical => TotalSale + TotalReplacement + TotalTasting;
+    private decimal TotalToCollect => _board!.Items.Sum(x => x.Balance);
+    private int StatusCount(string status) => _board!.Items.Count(x => x.Status == status);
+    private string TabClass(string status) => _statusFilter == status ? "active" : string.Empty;
+    private void SetStatus(string status) => _statusFilter = status;
+    private bool IsSelected(Guid orderId) => _selectedOrderIds.Contains(orderId);
+    private string? ImageUrl(Guid? pointId) => pointId is { } id && _pointImages.TryGetValue(id, out var url) ? url : null;
+    private static int Physical(DeliveryBoardItem item) => item.SalePending + item.ReplacementPending + item.TastingPending;
+    private static string Breakdown(DeliveryBoardItem item) => string.Join(" · ", new[] { item.SalePending > 0 ? $"{item.SalePending} venta" : null, item.ReplacementPending > 0 ? $"{item.ReplacementPending} rep." : null, item.TastingPending > 0 ? $"{item.TastingPending} deg." : null }.Where(x => x is not null));
+    private static string Money(decimal value) => $"Bs {value:N2}";
+    private static string ShortAddress(string? address) => string.IsNullOrWhiteSpace(address) ? "Ubicación" : address;
+    private static string PointInitials(string? point) => string.IsNullOrWhiteSpace(point) ? "•" : point[..Math.Min(2, point.Length)].ToUpperInvariant();
+    private static string StatusText(string status) => status switch { "Pending" => "Pendiente de salida", "InRoute" => "En reparto", "Delivered" => "Entregado", "Incident" => "Incidencia", _ => status };
+    private static string BoardStatusText(DeliveryBoardItem item) => item.RouteId is not null && item.Status == "Pending" ? "Ruta preparada" : StatusText(item.Status);
+    private static string BoardStatusKey(DeliveryBoardItem item) => item.RouteId is not null && item.Status == "Pending" ? "RoutePrepared" : item.Status;
+    private static bool IsOverdue(DeliveryBoardItem item) => item.Status != "Delivered" && item.PromisedAtUtc is { } promised && promised.ToLocalTime().Date < DateTime.Today;
+    private static string DueClass(DeliveryBoardItem item)
+    {
+        if (item.PromisedAtUtc is not { } promised) return "no-date";
+        var date = promised.ToLocalTime().Date;
+        return date < DateTime.Today ? "overdue" : date == DateTime.Today ? "today" : date == DateTime.Today.AddDays(1) ? "tomorrow" : "future";
+    }
+    private static string DueText(DeliveryBoardItem item)
+    {
+        if (item.PromisedAtUtc is not { } promised) return "Sin fecha";
+        var local = promised.ToLocalTime();
+        if (local.Date < DateTime.Today) return $"Vencido · {local:dd/MM}";
+        if (local.Date == DateTime.Today) return "Hoy";
+        if (local.Date == DateTime.Today.AddDays(1)) return $"Mañana · {local:dd/MM}";
+        return local.ToString("dd MMM", BolivianCulture).Replace(".", string.Empty);
+    }
+    private static string RouteStatusText(string status) => status switch { "Planned" => "Lista para salir", "InRoute" => "En reparto", "Completed" => "Completada", _ => status };
+    private static string StatusClass(string status) => status switch { "Pending" => "pending", "RoutePrepared" => "route-prepared", "InRoute" => "in-route", "Delivered" => "delivered", "Incident" => "incident", _ => string.Empty };
+    private static string RowClass(DeliveryBoardItem item) => $"status-{item.Status.ToLowerInvariant()}";
+    private bool MatchesStatusFilter(DeliveryBoardItem item) => _statusFilter switch
+    {
+        "Pending" => item.Status == "Pending" && item.RouteId is null,
+        "RoutePrepared" => item.Status == "Pending" && item.RouteId is not null,
+        "InRoute" => item.Status == "InRoute",
+        "Incident" => item.Status == "Incident",
+        _ => true
+    };
+    private bool MatchesDateFilter(DeliveryBoardItem item)
+    {
+        if (_dateFilter == "All") return true;
+        if (item.PromisedAtUtc is not { } promised) return false;
+        var date = promised.ToLocalTime().Date;
+        var today = DateTime.Today;
+        if (_dateFilter == "Overdue") return date < today;
+        if (_dateFilter == "Today") return date == today;
+        if (_dateFilter == "Tomorrow") return date == today.AddDays(1);
+        if (_dateFilter == "Custom") return date == _customDate.Date;
+        if (_dateFilter != "ThisWeek") return true;
+        var daysFromMonday = ((int)today.DayOfWeek + 6) % 7;
+        var weekStart = today.AddDays(-daysFromMonday);
+        return date >= weekStart && date < weekStart.AddDays(7);
+    }
+    private static bool HasPartialPayment(DeliveryBoardItem item) => item.Paid > 0 && item.Balance > 0;
+    private static string DriverName(DeliveryBoardItem item) => string.IsNullOrWhiteSpace(item.DriverName) ? "Sin asignar" : item.DriverName;
+    private static bool CanAssignDriver(DeliveryBoardItem item) => item.RouteId is null && item.Status is "Pending" or "Incident";
+    private static bool CanSelect(DeliveryBoardItem item) => item.CanAddToRoute || CanAssignDriver(item);
+    private static string? MapUrl(string? value) => Uri.TryCreate(value, UriKind.Absolute, out var uri) && uri.Scheme is "http" or "https" ? uri.AbsoluteUri : null;
+    private static string? WhatsApp(string? phone) { if (string.IsNullOrWhiteSpace(phone)) return null; var digits = new string(phone.Where(char.IsDigit).ToArray()); if (digits.Length == 8) digits = "591" + digits; return digits.Length < 8 ? null : $"https://wa.me/{digits}"; }
+
+    private void ToggleSelection(Guid orderId, object? value)
+    {
+        var selected = value is bool yes && yes;
+        if (selected && !IsSelected(orderId)) _selectedOrderIds.Add(orderId);
+        if (!selected) _selectedOrderIds.Remove(orderId);
+    }
+
+    private void ToggleOne(Guid orderId)
+    {
+        if (IsSelected(orderId)) _selectedOrderIds.Remove(orderId);
+        else _selectedOrderIds.Add(orderId);
+    }
+
+    private void SelectVisible()
+    {
+        if (SelectableItems.All(x => IsSelected(x.OrderId)))
+            _selectedOrderIds.RemoveAll(id => SelectableItems.Any(x => x.OrderId == id));
+        else
+            foreach (var item in SelectableItems.Where(x => !IsSelected(x.OrderId))) _selectedOrderIds.Add(item.OrderId);
+    }
+
+    private void OpenDriverDialog(DeliveryBoardItem item)
+    {
+        _assignmentOrderIds.Clear();
+        _assignmentOrderIds.Add(item.OrderId);
+        _assignmentDriverId = item.DriverUserId;
+    }
+
+    private void OpenDriverDialogFromMenu(DeliveryBoardItem item)
+    {
+        CloseRowMenu();
+        OpenDriverDialog(item);
+    }
+
+    private void OpenBulkDriverDialog()
+    {
+        var assignable = SelectedItems.Where(CanAssignDriver).ToList();
+        if (assignable.Count == 0) { SetMessage("Los pedidos seleccionados ya están en una ruta o no admiten asignación.", true); return; }
+        _assignmentOrderIds.Clear();
+        _assignmentOrderIds.AddRange(assignable.Select(x => x.OrderId));
+        var drivers = assignable.Select(x => x.DriverUserId).Distinct().ToList();
+        _assignmentDriverId = drivers.Count == 1 ? drivers[0] : null;
+    }
+
+    private void CloseDriverDialog()
+    {
+        _assignmentOrderIds.Clear();
+        _assignmentDriverId = null;
+    }
+
+    private async Task AssignDriverDialogAsync()
+    {
+        if (_assignmentDriverId is not { } driverId || _board is null) return;
+        var targets = _assignmentOrderIds.Select(id => _board.Items.FirstOrDefault(x => x.OrderId == id)).Where(x => x is not null).Cast<DeliveryBoardItem>().ToList();
+        var schedulable = targets.Any(x => x.DeliveryId is null) ? await Service.SchedulableOrdersAsync() : [];
+        var errors = new List<string>();
+        var assigned = 0;
+        var userId = await UserIdAsync();
+        _saving = true;
+        foreach (var item in targets)
+        {
+            DeliveryResult result;
+            if (item.DeliveryId is not null && item.DeliveryVersion > 0)
+            {
+                result = await Service.AssignAsync(item.DeliveryId.Value, item.DeliveryVersion, driverId, item.DriverUserId is null ? "Asignación desde despacho." : "Reasignación desde despacho.", userId);
+            }
+            else
+            {
+                var order = schedulable.FirstOrDefault(x => x.Id == item.OrderId);
+                var lines = order?.Lines.Where(x => x.AvailableToSchedule > 0).Select(x => new ScheduleLine(x.Id, x.AvailableToSchedule)).ToList() ?? [];
+                result = lines.Count == 0
+                    ? new DeliveryResult(false, null, ["El pedido ya no tiene unidades disponibles para asignar."])
+                    : await Service.ScheduleAsync(new ScheduleDeliveryCommand(item.OrderId, driverId, ScheduledAt(item), lines), userId);
+            }
+            if (result.Succeeded) assigned++;
+            else errors.Add($"#{item.OrderNumber}: {string.Join(" ", result.Errors)}");
+        }
+        _saving = false;
+        CloseDriverDialog();
+        SetMessage(errors.Count == 0 ? $"Repartidor asignado a {assigned} pedido{(assigned == 1 ? "" : "s")}." : $"Se asignaron {assigned} pedido(s). {string.Join(" ", errors)}", errors.Count > 0);
+        await ReloadAsync();
+    }
+
+    private string DriverLabel(DriverOption driver) => driver.Id == _currentUserId ? $"{driver.Name} (Yo)" : driver.Name;
+    private async Task ReturnOrderToPendingAsync(DeliveryBoardItem item)
+    {
+        _saving = true;
+        var result = await Service.ReturnOrderToPendingAsync(item.OrderId, await UserIdAsync());
+        _saving = false;
+        SetMessage(result.Succeeded ? "El pedido volvió a pendiente de salida y quedó libre de la ruta." : string.Join(" ", result.Errors), !result.Succeeded);
+        await ReloadAsync();
+    }
+    private DateTimeOffset ScheduledAt(DeliveryBoardItem item)
+    {
+        var local = item.PromisedAtUtc?.ToLocalTime().DateTime ?? _selectedDate.Date.AddHours(8);
+        if (local < DateTime.Now) local = DateTime.Now;
+        return new DateTimeOffset(local, TimeZoneInfo.Local.GetUtcOffset(local)).ToUniversalTime();
+    }
+
+    private async Task PlanRouteAsync()
+    {
+        if (_routeDriverId is null || SelectedRouteItems.Count == 0) return;
+        var latestPromisedDate = SelectedRouteItems.Where(x => x.PromisedAtUtc is not null).Select(x => x.PromisedAtUtc!.Value.ToLocalTime().Date).DefaultIfEmpty(DateTime.Today).Max();
+        var routeDate = latestPromisedDate > DateTime.Today ? latestPromisedDate : DateTime.Today;
+        _saving = true;
+        var result = await Service.PlanRouteAsync(new(DateOnly.FromDateTime(routeDate), _routeDriverId.Value, SelectedRouteItems.Select(x => x.OrderId).ToList()), await UserIdAsync());
+        _saving = false;
+        if (!result.Succeeded) { SetMessage(string.Join(" ", result.Errors), true); return; }
+        _selectedOrderIds.Clear();
+        _currentRoute = result.Id is null ? null : await Service.GetRouteAsync(result.Id.Value);
+        SetMessage("Ruta preparada y repartidor asignado.", false);
+        await ReloadAsync();
+    }
+
+    private async Task StartRouteAsync()
+    {
+        if (_currentRoute is null) return;
+        _saving = true;
+        var result = await Service.StartRouteAsync(_currentRoute.Id, _currentRoute.Version, await UserIdAsync());
+        _saving = false;
+        SetMessage(result.Succeeded ? "Ruta iniciada. Ya aparece en Mis entregas del repartidor." : string.Join(" ", result.Errors), !result.Succeeded);
+        await ReloadAsync();
+    }
+    private async Task ReturnRouteToPendingAsync(Guid routeId)
+    {
+        var route = _currentRoute?.Id == routeId ? _currentRoute : await Service.GetRouteAsync(routeId);
+        if (route is null) { SetMessage("La ruta ya no existe.", true); return; }
+        _saving = true;
+        var result = await Service.ReturnRouteToPendingAsync(route.Id, route.Version, await UserIdAsync());
+        _saving = false;
+        SetMessage(result.Succeeded ? "La ruta fue eliminada y los pedidos volvieron a Pendiente de salida." : string.Join(" ", result.Errors), !result.Succeeded);
+        await ReloadAsync();
+        if (result.Succeeded) _currentRoute = null;
+    }
+    private Guid? _openMenuOrderId;
+    private void ToggleRowMenu(Guid orderId) => _openMenuOrderId = _openMenuOrderId == orderId ? null : orderId;
+    private void CloseRowMenu() => _openMenuOrderId = null;
+    private void ToggleOneAndClose(Guid orderId) { CloseRowMenu(); ToggleOne(orderId); }
+    private void OpenIncidentAndClose(DeliveryBoardItem item) { CloseRowMenu(); OpenIncident(item); }
+    private async Task ReturnRouteToPendingAndCloseAsync(Guid routeId) { CloseRowMenu(); await ReturnRouteToPendingAsync(routeId); }
+    private async Task ReturnOrderToPendingAndCloseAsync(DeliveryBoardItem item) { CloseRowMenu(); await ReturnOrderToPendingAsync(item); }
+    private async Task OpenRouteAsync(Guid routeId)
+    {
+        _selectedOrderIds.Clear();
+        _currentRoute = await Service.GetRouteAsync(routeId);
+    }
+    private void ClearRoute() { _currentRoute = null; _routeDriverId = _drivers.Any(x => x.Id == _currentUserId) ? _currentUserId : null; _selectedOrderIds.Clear(); }
+
+    private void MoveSelected(Guid? orderId, int direction)
+    {
+        if (orderId is null) return;
+        var index = _selectedOrderIds.IndexOf(orderId.Value); var next = index + direction;
+        if (index < 0 || next < 0 || next >= _selectedOrderIds.Count) return;
+        (_selectedOrderIds[index], _selectedOrderIds[next]) = (_selectedOrderIds[next], _selectedOrderIds[index]);
+    }
+
+    private async Task MoveStopAsync(Guid? deliveryId, int direction)
+    {
+        if (_currentRoute is null || deliveryId is null) return;
+        var ordered = _currentRoute.Stops.OrderBy(x => x.Position).Select(x => x.DeliveryId).ToList();
+        var index = ordered.IndexOf(deliveryId.Value); var next = index + direction;
+        if (index < 0 || next < 0 || next >= ordered.Count) return;
+        (ordered[index], ordered[next]) = (ordered[next], ordered[index]);
+        _saving = true;
+        var result = await Service.ReorderRouteAsync(new(_currentRoute.Id, _currentRoute.Version, ordered), await UserIdAsync());
+        _saving = false;
+        if (!result.Succeeded) SetMessage(string.Join(" ", result.Errors), true);
+        await ReloadAsync();
+    }
+
+    private IReadOnlyList<RouteStopPresentation> RouteStops => _currentRoute is { } route
+        ? route.Stops.OrderBy(x => x.Position).Select(x => new RouteStopPresentation(null, x.DeliveryId, x.OrderNumber, x.Customer, x.DeliveryPoint, x.Address, x.Reference, x.Location, x.Latitude, x.Longitude, x.SalePending, x.ReplacementPending, x.TastingPending, x.Balance, x.Position)).ToList()
+        : SelectedRouteItems.Select((x, index) => new RouteStopPresentation(x.OrderId, x.DeliveryId, x.OrderNumber, x.Customer, x.DeliveryPoint, x.Address, x.Reference, x.Location, x.Latitude, x.Longitude, x.SalePending, x.ReplacementPending, x.TastingPending, x.Balance, index + 1)).ToList();
+    private int RouteSale => RouteStops.Sum(x => x.SalePending);
+    private int RouteReplacement => RouteStops.Sum(x => x.ReplacementPending);
+    private int RouteTasting => RouteStops.Sum(x => x.TastingPending);
+    private int RoutePhysical => RouteSale + RouteReplacement + RouteTasting;
+    private decimal RouteToCollect => RouteStops.Sum(x => x.Balance);
+    private IEnumerable<DeliveryBoardItem> MapCandidates => FilteredItems
+        .Where(x => Physical(x) > 0 && MapUrl(x.Location) is not null);
+    private bool HasMapCandidates => MapCandidates.Any();
+    private IReadOnlyList<RouteMapPoint> BuildMapPoints()
+    {
+        var selectedStops = RouteStops;
+        return MapCandidates.Select(item =>
+        {
+            var selected = selectedStops.FirstOrDefault(stop =>
+                (stop.OrderId is not null && stop.OrderId == item.OrderId) ||
+                (stop.DeliveryId is not null && stop.DeliveryId == item.DeliveryId));
+            return new RouteMapPoint(
+                item.OrderId.ToString(),
+                item.OrderNumber,
+                item.Customer,
+                item.DeliveryPoint,
+                item.Address,
+                item.Reference,
+                item.Location,
+                item.Latitude,
+                item.Longitude,
+                Physical(item),
+                item.Balance,
+                MapUrl(item.Location),
+                ImageUrl(item.DeliveryPointId),
+                selected?.Position,
+                _currentRoute is null && item.CanAddToRoute);
+        }).ToList();
+    }
+    private string RouteGoogleMapsUrl
+    {
+        get
+        {
+            var points = RouteStops.Select(MapPoint).Where(x => !string.IsNullOrWhiteSpace(x)).Cast<string>().ToList();
+            if (points.Count == 0) return "https://www.google.com/maps";
+            if (points.Count == 1) return $"https://www.google.com/maps/search/?api=1&query={Uri.EscapeDataString(points[0])}";
+            var waypoints = points.Skip(1).Take(points.Count - 2).Select(Uri.EscapeDataString).ToList();
+            var url = $"https://www.google.com/maps/dir/?api=1&origin={Uri.EscapeDataString(points[0])}&destination={Uri.EscapeDataString(points[^1])}";
+            return waypoints.Count == 0 ? url : $"{url}&waypoints={string.Join("|", waypoints)}";
+        }
+    }
+    private static string? MapPoint(RouteStopPresentation stop)
+    {
+        if (stop.Latitude is { } latitude && stop.Longitude is { } longitude)
+            return $"{latitude.ToString(System.Globalization.CultureInfo.InvariantCulture)},{longitude.ToString(System.Globalization.CultureInfo.InvariantCulture)}";
+        if (!string.IsNullOrWhiteSpace(stop.Location))
+        {
+            var decoded = Uri.UnescapeDataString(stop.Location);
+            var coordinates = System.Text.RegularExpressions.Regex.Match(decoded, @"@(-?\d{1,2}(?:\.\d+)?),(-?\d{1,3}(?:\.\d+)?)");
+            if (!coordinates.Success)
+            {
+                coordinates = System.Text.RegularExpressions.Regex.Match(decoded, @"(?:q|query|destination|center)=(-?\d{1,2}(?:\.\d+)?),(-?\d{1,3}(?:\.\d+)?)", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+            }
+            if (coordinates.Success) return $"{coordinates.Groups[1].Value},{coordinates.Groups[2].Value}";
+        }
+
+        var description = string.Join(", ", new[] { stop.Address, stop.Reference, stop.DeliveryPoint }
+            .Where(x => !string.IsNullOrWhiteSpace(x)).Distinct(StringComparer.OrdinalIgnoreCase));
+        return string.IsNullOrWhiteSpace(description) ? null : $"{description}, Santa Cruz de la Sierra, Bolivia";
+    }
+
+    [Microsoft.JSInterop.JSInvokable]
+    public async Task FocusOrderFromMap(string orderId)
+    {
+        if (!Guid.TryParse(orderId, out var id)) return;
+        _highlightedOrderId = id;
+        await InvokeAsync(StateHasChanged);
+    }
+
+    private async Task ViewPinAsync(Guid orderId)
+    {
+        _highlightedOrderId = orderId;
+        if (_mapModule is not null)
+            await _mapModule.InvokeVoidAsync("focusDeliveryRoutePin", "delivery-route-map", orderId.ToString());
+    }
+
+    private async Task ViewPinAndCloseAsync(Guid orderId)
+    {
+        CloseRowMenu();
+        await ViewPinAsync(orderId);
+    }
+
+    private async Task ViewSelectedOnMapAsync()
+    {
+        if (_mapModule is null || _selectedOrderIds.Count == 0) return;
+        await _mapModule.InvokeVoidAsync("focusDeliveryRoutePins", "delivery-route-map", _selectedOrderIds.Select(x => x.ToString()).ToArray());
+    }
+
+    private async Task OpenRoutePlannerAsync()
+    {
+        if (_mapModule is null) return;
+        await _mapModule.InvokeVoidAsync("scrollToDeliveryElement", "delivery-route-planner");
+    }
+
+    [Microsoft.JSInterop.JSInvokable]
+    public async Task ToggleStopFromMap(string orderId)
+    {
+        if (!Guid.TryParse(orderId, out var id) || _board is null) return;
+        if (_currentRoute is not null)
+        {
+            SetMessage("Pulsa 'Armar otra ruta' para seleccionar nuevos pines.", true);
+            await InvokeAsync(StateHasChanged);
+            return;
+        }
+
+        var item = _board.Items.FirstOrDefault(x => x.OrderId == id);
+        if (item is null || !item.CanAddToRoute)
+        {
+            SetMessage("Este punto ya está en reparto o no está disponible para una ruta nueva.", true);
+            await InvokeAsync(StateHasChanged);
+            return;
+        }
+
+        ToggleOne(id);
+        _message = null;
+        await InvokeAsync(StateHasChanged);
+    }
+
+    private void OpenIncident(DeliveryBoardItem item) { _incidentDeliveryId = item.DeliveryId; _incidentVersion = item.DeliveryVersion; _incidentType = "Local cerrado"; _incidentNotes = string.Empty; }
+    private void CloseIncident() => _incidentDeliveryId = null;
+    private async Task ReportIncidentAsync()
+    {
+        if (_incidentDeliveryId is null) return;
+        _saving = true;
+        var reason = string.IsNullOrWhiteSpace(_incidentNotes) ? _incidentType : $"{_incidentType}: {_incidentNotes.Trim()}";
+        var result = await Service.FailAsync(_incidentDeliveryId.Value, _incidentVersion, reason, await UserIdAsync());
+        _saving = false;
+        if (result.Succeeded) CloseIncident();
+        SetMessage(result.Succeeded ? "Incidencia registrada en el historial de la entrega." : string.Join(" ", result.Errors), !result.Succeeded);
+        await ReloadAsync();
+    }
+
+    private void SetMessage(string message, bool error) { _message = message; _isError = error; }
+    private async Task<Guid> UserIdAsync() { var state = await Auth.GetAuthenticationStateAsync(); return Guid.Parse(state.User.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)!.Value); }
+    public async ValueTask DisposeAsync()
+    {
+        _mapReference?.Dispose();
+        if (_mapModule is null) return;
+        try
+        {
+            await _mapModule.InvokeVoidAsync("disposeDeliveryRouteMap", "delivery-route-map");
+            await _mapModule.DisposeAsync();
+        }
+        catch (Microsoft.JSInterop.JSDisconnectedException) { }
+    }
+    private sealed record RouteMapPoint(string OrderId, long OrderNumber, string Customer, string? DeliveryPoint, string? Address, string? Reference, string? Location, double? Latitude, double? Longitude, int Physical, decimal Balance, string? MapUrl, string? ImageUrl, int? SelectedPosition, bool CanSelect);
+    private sealed record RouteStopPresentation(Guid? OrderId, Guid? DeliveryId, long OrderNumber, string Customer, string? DeliveryPoint, string? Address, string? Reference, string? Location, double? Latitude, double? Longitude, int SalePending, int ReplacementPending, int TastingPending, decimal Balance, int Position) { public int Physical => SalePending + ReplacementPending + TastingPending; }
+}

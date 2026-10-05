@@ -1,0 +1,112 @@
+@page "/app/clientes/{CustomerId:guid}"
+@layout AdminLayout
+@rendermode InteractiveServer
+@attribute [Authorize(Policy = AppPolicies.ManageSales)]
+@inject ICustomerManagementService Service
+@inject IDeliveryPointImageService ImageService
+@inject AuthenticationStateProvider AuthenticationStateProvider
+
+<PageTitle>Ficha del cliente | Tentación Sana</PageTitle>
+@if (_customer is null) { <div class="loading">Cargando cliente…</div> }
+else
+{
+ <nav class="breadcrumbs"><a href="/app/clientes">Clientes</a><span>›</span><strong>@_customer.Name</strong></nav>
+ <header class="customer-hero">
+  <div class="identity"><div class="monogram">@Initials(_customer.Name)</div><div><div class="title-line"><h1>@_customer.Name</h1><span class="active-pill">@(_customer.IsActive ? "● Activo" : "Inactivo")</span></div><p>@KindText(_customer.Kind) · @CategoryText(_customer.Category)</p><div class="quick-data">@if(!string.IsNullOrWhiteSpace(_customer.Phone)){<a href="@WhatsApp(_customer.Phone)" target="_blank">◉ @_customer.Phone</a>}@if(!string.IsNullOrWhiteSpace(_customer.Email)){<a href="mailto:@_customer.Email">✉ @_customer.Email</a>}</div></div></div>
+  <button class="secondary" @onclick="OpenCustomerEditor">Editar cliente</button>
+  <div class="stats"><article><strong>@_customer.DeliveryPoints.Count</strong><span>Puntos</span></article><article><strong>@_customer.DeliveryPoints.Count(x=>x.Kind=="Branch")</strong><span>Sucursales</span></article><article><strong>@_customer.DeliveryPoints.Count(x=>x.Kind=="Franchise")</strong><span>Franquicias</span></article><article><strong>@_customer.Contacts.Count</strong><span>Contactos</span></article><article><strong>@_customer.PaymentResponsibles.Count</strong><span>Responsables de pago</span></article></div>
+ </header>
+
+ @if (_errors.Count > 0){<div class="error-summary" role="alert">@foreach(var error in _errors){<p>@error</p>}</div>}
+ @if (!string.IsNullOrWhiteSpace(_message)){<div class="success-message" role="status">@_message</div>}
+
+ <nav class="tabs" aria-label="Secciones de cliente">
+  <button class="@TabClass("summary")" @onclick='@(() => _tab = "summary")'>Resumen</button>
+  <button class="@TabClass("points")" @onclick='@(() => _tab = "points")'>Puntos</button>
+  <button class="@TabClass("contacts")" @onclick='@(() => _tab = "contacts")'>Contactos</button>
+  <button class="@TabClass("billing")" @onclick='@(() => _tab = "billing")'>Cobranza</button>
+ </nav>
+
+ @if(_tab=="summary")
+ {
+  <div class="summary-grid"><section class="panel"><div class="panel-heading"><div><small>Operación diaria</small><h2>Puntos activos</h2></div><button @onclick="OpenNewPoint">+ Agregar punto</button></div>@foreach(var point in _customer.DeliveryPoints.Where(x=>x.IsActive).Take(5)){<button class="point-link" @onclick="()=>OpenPoint(point)"><span><strong>@point.Label</strong><small>@PointKindText(point.Kind) · @point.Address</small></span><span>Ver ficha ›</span></button>}</section><section class="panel"><div class="panel-heading"><div><small>Datos comerciales</small><h2>Acerca del cliente</h2></div></div><dl class="about"><div><dt>Tipo</dt><dd>@KindText(_customer.Kind)</dd></div><div><dt>Categoría</dt><dd>@CategoryText(_customer.Category)</dd></div><div><dt>Observaciones</dt><dd>@(_customer.Notes??"Sin observaciones")</dd></div></dl></section></div>
+ }
+ else if(_tab=="points")
+ {
+  <section class="panel"><div class="panel-heading"><div><small>Entrega y atención</small><h2>Puntos, sucursales y franquicias</h2></div><button @onclick="OpenNewPoint">+ Agregar punto</button></div>
+   @if(_customer.DeliveryPoints.Count==0){<div class="empty"><strong>Aún no hay puntos.</strong><span>Agrega el primer domicilio, local o sucursal.</span></div>}
+   else{<div class="points-table"><table><thead><tr><th>Punto</th><th>Tipo</th><th>Contacto de pedidos</th><th>Ubicación</th><th>Paga</th><th></th></tr></thead><tbody>@foreach(var point in _customer.DeliveryPoints){var contact=Contact(point.ContactId);var payer=Payer(point.PaymentResponsiblePartyId);<tr class="@(!point.IsActive?"inactive":null)"><td><button class="point-name" @onclick="()=>OpenPoint(point)">@if(PointImage(point.Id) is { } imageUrl){<img class="point-thumbnail" src="@imageUrl" alt="Foto de referencia de @point.Label"/>}else{<span class="no-photo">⌂</span>}<span><strong>@point.Label</strong><small>@point.Address</small></span></button></td><td><span class="kind kind-@point.Kind.ToLowerInvariant()">@PointKindText(point.Kind)</span></td><td>@if(contact is null){<span class="muted">Sin asignar</span>}else{<strong>@contact.Name</strong><a class="phone" href="@WhatsApp(contact.Phone)" target="_blank">@contact.Phone · WhatsApp</a>}</td><td>@if(!string.IsNullOrWhiteSpace(point.Location)){<a class="map-link" href="@point.Location" target="_blank">Abrir ubicación ↗</a>}else{<span class="muted">Sin enlace</span>}</td><td><strong>@(payer?.Label??payer?.Name??"Sin asignar")</strong>@if(payer is not null){<small>@payer.Name</small>}</td><td><button class="row-action" @onclick="()=>OpenPoint(point)">Ver / editar</button></td></tr>}</tbody></table></div>}
+  </section>
+ }
+ else if(_tab=="contacts")
+ {
+  <section class="panel"><div class="panel-heading"><div><small>Personas de contacto</small><h2>Contactos del cliente</h2></div><button @onclick="()=>_showContact=true">+ Agregar contacto</button></div><div class="card-list">@foreach(var c in _customer.Contacts){<article><div class="avatar">@Initials(c.Name)</div><div><h3>@c.Name</h3><p>@(c.Role??"Sin cargo") · @(Point(c.DeliveryPointId)?.Label??"Contacto general")</p><div class="roles">@foreach(var role in Roles(c)){<span>@role</span>}</div></div><a href="@WhatsApp(c.Phone)" target="_blank">@c.Phone<br/>WhatsApp ↗</a></article>}</div></section>
+ }
+ else
+ {
+  <section class="panel"><div class="panel-heading"><div><small>Cuentas por cobrar</small><h2>Responsables de pago</h2></div><button @onclick="()=>_showPayer=true">+ Agregar responsable</button></div><div class="payer-grid">@foreach(var payer in _customer.PaymentResponsibles){<article><span class="payer-icon">₿</span><div><small>@PayerKindText(payer.Kind)</small><h3>@(payer.Label??payer.Name)</h3><p>@payer.Name · <a href="@WhatsApp(payer.Phone)" target="_blank">@payer.Phone</a></p><strong>Paga:</strong><ul>@foreach(var id in payer.DeliveryPointIds){<li>@Point(id)?.Label</li>}</ul></div></article>}</div></section>
+ }
+}
+
+@if(_showPoint && _customer is not null)
+{
+ <div class="drawer-backdrop" @onclick="ClosePoint"><aside class="drawer" role="dialog" aria-modal="true" aria-labelledby="point-title" @onclick:stopPropagation><header><div><small>@(_editingPointId is null?"Nuevo punto":"Ficha del punto")</small><h2 id="point-title">@(_editingPointId is null?"Agregar punto":_point.Label)</h2></div><button @onclick="ClosePoint" aria-label="Cerrar">×</button></header><div class="drawer-body">
+  @if(_editingPointId is not null && _pointImageUrl is not null){<img class="place-photo" src="@_pointImageUrl" alt="Referencia visual de @_point.Label"/>}
+  <fieldset><legend><span>1</span> Información del punto</legend><label>Nombre del punto<input @bind="_point.Label"/></label><div class="two"><label>Tipo<select @bind="_point.Kind">@foreach(var kind in PointKinds){<option value="@kind.Value">@kind.Text</option>}</select></label><label>Estado<select @bind="_point.IsActive"><option value="@true">Activo</option><option value="@false">Inactivo</option></select></label></div><label>Dirección<input @bind="_point.Address"/></label><label>Referencia<input @bind="_point.Reference"/></label><label>Link de Google Maps<input @bind="_point.Location"/></label>@if(!string.IsNullOrWhiteSpace(_point.Location)){<a class="inline-action" href="@_point.Location" target="_blank">Abrir ubicación ↗</a>}<label>Observaciones<textarea @bind="_point.Notes"></textarea></label></fieldset>
+  <fieldset><legend><span>2</span> Contacto para pedidos</legend><label>Seleccionar contacto<select @bind="_point.ContactId"><option value="">Sin asignar</option>@foreach(var c in _customer.Contacts){<option value="@c.Id">@c.Name · @c.Phone</option>}</select></label><button class="outline" @onclick="()=>_showContact=true">+ Crear contacto</button></fieldset>
+  <fieldset><legend><span>3</span> Responsable de pago</legend><label>Seleccionar responsable<select @bind="_point.PayerId"><option value="">Sin asignar</option>@foreach(var p in _customer.PaymentResponsibles){<option value="@p.Id">@(p.Label??p.Name) · @p.Name</option>}</select></label><button class="outline" @onclick="()=>_showPayer=true">+ Crear responsable</button></fieldset>
+  @if(_editingPointId is not null){<fieldset><legend><span>4</span> Foto de referencia del lugar</legend><label class="upload"><InputFile OnChange="UploadPointImage" accept="image/jpeg,image/png,image/webp"/><strong>Subir o cambiar imagen</strong><small>JPG, PNG o WebP · máximo 10 MB</small></label></fieldset>}
+ </div><footer><button class="secondary" @onclick="ClosePoint">Cancelar</button><button @onclick="SavePoint">@(_saving?"Guardando…":"Guardar punto")</button></footer></aside></div>
+}
+
+@if(_showContact && _customer is not null)
+{
+ <div class="modal-backdrop" @onclick="()=>_showContact=false"><section class="modal" @onclick:stopPropagation><header><h2>Nuevo contacto</h2><button @onclick="()=>_showContact=false">×</button></header><div class="modal-body"><div class="two"><label>Nombre<input @bind="_contact.Name"/></label><label>Teléfono<input @bind="_contact.Phone"/></label></div><div class="two"><label>Correo<input @bind="_contact.Email"/></label><label>Cargo / función<input @bind="_contact.Role"/></label></div><label>Pertenece al punto<select @bind="_contact.PointId"><option value="">Contacto general</option>@foreach(var p in _customer.DeliveryPoints){<option value="@p.Id">@p.Label</option>}</select></label><div class="checks"><label><input type="checkbox" @bind="_contact.Orders"/> Hace pedidos</label><label><input type="checkbox" @bind="_contact.Reception"/> Recibe mercadería</label><label><input type="checkbox" @bind="_contact.Payment"/> Responsable de pago</label><label><input type="checkbox" @bind="_contact.Admin"/> Administración</label><label><input type="checkbox" @bind="_contact.Accounting"/> Contabilidad</label><label><input type="checkbox" @bind="_contact.Owner"/> Propietario</label></div></div><footer><button class="secondary" @onclick="()=>_showContact=false">Cancelar</button><button @onclick="SaveContact">Guardar contacto</button></footer></section></div>
+}
+
+@if(_showPayer && _customer is not null)
+{
+ <div class="modal-backdrop" @onclick="()=>_showPayer=false"><section class="modal" @onclick:stopPropagation><header><h2>Nuevo responsable de pago</h2><button @onclick="()=>_showPayer=false">×</button></header><div class="modal-body"><label>Tipo<select @bind="_payer.Kind"><option value="Customer">Mismo cliente</option><option value="Branch">Paga esta sucursal</option><option value="CentralCompany">Oficina / contabilidad central</option><option value="Franchisee">Propietario de franquicia</option><option value="ThirdParty">Otro responsable</option></select></label><label>Nombre descriptivo<input @bind="_payer.Label" placeholder="Ej. Contabilidad Nutriarte"/></label><label>Reutilizar contacto<select @bind="_payer.ContactId"><option value="">Crear responsable independiente</option>@foreach(var c in _customer.Contacts){<option value="@c.Id">@c.Name · @c.Phone</option>}</select></label>@if(_payer.ContactId is null){<div class="two"><label>Nombre<input @bind="_payer.Name"/></label><label>Teléfono<input @bind="_payer.Phone"/></label></div><label>Correo<input @bind="_payer.Email"/></label>}</div><footer><button class="secondary" @onclick="()=>_showPayer=false">Cancelar</button><button @onclick="SavePayer">Guardar responsable</button></footer></section></div>
+}
+
+@if(_showCustomer && _customer is not null)
+{
+ <div class="modal-backdrop" @onclick="()=>_showCustomer=false"><section class="modal" @onclick:stopPropagation><header><h2>Editar cliente</h2><button @onclick="()=>_showCustomer=false">×</button></header><div class="modal-body"><div class="two"><label>Tipo<select @bind="_edit.Kind"><option value="Individual">Persona</option><option value="Company">Empresa</option></select></label><label>Categoría<select @bind="_edit.Category">@foreach(var c in Categories){<option value="@c.Value">@c.Text</option>}</select></label></div><label>Nombre<input @bind="_edit.Name"/></label><div class="two"><label>Teléfono general<input @bind="_edit.Phone"/></label><label>Correo<input @bind="_edit.Email"/></label></div><label>Observaciones<textarea @bind="_edit.Notes"></textarea></label><label class="check"><input type="checkbox" @bind="_edit.IsActive"/> Cliente activo</label></div><footer><button class="secondary" @onclick="()=>_showCustomer=false">Cancelar</button><button @onclick="SaveCustomer">Guardar cambios</button></footer></section></div>
+}
+
+@code {
+ [Parameter] public Guid CustomerId { get; set; }
+ private TentacionSana.Application.Customers.CustomerDetail? _customer; private string _tab="summary"; private bool _showPoint,_showContact,_showPayer,_showCustomer,_saving; private Guid? _editingPointId; private string? _pointImageUrl,_message; private readonly List<string> _errors=[]; private readonly Dictionary<Guid,string> _pointImages=[]; private PointForm _point=new(); private ContactForm _contact=new(); private PayerForm _payer=new(); private CustomerForm _edit=new();
+ private static readonly (string Value,string Text)[] PointKinds=[("Home","Domicilio"),("MainLocation","Local principal"),("Branch","Sucursal"),("Franchise","Franquicia"),("PointOfSale","Punto de venta"),("Warehouse","Depósito"),("Other","Otro")];
+ private static readonly (string Value,string Text)[] Categories=[("Individual","Particular"),("Gym","Gimnasio"),("HealthStore","Tienda saludable"),("Minimarket","Minimarket"),("Reseller","Revendedor"),("Distributor","Distribuidor"),("Other","Otro")];
+ protected override Task OnParametersSetAsync()=>Load();
+ private async Task Load(){_customer=await Service.GetCustomerAsync(CustomerId);_pointImages.Clear();if(_customer is null)return;var points=_customer.DeliveryPoints.Where(x=>x.HasImage).ToList();var urls=await Task.WhenAll(points.Select(async x=>(x.Id,Url:await ImageService.GetUrlAsync(x.Id))));foreach(var image in urls)if(!string.IsNullOrWhiteSpace(image.Url))_pointImages[image.Id]=image.Url;}
+ private void OpenNewPoint(){_point=new(){Kind=_customer?.Kind=="Individual"?"Home":"Branch"};_editingPointId=null;_pointImageUrl=null;_showPoint=true;}
+ private async Task OpenPoint(DeliveryPointDetail p){_editingPointId=p.Id;_point=new(){Kind=p.Kind,Label=p.Label,Address=p.Address,Reference=p.Reference,Location=p.Location,Notes=p.Notes,ContactId=p.ContactId,PayerId=p.PaymentResponsiblePartyId,IsActive=p.IsActive};_pointImageUrl=p.HasImage?await ImageService.GetUrlAsync(p.Id):null;_showPoint=true;}
+ private void ClosePoint(){_showPoint=false;_editingPointId=null;_pointImageUrl=null;}
+ private async Task SavePoint(){_saving=true;var cmd=new DeliveryPointEditCommand(_point.Kind,_point.Label,_point.Address,_point.Reference,_point.Location,_point.Notes,_point.ContactId,_point.PayerId,_point.IsActive);var r=_editingPointId is null?await Service.AddDeliveryPointAsync(CustomerId,cmd,await UserId()):await Service.UpdateDeliveryPointAsync(CustomerId,_editingPointId.Value,cmd,await UserId());await Result(r,"Punto guardado.");if(r.Succeeded)ClosePoint();_saving=false;}
+ private async Task SaveContact(){var r=await Service.AddContactAsync(CustomerId,new(_contact.Name,_contact.Phone,_contact.Email,_contact.Role,_contact.PointId,_contact.Orders,_contact.Reception,_contact.Payment,_contact.Admin,_contact.Accounting,_contact.Owner),await UserId());await Result(r,"Contacto guardado.");if(r.Succeeded){_contact=new();_showContact=false;}}
+ private async Task SavePayer(){var r=await Service.AddPaymentResponsibleAsync(CustomerId,new(_payer.Kind,_payer.Label,_payer.ContactId,_payer.Name,_payer.Phone,_payer.Email),await UserId());await Result(r,"Responsable guardado.");if(r.Succeeded){_payer=new();_showPayer=false;}}
+ private void OpenCustomerEditor(){_edit=new(){Kind=_customer!.Kind,Category=_customer.Category,Name=_customer.Name,Phone=_customer.Phone,Email=_customer.Email,Notes=_customer.Notes,IsActive=_customer.IsActive};_showCustomer=true;}
+ private async Task SaveCustomer(){var r=await Service.UpdateCustomerAsync(CustomerId,new(_edit.Kind,_edit.Category,_edit.Name,_edit.Phone,_edit.Email,_edit.Notes,_edit.IsActive,await UserId()));await Result(r,"Cliente actualizado.");if(r.Succeeded)_showCustomer=false;}
+ private async Task UploadPointImage(InputFileChangeEventArgs e){if(_editingPointId is null)return;try{await using var stream=e.File.OpenReadStream(10*1024*1024);var r=await ImageService.UploadAsync(CustomerId,_editingPointId.Value,stream,e.File.Name,e.File.ContentType,e.File.Size,await UserId());await Result(r,"Imagen guardada.");if(r.Succeeded)_pointImageUrl=await ImageService.GetUrlAsync(_editingPointId.Value);}catch(IOException){_errors.Clear();_errors.Add("No se pudo leer la imagen o supera 10 MB.");}}
+ private async Task Result(CustomerOperationResult r,string success){_errors.Clear();_message=r.Succeeded?success:null;if(!r.Succeeded)_errors.AddRange(r.Errors);await Load();}
+ private CustomerContactView? Contact(Guid? id){var c=_customer?.Contacts.FirstOrDefault(x=>x.Id==id);return c is null?null:new(c.Name,c.Phone);}
+ private PaymentResponsibleDetail? Payer(Guid? id)=>_customer?.PaymentResponsibles.FirstOrDefault(x=>x.Id==id);
+ private DeliveryPointDetail? Point(Guid? id)=>_customer?.DeliveryPoints.FirstOrDefault(x=>x.Id==id);
+ private string? PointImage(Guid id)=>_pointImages.GetValueOrDefault(id);
+ private static IEnumerable<string> Roles(ContactDetail c){if(c.IsOrderContact)yield return "Hace pedidos";if(c.IsReceptionContact)yield return "Recibe";if(c.IsPaymentContact)yield return "Pago";if(c.IsAdministrator)yield return "Administración";if(c.IsAccounting)yield return "Contabilidad";if(c.IsOwner)yield return "Propietario";}
+ private string TabClass(string tab)=>_tab==tab?"active":"";
+ private async Task<Guid> UserId(){var s=await AuthenticationStateProvider.GetAuthenticationStateAsync();return Guid.Parse(s.User.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)!.Value);}
+ private static string Initials(string name)=>string.Concat(name.Split(' ',StringSplitOptions.RemoveEmptyEntries).Take(2).Select(x=>char.ToUpperInvariant(x[0])));
+ private static string WhatsApp(string phone)=>$"https://wa.me/{new string(phone.Where(char.IsDigit).ToArray())}";
+ private static string KindText(string k)=>k=="Company"?"Empresa":"Persona";
+ private static string CategoryText(string c)=>Categories.FirstOrDefault(x=>x.Value==c).Text??c;
+ private static string PointKindText(string k)=>PointKinds.FirstOrDefault(x=>x.Value==k).Text??k;
+ private static string PayerKindText(string k)=>k switch{"Branch"=>"Paga esta sucursal","CentralCompany"=>"Contabilidad central","Franchisee"=>"Propietario de franquicia","ThirdParty"=>"Otro responsable",_=>"Mismo cliente"};
+ private sealed record CustomerContactView(string Name,string Phone);
+ private sealed class PointForm{public string Kind{get;set;}="Branch";public string Label{get;set;}="";public string Address{get;set;}="";public string? Reference{get;set;}public string? Location{get;set;}public string? Notes{get;set;}public Guid? ContactId{get;set;}public Guid? PayerId{get;set;}public bool IsActive{get;set;}=true;}
+ private sealed class ContactForm{public string Name{get;set;}="";public string Phone{get;set;}="";public string? Email{get;set;}public string? Role{get;set;}public Guid? PointId{get;set;}public bool Orders{get;set;}public bool Reception{get;set;}public bool Payment{get;set;}public bool Admin{get;set;}public bool Accounting{get;set;}public bool Owner{get;set;}}
+ private sealed class PayerForm{public string Kind{get;set;}="Customer";public string? Label{get;set;}public Guid? ContactId{get;set;}public string? Name{get;set;}public string? Phone{get;set;}public string? Email{get;set;}}
+ private sealed class CustomerForm{public string Kind{get;set;}="Individual";public string Category{get;set;}="Individual";public string Name{get;set;}="";public string? Phone{get;set;}public string? Email{get;set;}public string? Notes{get;set;}public bool IsActive{get;set;}=true;}
+}

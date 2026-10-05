@@ -1,0 +1,401 @@
+@page "/app/mis-entregas"
+@layout AdminLayout
+@rendermode InteractiveServer
+@attribute [Authorize(Policy=AppPolicies.ManageDeliveries)]
+@inject IDeliveryService Service
+@inject IDeliveryEvidenceService EvidenceService
+@inject IInventoryService InventoryService
+@inject IDeliveryPointImageService PointImages
+@inject AuthenticationStateProvider Auth
+@inject NavigationManager Navigation
+@inject Microsoft.JSInterop.IJSRuntime JS
+@implements IAsyncDisposable
+
+<PageTitle>Mi ruta de hoy | Tentación Sana</PageTitle>
+<header class="my-deliveries-heading"><div><span>OPERACIÓN DIARIA</span><h1>Mi ruta de hoy</h1><p class="route-day">▣ @DateTime.Today.ToString("dddd, dd 'de' MMMM 'de' yyyy")</p></div><div class="route-summary">▣ <strong>@ActiveDeliveryCount por entregar</strong><span>·</span><span>@CompletedDeliveryCount completada(s)</span></div></header>
+@if (_message is not null) { <p class="status-message @(_isError ? "error" : "success")">@_message</p> }
+
+@if (_items is null) { <p class="loading">Cargando entregas…</p> }
+else if (_items.Count == 0) { <section class="empty-state"><strong>No tienes entregas asignadas.</strong><span>Las rutas asignadas por despacho aparecerán aquí.</span></section> }
+else
+{
+    var nextDelivery = NextDelivery;
+    var nextStop = nextDelivery is null ? null : _route?.Stops.FirstOrDefault(x => x.DeliveryId == nextDelivery.Id);
+    @if (MapDeliveries.Count > 0)
+    {
+        <section class="driver-route-tools">
+            <div class="driver-map-card route-map-card">
+                <header><div><span>MI RUTA</span><h2>Mapa de entregas</h2><p>El orden numerado es tu recorrido actual.</p></div><a href="@RouteGoogleMapsUrl" target="_blank" rel="noopener noreferrer">Abrir en Google Maps ↗</a></header>
+                <div class="route-map-frame"><div id="my-deliveries-route-map" class="driver-route-map interactive-route-map"><div class="map-loading">Ubicando tus entregas…</div></div></div>
+            </div>
+            <aside class="next-stop-card">
+                <header><span>SIGUIENTE PARADA</span>@if (nextDelivery is not null) { <b>Parada @(nextDelivery.RoutePosition ?? 1)</b> }</header>
+                @if (nextDelivery is not null)
+                {
+                    <div class="next-stop-main">
+                        @if (ItemImage(nextDelivery) is { } nextImage) { <img src="@nextImage" alt="Fotografía de @(nextDelivery.DeliveryPoint ?? nextDelivery.Customer)" /> } else { <span class="next-stop-placeholder">⌂</span> }
+                        <div><h2>@nextDelivery.Customer</h2><p>@(nextDelivery.DeliveryPoint ?? nextDelivery.Address ?? "Punto sin asignar")</p><strong>◇ @nextDelivery.PendingQuantity unidades</strong><small>▣ Pedido #@nextDelivery.OrderNumber</small><small>▣ @DeliveryDateLabel(nextDelivery) · @nextDelivery.ScheduledAtUtc.ToLocalTime().ToString("HH:mm")</small></div>
+                        <div class="next-stop-collection"><span>COBRAR AHORA</span><strong>@Money(nextDelivery.Balance)</strong><small>@PaymentStatusText(nextDelivery)</small></div>
+                    </div>
+                    <button class="next-stop-start" @onclick="() => OpenAsync(nextDelivery.Id)">▶ Iniciar entrega</button>
+                    <div class="next-stop-actions">@if (MapUrl(nextDelivery.Location) is { } nextMap) { <a href="@nextMap" target="_blank" rel="noopener noreferrer">⌖ Abrir ubicación</a> }<button @onclick="() => OpenAsync(nextDelivery.Id)">Ver datos de contacto</button></div>
+                    @if (_route is not null && _route.Stops.Count > 1) { <details class="route-reorder-tool"><summary>Cambiar orden de la ruta</summary><ol>@foreach (var stop in _route.Stops.OrderBy(x => x.Position)) { <li><b>@stop.Position</b><span>#@stop.OrderNumber · @stop.Customer</span><div><button title="Subir" disabled="@(_savingRoute || stop.Position == 1)" @onclick="() => MoveStopAsync(stop.DeliveryId, -1)">↑</button><button title="Bajar" disabled="@(_savingRoute || stop.Position == _route.Stops.Count)" @onclick="() => MoveStopAsync(stop.DeliveryId, 1)">↓</button></div></li> }</ol></details> }
+                }
+                else
+                {
+                    <div class="next-stop-empty"><strong>Ruta completada</strong><span>No quedan pedidos por entregar.</span></div>
+                }
+            </aside>
+        </section>
+    }
+    <section class="assigned-deliveries">
+        <header class="assigned-deliveries-heading">
+            <div><span>ENTREGAS ASIGNADAS</span><h2>Pedidos de tu ruta</h2></div>
+            <small>@ActiveDeliveryCount por entregar · @CompletedDeliveryCount completada(s)</small>
+        </header>
+        <div class="delivery-list-head" aria-hidden="true">
+            <span>Parada</span><span>Pedido</span><span>Cliente / sucursal</span><span>Unidades</span><span>Fecha y hora</span><span>Cobro / saldo</span><span>Estados</span><span>Acción</span>
+        </div>
+        <div class="delivery-list">
+        @if (ActiveDeliveryCount > 0)
+        {
+            <div class="pending-deliveries-divider"><div><span>◷</span><p><strong>ENTREGAS PENDIENTES</strong><small>Siguiente parada en tu ruta</small></p></div></div>
+        }
+        @{ var completedSectionStarted = false; }
+        @foreach (var item in DisplayItems)
+        {
+            @if (IsCompleted(item) && !completedSectionStarted)
+            {
+                completedSectionStarted = true;
+                <div class="completed-deliveries-divider"><div><span>ENTREGAS COMPLETADAS</span><strong>Historial reciente</strong></div><small>Ya no forman parte de la numeración de tu ruta actual.</small></div>
+            }
+            var routeStop = _route?.Stops.FirstOrDefault(x => x.DeliveryId == item.Id);
+            <article class="card @StatusClass(item.Status)">
+                <button class="card-heading" @onclick="() => OpenAsync(item.Id)">
+                    <span class="stop-label @(IsCompleted(item) ? "completed" : null)">@(IsCompleted(item) ? "Completada" : item.RoutePosition is { } position ? $"Parada {position}" : "Sin parada")</span>
+                    <strong class="delivery-order">#@item.OrderNumber</strong>
+                    <span class="delivery-customer">
+                        @if (routeStop is not null && RouteImage(routeStop) is { } imageUrl)
+                        {
+                            <img src="@imageUrl" alt="Fotografía de @(routeStop.DeliveryPoint ?? item.Customer)" />
+                        }
+                        else
+                        {
+                            <span class="delivery-image-placeholder" aria-hidden="true">⌂</span>
+                        }
+                        <span><strong>@item.Customer</strong><small>@(item.DeliveryPoint ?? item.Address ?? "Sin punto de entrega")</small></span>
+                    </span>
+                    <span class="delivery-units"><strong>@(IsCompleted(item) ? item.DeliveredQuantity : item.PendingQuantity)</strong><small>@(IsCompleted(item) ? "entregadas" : "por entregar")</small></span>
+                    <span class="delivery-date @DeliveryDateClass(item)"><strong>@DeliveryDateLabel(item)</strong><small>@item.ScheduledAtUtc.ToLocalTime().ToString("HH:mm")</small></span>
+                    <span class="delivery-balance"><strong>Saldo @Money(item.Balance)</strong><small>Total @Money(item.Total) · Cobrado @Money(item.Paid)</small></span>
+                    <span class="delivery-states"><span class="delivery-status @StatusClass(item.Status)">@StatusText(item.Status)</span><span class="payment-status @PaymentStatusClass(item)">@PaymentStatusText(item)</span></span>
+                    <span class="delivery-action"><span class="row-action">@(IsCompleted(item) ? "Ver detalle" : item.Status == "InRoute" ? "Continuar entrega" : "Iniciar entrega") <b aria-hidden="true">›</b></span><small>@(item.DeliveryEvidenceCount + item.PaymentEvidenceCount) evidencia(s)</small></span>
+                </button>
+                @if (_detail?.Id == item.Id)
+                {
+                    <div class="detail">
+                        <section class="destination-card">
+                            <div><span>DESTINO</span><strong>@_detail.Customer</strong><small>@(_detail.Address ?? "Sin dirección")</small></div>
+                            <div class="delivery-quick-actions">
+                                @if (MapUrl(_detail.Location) is { } map) { <a class="action-link" href="@map" target="_blank" rel="noopener noreferrer">⌖ Abrir ubicación</a> }
+                                @if (WhatsApp(_detail.ContactPhone) is { } whatsapp) { <a class="whatsapp-link" href="@whatsapp" target="_blank" rel="noopener noreferrer">WhatsApp</a> }
+                            </div>
+                            <p><b>Contacto:</b> @(_detail.ContactName ?? "Sin contacto") @if (!string.IsNullOrWhiteSpace(_detail.ContactPhone)) { <a href="tel:@_detail.ContactPhone">@_detail.ContactPhone</a> }</p>
+                            @if (!string.IsNullOrWhiteSpace(_detail.Notes)) { <p><b>Notas:</b> @_detail.Notes</p> }
+                        </section>
+
+                        <section class="financial-summary">
+                            <header><div><span>COBRO DEL PEDIDO</span><h3>@PaymentStatusText(_detail)</h3></div><span class="payment-status @PaymentStatusClass(_detail)">@PaymentStatusText(_detail)</span></header>
+                            <dl><div><dt>Total</dt><dd>@Money(_detail.Total)</dd></div><div><dt>Cobrado</dt><dd class="paid">@Money(_detail.Paid)</dd></div><div><dt>Saldo pendiente</dt><dd class="pending">@Money(_detail.Balance)</dd></div></dl>
+                            @if (_detail.Payments is { Count: > 0 })
+                            {
+                                <ul class="delivery-payment-history">
+                                    @foreach (var payment in _detail.Payments)
+                                    {
+                                        <li><span><strong>@Money(payment.Amount) · @PaymentMethodText(payment.Method)</strong><small>@payment.PaymentDateUtc.ToLocalTime().ToString("dd/MM/yyyy · HH:mm")</small></span>@if (payment.EvidenceId != Guid.Empty) { <button class="link-button" @onclick="() => ViewPaymentEvidenceAsync(payment.EvidenceId)">Ver comprobante</button> }</li>
+                                    }
+                                </ul>
+                            }
+                        </section>
+
+                        @if (_detail.Status == "Assigned") { <button class="start-route" @onclick="StartAsync">Iniciar ruta</button> }
+                        @if (_detail.Status is "Assigned" or "InRoute" or "Partial")
+                        {
+                            <section class="confirmation-card">
+                                <header><div><span>ENTREGA REAL</span><h2>Confirmar entrega</h2></div><small>Registra cada tipo por separado.</small></header>
+                                <div class="delivery-lines">
+                                    @foreach (var line in _detail.Lines.Where(x => x.PendingQuantity > 0))
+                                    {
+                                        <article>
+                                            <strong>@line.Product</strong><small>@line.PendingQuantity pendiente · @line.PendingSaleQuantity venta · @line.PendingReplacementQuantity rep. · @line.PendingTastingQuantity deg.</small>
+                                            <div class="line-quantities">
+                                                <label>Venta<input type="number" min="0" max="@line.PendingSaleQuantity" value="@Complete(line.Id).Sale" @onchange='e => SetComplete(line.Id, "Sale", e.Value)' /></label>
+                                                <label>Reposición<input type="number" min="0" max="@line.PendingReplacementQuantity" value="@Complete(line.Id).Replacement" @onchange='e => SetComplete(line.Id, "Replacement", e.Value)' /></label>
+                                                <label>Degustación<input type="number" min="0" max="@line.PendingTastingQuantity" value="@Complete(line.Id).Tasting" @onchange='e => SetComplete(line.Id, "Tasting", e.Value)' /></label>
+                                            </div>
+                                        </article>
+                                    }
+                                </div>
+                                <label>Recibió<input @bind="_receiver" placeholder="Nombre de quien recibe" /></label>
+                                <label class="file-field">Evidencia de entrega <small>JPG, PNG o WebP; máximo 10 MB</small><InputFile OnChange="SelectEvidence" accept="image/jpeg,image/png,image/webp" /></label>
+
+                                <div class="collection-card">
+                                    <label class="payment-toggle"><input type="checkbox" @bind="_receivedPayment" /> ¿Recibió pago durante la entrega?</label>
+                                    @if (_receivedPayment)
+                                    {
+                                        <p>Saldo del pedido: <b>@Money(_detail.Balance)</b></p>
+                                        <div class="payment-fields"><label>Monto *<input type="number" min="0.01" step="0.01" @bind="_paymentAmount" /></label><label>Método *<select @bind="_paymentMethod"><option value="Qr">QR</option><option value="Cash">Efectivo</option></select></label></div>
+                                        <label class="file-field">Respaldo del pago *<InputFile OnChange="SelectPaymentEvidence" accept="image/jpeg,image/png,image/webp" /></label>
+                                        <label>Observación<input @bind="_paymentNotes" /></label>
+                                    }
+                                </div>
+                                <button class="confirm-delivery" @onclick="CompleteAsync" disabled="@_saving">@(_saving ? "Confirmando…" : "Confirmar entrega")</button>
+                            </section>
+
+                            <section class="incident-card">
+                                <h3>¿No se pudo completar?</h3>
+                                <div><label>Tipo<select @bind="_incidentType"><option>Local cerrado</option><option>Cliente ausente</option><option>Dirección incorrecta</option><option>Rechazo</option><option>Producto dañado</option><option>Entrega parcial</option><option>Otro</option></select></label><label>Observación<input @bind="_incidentNotes" /></label></div>
+                                <label class="file-field">Evidencia de incidencia <small>Opcional</small><InputFile OnChange="SelectIncidentEvidence" accept="image/jpeg,image/png,image/webp" /></label>
+                                <button class="report-incident" @onclick="FailAsync" disabled="@_saving">Reportar incidencia</button>
+                            </section>
+                        }
+
+                        @if (_detail.Evidence.Count > 0)
+                        {
+                            <section class="evidence-history"><h3>Evidencias</h3><ul>@foreach (var evidence in _detail.Evidence) { <li><button class="link-button" @onclick="() => ViewEvidenceAsync(evidence.Id)">@evidence.FileName</button><small>@evidence.UploadedAtUtc.ToLocalTime().ToString("g")</small></li> }</ul></section>
+                        }
+                        @if (_detail.History.Count > 0)
+                        {
+                            <section class="delivery-history"><h3>Historial</h3><ul>@foreach (var history in _detail.History) { <li><time>@history.AtUtc.ToLocalTime().ToString("d MMM, t")</time><span><b>@StatusText(history.Status)</b> · @history.Reason</span></li> }</ul></section>
+                        }
+                    </div>
+                }
+            </article>
+        }
+        </div>
+    </section>
+}
+
+<details class="card inventory-output">
+    <summary>Registrar una salida no comercial</summary>
+    <p>Solo para productos que salen fuera de una entrega: muestras, degustaciones, daños o donaciones.</p>
+    <div class="output-grid">
+        <label>Producto<select @bind="_outputProductId"><option value="">Selecciona un producto</option>@foreach (var product in _stock) { <option value="@product.ProductId">@product.Product · disponible: @product.Available</option> }</select></label>
+        <label>Cantidad<input type="number" min="1" step="1" @bind="_outputQuantity" /></label>
+        <label>Tipo<select @bind="_outputKind"><option value="Tasting">Degustación</option><option value="Sample">Muestra</option><option value="InternalConsumption">Consumo interno</option><option value="Waste">Descarte</option><option value="Expiration">Vencimiento</option><option value="Damage">Daño</option><option value="Replacement">Reposición</option><option value="Donation">Donación</option></select></label>
+        <label>Motivo<input @bind="_outputReason" /></label><button @onclick="RegisterOutputAsync" disabled="@_savingOutput">@(_savingOutput ? "Registrando…" : "Registrar salida")</button>
+    </div>
+</details>
+
+@code {
+    private IReadOnlyList<DeliveryItem>? _items;
+    private IEnumerable<DeliveryItem> DisplayItems => (_items ?? []).OrderBy(IsCompleted).ThenBy(x => x.RoutePosition ?? int.MaxValue).ThenByDescending(x => x.ScheduledAtUtc);
+    private DeliveryItem? NextDelivery => DisplayItems.FirstOrDefault(x => !IsCompleted(x));
+    private int ActiveDeliveryCount => _items?.Count(x => !IsCompleted(x)) ?? 0;
+    private int CompletedDeliveryCount => _items?.Count(IsCompleted) ?? 0;
+    private IReadOnlyList<DeliveryItem> MapDeliveries => (_items ?? [])
+        .Where(x => !IsCompleted(x) && !string.IsNullOrWhiteSpace(x.Location))
+        .OrderBy(x => x.RoutePosition ?? int.MaxValue)
+        .ThenBy(x => x.ScheduledAtUtc)
+        .ToList();
+    private static bool IsCompleted(DeliveryItem item) => item.Status == "Delivered";
+    private static string DeliveryDateLabel(DeliveryItem item)
+    {
+        var date = item.ScheduledAtUtc.ToLocalTime().Date;
+        var today = DateTime.Today;
+        if (date == today) return "Hoy";
+        if (date == today.AddDays(1)) return "Mañana";
+        if (!IsCompleted(item) && date < today) return $"Atrasada {(today - date).Days} d";
+        return date.ToString("dd MMM");
+    }
+    private static string DeliveryDateClass(DeliveryItem item) => !IsCompleted(item) && item.ScheduledAtUtc.ToLocalTime().Date < DateTime.Today ? "late" : string.Empty;
+    private IReadOnlyList<StockItem> _stock = [];
+    private DeliveryDetail? _detail;
+    private DeliveryRouteDetail? _route;
+    private Dictionary<Guid, string> _pointImages = [];
+    private readonly Dictionary<Guid, CompletionInput> _complete = [];
+    private string _receiver = string.Empty, _incidentType = "Local cerrado", _incidentNotes = string.Empty;
+    private IBrowserFile? _evidence, _incidentEvidence, _paymentEvidence;
+    private bool _receivedPayment;
+    private decimal _paymentAmount;
+    private string _paymentMethod = "Qr", _paymentNotes = string.Empty;
+    private string? _message;
+    private bool _isError, _saving, _savingOutput, _savingRoute;
+    private Guid _userId;
+    private Guid _outputProductId;
+    private int _outputQuantity = 1;
+    private string _outputKind = "Tasting", _outputReason = string.Empty;
+    private Microsoft.JSInterop.IJSObjectReference? _mapModule;
+    private Microsoft.JSInterop.DotNetObjectReference<MyDeliveries>? _mapReference;
+
+    protected override async Task OnInitializedAsync() { var state = await Auth.GetAuthenticationStateAsync(); _userId = Guid.Parse(state.User.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)!.Value); await ReloadAsync(); }
+    private async Task ReloadAsync() { _items = await Service.ListAsync(_userId); _stock = await InventoryService.GetStockAsync(); _route = await Service.PrepareCurrentRouteAsync(_userId); await LoadPointImagesAsync(); }
+    private async Task LoadPointImagesAsync()
+    {
+        var ids = (_items ?? []).Where(x => x.DeliveryPointId is not null).Select(x => x.DeliveryPointId!.Value).Distinct().ToList();
+        var images = await Task.WhenAll(ids.Select(async id =>
+        {
+            try { return (Id: id, Url: await PointImages.GetUrlAsync(id)); }
+            catch { return (Id: id, Url: (string?)null); }
+        }));
+        _pointImages = images.Where(x => !string.IsNullOrWhiteSpace(x.Url)).ToDictionary(x => x.Id, x => x.Url!);
+    }
+    private string? RouteImage(DeliveryRouteStopItem stop) => stop.DeliveryPointId is { } id && _pointImages.TryGetValue(id, out var url) ? url : null;
+    private string? ItemImage(DeliveryItem item) => item.DeliveryPointId is { } id && _pointImages.TryGetValue(id, out var url) ? url : null;
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (MapDeliveries.Count == 0) return;
+        try
+        {
+            _mapModule ??= await JS.InvokeAsync<Microsoft.JSInterop.IJSObjectReference>("import", "./js/delivery-route-map.js?v=6");
+            _mapReference ??= Microsoft.JSInterop.DotNetObjectReference.Create(this);
+            await _mapModule.InvokeVoidAsync("waitForDeliveryMapStyles");
+            await _mapModule.InvokeVoidAsync("renderDeliveryRouteMap", "my-deliveries-route-map", BuildMapPoints(), _mapReference);
+            await _mapModule.InvokeVoidAsync("refreshDeliveryRouteMapLayout", "my-deliveries-route-map");
+        }
+        catch (Microsoft.JSInterop.JSDisconnectedException) { }
+    }
+    private async Task OpenAsync(Guid id)
+    {
+        _detail = await Service.GetAsync(id, _userId);
+        _complete.Clear();
+        if (_detail is not null)
+        {
+            foreach (var line in _detail.Lines) _complete[line.Id] = new(line.PendingSaleQuantity, line.PendingReplacementQuantity, line.PendingTastingQuantity);
+            _receiver = _detail.ContactName ?? string.Empty;
+            _receivedPayment = false; _paymentAmount = 0; _paymentMethod = "Qr"; _paymentNotes = string.Empty; _evidence = null; _paymentEvidence = null; _incidentEvidence = null;
+        }
+    }
+    private CompletionInput Complete(Guid id) => _complete.TryGetValue(id, out var current) ? current : new(0, 0, 0);
+    private async Task MoveStopAsync(Guid deliveryId, int direction)
+    {
+        if (_route is null) return;
+        var ordered = _route.Stops.OrderBy(x => x.Position).Select(x => x.DeliveryId).ToList();
+        var index = ordered.IndexOf(deliveryId); var next = index + direction;
+        if (index < 0 || next < 0 || next >= ordered.Count) return;
+        (ordered[index], ordered[next]) = (ordered[next], ordered[index]);
+        _savingRoute = true;
+        var result = await Service.ReorderRouteAsync(new(_route.Id, _route.Version, ordered), _userId);
+        _savingRoute = false;
+        SetMessage(result.Succeeded ? "Orden de la ruta actualizado." : string.Join(" ", result.Errors), !result.Succeeded);
+        await ReloadAsync();
+    }
+    [Microsoft.JSInterop.JSInvokable]
+    public async Task FocusOrderFromMap(string deliveryId) { if (Guid.TryParse(deliveryId, out var id)) await OpenAsync(id); }
+    [Microsoft.JSInterop.JSInvokable]
+    public Task ToggleStopFromMap(string deliveryId) => Task.CompletedTask;
+    private IReadOnlyList<RouteMapPoint> BuildMapPoints() => MapDeliveries.Select((x, index) => new RouteMapPoint(x.Id.ToString(), x.OrderNumber, x.Customer, x.DeliveryPoint, x.Address, x.Reference, x.Location, x.Latitude, x.Longitude, x.PendingQuantity, x.Balance, MapUrl(x.Location), ItemImage(x), x.RoutePosition ?? index + 1)).ToList();
+    private string RouteGoogleMapsUrl
+    {
+        get
+        {
+            var points = MapDeliveries.Select(MapPoint).Where(x => !string.IsNullOrWhiteSpace(x)).Cast<string>().ToList();
+            if (points.Count == 0) return "https://www.google.com/maps";
+            if (points.Count == 1) return $"https://www.google.com/maps/search/?api=1&query={Uri.EscapeDataString(points[0])}";
+            var waypoints = points.Skip(1).Take(points.Count - 2).Select(Uri.EscapeDataString).ToList();
+            var url = $"https://www.google.com/maps/dir/?api=1&origin={Uri.EscapeDataString(points[0])}&destination={Uri.EscapeDataString(points[^1])}";
+            return waypoints.Count == 0 ? url : $"{url}&waypoints={string.Join("|", waypoints)}";
+        }
+    }
+    private static string? MapPoint(DeliveryRouteStopItem stop)
+    {
+        if (stop.Latitude is { } latitude && stop.Longitude is { } longitude) return $"{latitude.ToString(System.Globalization.CultureInfo.InvariantCulture)},{longitude.ToString(System.Globalization.CultureInfo.InvariantCulture)}";
+        return string.IsNullOrWhiteSpace(stop.Address) ? null : $"{stop.Address}, Santa Cruz de la Sierra, Bolivia";
+    }
+    private static string? MapPoint(DeliveryItem item) => item.Latitude is { } latitude && item.Longitude is { } longitude
+        ? $"{latitude.ToString(System.Globalization.CultureInfo.InvariantCulture)},{longitude.ToString(System.Globalization.CultureInfo.InvariantCulture)}"
+        : !string.IsNullOrWhiteSpace(item.Location) ? item.Location
+        : string.IsNullOrWhiteSpace(item.Address) ? null : $"{item.Address}, Santa Cruz de la Sierra, Bolivia";
+    private void SetComplete(Guid id, string kind, object? value)
+    {
+        var current = Complete(id); var quantity = int.TryParse(value?.ToString(), out var parsed) ? Math.Max(0, parsed) : 0;
+        _complete[id] = kind switch { "Sale" => current with { Sale = quantity }, "Replacement" => current with { Replacement = quantity }, "Tasting" => current with { Tasting = quantity }, _ => current };
+    }
+    private void SelectEvidence(InputFileChangeEventArgs args) => _evidence = args.File;
+    private void SelectIncidentEvidence(InputFileChangeEventArgs args) => _incidentEvidence = args.File;
+    private void SelectPaymentEvidence(InputFileChangeEventArgs args) => _paymentEvidence = args.File;
+    private async Task StartAsync() { if (_detail is null) return; await FinishAsync(await Service.StartAsync(_detail.Id, _detail.Version, _userId)); }
+    private async Task FailAsync()
+    {
+        if (_detail is null) return;
+        _saving = true;
+        if (_incidentEvidence is not null && !await UploadEvidenceAsync(_incidentEvidence)) { _saving = false; return; }
+        var reason = string.IsNullOrWhiteSpace(_incidentNotes) ? _incidentType : $"{_incidentType}: {_incidentNotes.Trim()}";
+        var result = await Service.FailAsync(_detail.Id, _detail.Version, reason, _userId);
+        _saving = false;
+        await FinishAsync(result);
+    }
+    private async Task CompleteAsync()
+    {
+        if (_detail is null) return;
+        if (string.IsNullOrWhiteSpace(_receiver)) { SetMessage("Indica quién recibió el pedido.", true); return; }
+        if (_receivedPayment && _paymentAmount <= 0) { SetMessage("Indica el monto recibido.", true); return; }
+        if (_receivedPayment && _paymentEvidence is null) { SetMessage("Debes adjuntar un respaldo para registrar este pago.", true); return; }
+        _saving = true;
+        if (_evidence is not null && !await UploadEvidenceAsync(_evidence)) { _saving = false; return; }
+        var lines = _complete.Select(x => new CompleteLine(x.Key, x.Value.Sale, x.Value.Replacement, x.Value.Tasting)).ToList();
+        var result = await Service.CompleteAsync(new(_detail.Id, _detail.Version, Guid.NewGuid().ToString("N"), _receiver, lines, 0, null, null, false), _userId);
+        if (!result.Succeeded) { _saving = false; await FinishAsync(result); return; }
+        if (_receivedPayment)
+        {
+            var receivable = (await Service.ReceivablesAsync()).FirstOrDefault(x => x.OrderId == _detail.OrderId);
+            if (receivable is null) { _saving = false; SetMessage("La entrega fue confirmada, pero todavía no existe un saldo cobrable para registrar el pago.", true); await ReloadAsync(); return; }
+            await using var stream = _paymentEvidence!.OpenReadStream(10 * 1024 * 1024);
+            var payment = await Service.RegisterPaymentAsync(new(_detail.OrderId, receivable.Version, Guid.NewGuid().ToString("N"), _paymentAmount, _paymentMethod, null, true, false, DateTimeOffset.UtcNow, _paymentNotes, stream, _paymentEvidence.Name, _paymentEvidence.ContentType, _paymentEvidence.Size, _detail.Id), _userId);
+            if (!payment.Succeeded) { _saving = false; SetMessage($"Entrega confirmada, pero no se pudo registrar el pago: {string.Join(" ", payment.Errors)}", true); await ReloadAsync(); return; }
+        }
+        _saving = false;
+        SetMessage(_receivedPayment ? "Entrega y cobro registrados correctamente." : "Entrega confirmada correctamente.", false);
+        await OpenAsync(_detail.Id);
+        await ReloadAsync();
+    }
+    private async Task<bool> UploadEvidenceAsync(IBrowserFile file)
+    {
+        if (_detail is null) return false;
+        await using var stream = file.OpenReadStream(10 * 1024 * 1024);
+        var uploaded = await EvidenceService.UploadAsync(new(_detail.Id, stream, file.Name, file.ContentType, file.Size), _userId);
+        if (uploaded.Succeeded) return true;
+        SetMessage(string.Join(" ", uploaded.Errors), true);
+        return false;
+    }
+    private async Task RegisterOutputAsync()
+    {
+        if (_outputProductId == Guid.Empty) { SetMessage("Selecciona el producto que salió.", true); return; }
+        if (_outputQuantity < 1) { SetMessage("La cantidad debe ser mayor que cero.", true); return; }
+        if (string.IsNullOrWhiteSpace(_outputReason)) { SetMessage("Indica el motivo de la salida.", true); return; }
+        _savingOutput = true;
+        var result = await InventoryService.RegisterOutputAsync(new(_outputProductId, _outputQuantity, _outputKind, _outputReason), _userId);
+        _savingOutput = false;
+        SetMessage(result.Succeeded ? "Salida no comercial registrada y descontada por lote." : string.Join(" ", result.Errors), !result.Succeeded);
+        if (result.Succeeded) { _outputQuantity = 1; _outputReason = string.Empty; await ReloadAsync(); }
+    }
+    private async Task FinishAsync(DeliveryResult result)
+    {
+        SetMessage(result.Succeeded ? "Operación registrada correctamente." : string.Join(" ", result.Errors), !result.Succeeded);
+        if (_detail is not null) await OpenAsync(_detail.Id);
+        await ReloadAsync();
+    }
+    private async Task ViewEvidenceAsync(Guid id) { var result = await EvidenceService.GetSignedUrlAsync(id, _userId); if (result.Succeeded && result.Url is not null) Navigation.NavigateTo(result.Url, true); else SetMessage(string.Join(" ", result.Errors), true); }
+    private async Task ViewPaymentEvidenceAsync(Guid id) { var result = await Service.GetPaymentEvidenceUrlAsync(id, _userId); if (result.Succeeded && result.Url is not null) Navigation.NavigateTo(result.Url, true); else SetMessage(string.Join(" ", result.Errors), true); }
+    private static string? MapUrl(string? value) => Uri.TryCreate(value, UriKind.Absolute, out var uri) && uri.Scheme is "http" or "https" ? uri.AbsoluteUri : null;
+    private static string? WhatsApp(string? phone) { if (string.IsNullOrWhiteSpace(phone)) return null; var digits = new string(phone.Where(char.IsDigit).ToArray()); if (digits.Length == 8) digits = "591" + digits; return digits.Length < 8 ? null : $"https://wa.me/{digits}"; }
+    private static string Money(decimal value) => $"Bs {value:N2}";
+    private static string PaymentStatusText(DeliveryItem item) => item.Balance <= 0 ? $"Pagado{PaymentMethodSuffix(item.PaymentMethod)}" : item.Paid > 0 ? $"Parcial{PaymentMethodSuffix(item.PaymentMethod)}" : "Sin pago";
+    private static string PaymentStatusClass(DeliveryItem item) => item.Balance <= 0 ? "paid" : item.Paid > 0 ? "partial" : "pending";
+    private static string PaymentStatusText(DeliveryDetail item) => item.Balance <= 0 ? $"Pagado{PaymentMethodSuffix(item.Payments?.FirstOrDefault()?.Method)}" : item.Paid > 0 ? $"Parcial{PaymentMethodSuffix(item.Payments?.FirstOrDefault()?.Method)}" : "Sin pago";
+    private static string PaymentStatusClass(DeliveryDetail item) => item.Balance <= 0 ? "paid" : item.Paid > 0 ? "partial" : "pending";
+    private static string PaymentMethodText(string method) => method switch { "Qr" => "QR", "Cash" => "Efectivo", "Transfer" => "Transferencia", _ => method };
+    private static string PaymentMethodSuffix(string? method) => string.IsNullOrWhiteSpace(method) ? string.Empty : $" · {PaymentMethodText(method)}";
+    private static string StatusText(string status) => status switch { "Scheduled" => "Pendiente de salida", "Assigned" => "Pendiente de salida", "InRoute" => "En reparto", "Delivered" => "Entregado", "Partial" => "Entrega parcial", "Failed" => "Incidencia", _ => status };
+    private static string StatusClass(string status) => status switch { "InRoute" => "in-route", "Delivered" => "delivered", "Partial" or "Failed" => "incident", _ => "pending" };
+    private void SetMessage(string message, bool error) { _message = message; _isError = error; }
+    public async ValueTask DisposeAsync()
+    {
+        _mapReference?.Dispose();
+        if (_mapModule is null) return;
+        try { await _mapModule.InvokeVoidAsync("disposeDeliveryRouteMap", "my-deliveries-route-map"); await _mapModule.DisposeAsync(); }
+        catch (Microsoft.JSInterop.JSDisconnectedException) { }
+    }
+    private sealed record CompletionInput(int Sale, int Replacement, int Tasting);
+    private sealed record RouteMapPoint(string OrderId, long OrderNumber, string Customer, string? DeliveryPoint, string? Address, string? Reference, string? Location, double? Latitude, double? Longitude, int Physical, decimal Balance, string? MapUrl, string? ImageUrl, int SelectedPosition) { public bool CanSelect => false; }
+}

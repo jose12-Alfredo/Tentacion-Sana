@@ -1,0 +1,20 @@
+@inherits LayoutComponentBase
+
+<div class="admin-shell">
+    <aside class="admin-sidebar">
+        <a class="admin-brand" href="/app" aria-label="Panel de Tentación Sana"><img src="/images/brand/logo-oficial-tentacion-sana.png" alt="Tentación Sana" /></a>
+        <nav aria-label="Administración">
+            <NavLink href="/app" Match="NavLinkMatch.All">Resumen</NavLink>
+            <AuthorizeView Policy="@AppPolicies.ManageSales"><Authorized><NavLink href="/app/productos">Productos</NavLink><NavLink href="/app/solicitudes">Solicitudes</NavLink><NavLink href="/app/clientes">Clientes</NavLink><NavLink href="/app/pedidos">Pedidos</NavLink><NavLink href="/app/entregas">Entregas</NavLink></Authorized></AuthorizeView>
+            <AuthorizeView Policy="@AppPolicies.ManageProduction"><Authorized><NavLink href="/app/inventario">Inventario</NavLink><NavLink href="/app/produccion">Producción</NavLink></Authorized></AuthorizeView>
+            <AuthorizeView Policy="@AppPolicies.ManageDeliveries"><Authorized><NavLink href="/app/mis-entregas">Mis entregas</NavLink></Authorized></AuthorizeView>
+            <AuthorizeView Policy="@AppPolicies.ManageFinance"><Authorized><NavLink href="/app/cuentas-por-cobrar">Cuentas por cobrar</NavLink><NavLink href="/app/arqueo">Caja y movimientos</NavLink><NavLink href="/app/cuentas-contables">Cuentas contables</NavLink><NavLink href="/app/estado-resultados">Estado de resultados</NavLink></Authorized></AuthorizeView>
+            <AuthorizeView Policy="@AppPolicies.Administration"><Authorized><NavLink href="/app/usuarios">Usuarios y permisos</NavLink></Authorized></AuthorizeView>
+        </nav>
+        <a class="public-link" href="/catalogo" target="_blank">Ver catálogo público ↗</a>
+        <form method="post" action="/account/logout"><AntiforgeryToken /><button type="submit">Cerrar sesión</button></form>
+    </aside>
+    <main class="admin-content">@Body</main>
+</div>
+
+<div id="blazor-error-ui" data-nosnippet>Ocurrió un error. <a href="." class="reload">Recargar</a><span class="dismiss">×</span></div>

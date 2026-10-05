@@ -1,0 +1,312 @@
+@page "/app/pedidos/{OrderId:guid}"
+@layout AdminLayout
+@rendermode InteractiveServer
+@attribute [Authorize(Policy = AppPolicies.ManageSales)]
+@inject IOrderManagementService Service
+@inject IDeliveryService DeliveryService
+@inject IDeliveryPointImageService PointImageService
+@inject AuthenticationStateProvider AuthenticationStateProvider
+
+<PageTitle>Pedido | Tentación Sana</PageTitle>
+
+@if (_order is null)
+{
+    <div class="detail-loading">Cargando pedido…</div>
+}
+else
+{
+    <a class="back-link" href="/app/pedidos">← Volver a pedidos</a>
+    <header class="detail-heading">
+        <div>
+            <p>@(_order.Status is "Delivered" or "Cancelled" ? "Gestión del pedido" : "Pedido pendiente")</p>
+            <h1>Pedido #@_order.Number</h1>
+            <span><strong>@_order.Customer</strong>@if (_order.DeliveryPoint is not null) { <text> · @_order.DeliveryPoint</text> }</span>
+        </div>
+    </header>
+
+    @if (_errors.Count > 0)
+    {
+        <div class="error-summary" role="alert">@foreach (var error in _errors) { <p>@error</p> }</div>
+    }
+    @if (_message is not null) { <p class="status-message" role="status">@_message</p> }
+
+    <section class="order-facts" aria-label="Resumen rápido del pedido">
+        <div><small>Fecha prometida</small><strong>@(_order.PromisedAtUtc?.ToLocalTime().ToString("dd/MM/yyyy") ?? "Sin definir")</strong></div>
+        <div><small>Venta</small><strong>@SoldQuantity uds</strong></div>
+        <div><small>Reposición</small><strong>@ReplacementQuantity uds</strong></div>
+        <div><small>Degustación</small><strong>@TastingQuantity uds</strong></div>
+        <div class="physical-fact"><small>A entregar</small><strong>@TotalQuantity uds</strong></div>
+        <div class="money-fact"><small>A cobrar</small><strong>Bs @OrderTotal.ToString("N2")</strong></div>
+    </section>
+
+    <div class="detail-grid">
+        <main>
+            @if (IsDraft)
+            {
+                <section class="detail-card commercial-card">
+                    <header><div><small>Datos comerciales</small><h2>Cliente y sucursal</h2></div><span class="draft-note">Se guarda como pendiente</span></header>
+                    <div class="form-grid commercial-fields">
+                        <label>Cliente <span class="required">*</span>
+                            <select @bind="_form.CustomerId" @bind:after="CustomerChanged"><option value="">Selecciona un cliente</option>@foreach (var customer in _customers) { <option value="@customer.Id">@customer.Name</option> }</select>
+                        </label>
+                        <label>Sucursal / Punto
+                            <select @bind="_form.DeliveryPointId" @bind:after="PointChanged"><option value="">Selecciona un punto</option>@foreach (var point in SelectedCustomer?.DeliveryPoints ?? []) { <option value="@point.Id">@point.Name</option> }</select>
+                        </label>
+                    </div>
+
+                    @if (SelectedPoint is not null)
+                    {
+                        <section class="point-summary" aria-label="Información del punto seleccionado">
+                            <div class="point-visual">
+                                @if (!string.IsNullOrWhiteSpace(_pointImageUrl)) { <img src="@_pointImageUrl" alt="Fotografía de @SelectedPoint.Name" /> }
+                                else { <span>@Initials(SelectedCustomer?.Name ?? _order.Customer)</span> }
+                            </div>
+                            <div class="point-location">
+                                <small>Punto seleccionado</small><h3>@(SelectedCustomer?.Name ?? _order.Customer) — @SelectedPoint.Name</h3><p>@SelectedPoint.Address</p>
+                                @if (!string.IsNullOrWhiteSpace(SelectedPoint.Reference)) { <span>@SelectedPoint.Reference</span> }
+                                @if (!string.IsNullOrWhiteSpace(SelectedPoint.Location)) { <a class="location-link" href="@SelectedPoint.Location" target="_blank" rel="noopener noreferrer">⌖ Abrir ubicación</a> }
+                            </div>
+                            <div class="point-person">
+                                <small>Contacto principal</small><strong>@(SelectedContact?.Name ?? "Sin asignar")</strong>
+                                @if (!string.IsNullOrWhiteSpace(SelectedContact?.Phone)) { <span>@SelectedContact.Phone</span><a class="whatsapp-link" href="@WhatsApp(SelectedContact.Phone!)" target="_blank" rel="noopener noreferrer">◉ WhatsApp</a> }
+                            </div>
+                            <div class="point-person">
+                                <small>Responsable de pago</small><strong>@(SelectedPayer?.Name ?? "Sin asignar")</strong>
+                                @if (!string.IsNullOrWhiteSpace(SelectedPayer?.Phone)) { <span>@SelectedPayer.Phone</span> }
+                            </div>
+                        </section>
+                    }
+                    else { <p class="point-empty">Selecciona una sucursal para cargar dirección, contacto y responsable de pago.</p> }
+
+                    <div class="form-grid schedule-fields">
+                        <label>Fecha prometida<input type="datetime-local" @bind="_form.PromisedLocal" /><small>Obligatoria al confirmar.</small></label>
+                        <label>Observación general<textarea @bind="_form.Notes" placeholder="Reposición, consignación u otra indicación importante"></textarea></label>
+                    </div>
+                    <div class="override-grid">
+                        <details class="override-selector"><summary>Usar otro contacto</summary><label>Contacto para este pedido<select @bind="_form.ContactId"><option value="">Sin asignar</option>@foreach (var contact in SelectedCustomer?.Contacts ?? []) { <option value="@contact.Id">@contact.Name@(contact.Phone is null ? "" : $" · {contact.Phone}")</option> }</select></label></details>
+                        <details class="override-selector"><summary>Usar otro responsable</summary><label>Responsable de pago para este pedido<select @bind="_form.PayerId"><option value="">Sin asignar</option>@foreach (var payer in SelectedCustomer?.Payers ?? []) { <option value="@payer.Id">@payer.Name@(payer.Phone is null ? "" : $" · {payer.Phone}")</option> }</select></label></details>
+                    </div>
+                </section>
+            }
+
+            <section class="detail-card products-card">
+                <header><div><small>Detalle de venta</small><h2>Productos</h2></div>@if (IsDraft) { <span class="add-product-hint">Añade cada producto antes de guardar</span> }<strong class="products-total">Bs @OrderTotal.ToString("N2")</strong></header>
+                @if (_order.Lines.Count == 0)
+                {
+                    <p class="empty-products">Añade al menos un producto. Reposición y degustación salen físicamente, pero solo la venta se cobra.</p>
+                }
+                else
+                {
+                    <div class="product-table"><table><thead><tr><th>Producto</th><th>Venta</th><th>Reposición</th><th>Degustación</th><th>Total físico</th><th>Precio venta</th><th>Subtotal</th>@if (IsDraft) { <th><span class="sr-only">Acciones</span></th> }</tr></thead><tbody>
+                        @foreach (var line in _order.Lines)
+                        {
+                            <tr><td><strong>@line.Product</strong><small>Estándar: Bs @line.StandardUnitPrice.ToString("N2")</small>@if (line.UnitDiscount > 0) { <small class="line-discount">Descuento: Bs @line.UnitDiscount.ToString("N2") · @line.DiscountReason</small> }@if (line.ReplacementQuantity > 0) { <small>Reposición: @line.ReplacementReason @line.ReplacementNotes</small> }@if (line.TastingQuantity > 0) { <small>Degustación: @line.TastingReason @line.TastingNotes</small> }</td><td>@line.SaleQuantity</td><td>@line.ReplacementQuantity</td><td>@line.TastingQuantity</td><td><strong>@line.Quantity</strong></td><td>Bs @line.SoldUnitPrice.ToString("N2")</td><td><strong>Bs @((line.SaleQuantity * line.SoldUnitPrice).ToString("N2"))</strong></td>@if (IsDraft) { <td><button class="text-button danger" @onclick="() => RemoveAsync(line.Id)">Quitar</button></td> }</tr>
+                        }
+                    </tbody></table></div>
+                }
+
+                @if (IsDraft)
+                {
+                    <section class="add-line" aria-label="Añadir producto">
+                        <header><div><small>Nueva línea</small><h3>Añadir producto</h3></div></header>
+                        <div class="line-form-grid">
+                            <label class="product-select">Producto<select @bind="_line.ProductId" @bind:after="ProductChanged"><option value="">Selecciona un producto</option>@foreach (var product in _products) { <option value="@product.Id">@product.Name · Bs @product.CurrentPrice.ToString("N2")</option> }</select></label>
+                            <label>Para venta<input type="number" min="0" @bind="_line.SaleQuantity" /></label>
+                            <label>Reposición<input type="number" min="0" @bind="_line.ReplacementQuantity" /></label>
+                            <label>Degustación<input type="number" min="0" @bind="_line.TastingQuantity" /></label>
+                            <div class="price-reference"><small>Precio estándar</small><strong>Bs @StandardPrice.ToString("N2")</strong></div>
+                            <label>Precio vendido<input type="number" min="0" step="0.01" @bind="_line.SoldPrice" /></label>
+                            <div class="line-total"><small>Total a entregar</small><strong>@LinePhysicalTotal unidades</strong><span>Subtotal: Bs @LineSubtotal.ToString("N2")</span></div>
+                        </div>
+                        @if (_line.ReplacementQuantity > 0 || _line.TastingQuantity > 0 || _line.SoldPrice < StandardPrice)
+                        {
+                            <div class="line-conditions">
+                                @if (_line.ReplacementQuantity > 0) { <label>Motivo de reposición <span class="required">*</span><select @bind="_line.ReplacementReason"><option value="">Selecciona</option>@foreach (var reason in ReplacementReasons) { <option value="@reason">@reason</option> }</select></label><label>Observación de reposición<input @bind="_line.ReplacementNotes" placeholder="Opcional" /></label> }
+                                @if (_line.TastingQuantity > 0) { <label>Motivo / destino de degustación <span class="required">*</span><select @bind="_line.TastingReason"><option value="">Selecciona</option>@foreach (var reason in TastingReasons) { <option value="@reason">@reason</option> }</select></label><label>Observación de degustación<input @bind="_line.TastingNotes" placeholder="Opcional" /></label> }
+                                @if (_line.SoldPrice < StandardPrice) { <label class="discount-reason"><small>Precio menor al estándar</small>Motivo del descuento <span class="required">*</span><input @bind="_line.DiscountReason" /></label> }
+                            </div>
+                        }
+                        <footer><button @onclick="AddAsync" disabled="@_saving">@(_saving ? "Guardando…" : "+ Añadir producto")</button></footer>
+                    </section>
+                }
+
+                <section class="order-summary" aria-label="Resumen del pedido"><header><h3>Resumen del pedido</h3><span>Actualizado automáticamente</span></header><dl><div><dt>Unidades para venta</dt><dd>@SoldQuantity</dd></div><div><dt>Reposiciones</dt><dd>@ReplacementQuantity</dd></div><div><dt>Degustaciones</dt><dd>@TastingQuantity</dd></div><div class="summary-emphasis"><dt>Total a entregar</dt><dd>@TotalQuantity</dd></div><div><dt>Subtotal</dt><dd>Bs @StandardSubtotal.ToString("N2")</dd></div><div><dt>Descuento</dt><dd>Bs @DiscountTotal.ToString("N2")</dd></div><div class="summary-total"><dt>Total a cobrar</dt><dd>Bs @OrderTotal.ToString("N2")</dd></div></dl></section>
+            </section>
+
+            @if (IsDraft)
+            {
+                <section class="detail-card action-card"><div><small>Siguiente paso</small><h2>Guardar o confirmar el pedido</h2><p>Guardar mantiene el pedido pendiente y también añade el producto escrito arriba. Confirmar crea la reserva y calcula los insumos necesarios.</p></div><div class="action-buttons"><button class="secondary-action" @onclick="SaveAsync" disabled="@_saving">@(_saving ? "Guardando…" : "Guardar pedido")</button><button class="primary-action" @onclick="ConfirmAsync" disabled="@(!CanConfirm || _saving)">✓ Confirmar pedido</button></div></section>
+                <AuthorizeView Policy="@AppPolicies.Administration"><Authorized>
+                    <details class="detail-card historical-order">
+                        <summary>Registrar pedido ya realizado</summary>
+                        <p>Úsalo solo para una operación histórica: registra la entrega, descuenta el inventario, crea la venta y genera la cuenta por cobrar cuando corresponda.</p>
+                        <div class="form-grid">
+                            <label>Fecha y hora de entrega <span class="required">*</span><input type="datetime-local" @bind="_completedLocal" /></label>
+                            <label>Persona receptora <span class="required">*</span><input @bind="_historicalReceiver" placeholder="Nombre de quien recibió" /></label>
+                        </div>
+                        <button class="historical-action" @onclick="RegisterCompletedOrderAsync" disabled="@(!CanRegisterCompletedOrder)">Registrar pedido ya realizado</button>
+                    </details>
+                </Authorized></AuthorizeView>
+            }
+            else
+            {
+                <section class="detail-card reservation-card"><header><div><small>Inventario</small><h2>Reserva de stock</h2></div><span class="@(_order.ShortageQuantity > 0 ? "attention" : "complete")">@(_order.ShortageQuantity > 0 ? $"Faltan {_order.ShortageQuantity} unidades por reservar." : "Reserva completa")</span></header><p>La reserva considera venta, reposición y degustación. Los insumos se calculan con la receta y no bloquean el pedido.</p><AuthorizeView Policy="@AppPolicies.ManageProduction"><Authorized><a class="panel-link" href="/app/inventario">Revisar insumos y lista de compra →</a></Authorized></AuthorizeView></section>
+            }
+
+            @if (_order.Status is not "Cancelled" and not "Delivered" && !IsDraft)
+            {
+                <details class="detail-card edit-section"><summary>Modificar pedido pendiente</summary><p>Indica el motivo para conservar el historial de los cambios.</p><div class="form-grid"><label>Fecha prometida<input type="datetime-local" @bind="_form.PromisedLocal" /></label><label class="wide">Observación<textarea @bind="_form.Notes"></textarea></label><label>Motivo<input @bind="_revisionReason" /></label></div><button @onclick="ReviseConfigurationAsync">Guardar datos futuros</button><hr /><div class="form-grid"><label>Línea<select @bind="_revisionLineId" @bind:after="RevisionLineChanged"><option value="">Selecciona</option>@foreach (var line in _order.Lines) { <option value="@line.Id">@line.Product</option> }</select></label><label>Venta<input type="number" min="0" @bind="_revisionSaleQuantity" /></label><label>Reposición<input type="number" min="0" @bind="_revisionReplacementQuantity" /></label><label>Degustación<input type="number" min="0" @bind="_revisionTastingQuantity" /></label><label>Precio vendido<input type="number" min="0" step="0.01" @bind="_revisionPrice" /></label>@if (_revisionReplacementQuantity > 0) { <label>Motivo reposición <span class="required">*</span><select @bind="_revisionReplacementReason"><option value="">Selecciona</option>@foreach (var reason in ReplacementReasons) { <option value="@reason">@reason</option> }</select></label><label>Observación reposición<input @bind="_revisionReplacementNotes" /></label> }@if (_revisionTastingQuantity > 0) { <label>Motivo degustación <span class="required">*</span><select @bind="_revisionTastingReason"><option value="">Selecciona</option>@foreach (var reason in TastingReasons) { <option value="@reason">@reason</option> }</select></label><label>Observación degustación<input @bind="_revisionTastingNotes" /></label> }<label>Motivo de modificación<input @bind="_revisionReason" /></label></div><div class="button-row"><button @onclick="ReviseLineAsync">Ajustar línea y reserva</button><button class="danger-button" @onclick="RemoveConfirmedLineAsync">Retirar línea</button></div></details>
+            }
+            @if (_order.Status is not "Cancelled" and not "Delivered") { <details class="detail-card cancel-section"><summary>Cancelar pedido</summary><label>Motivo<input @bind="_cancelReason" /></label><button class="danger-button" @onclick="CancelAsync">Cancelar pedido y liberar reservas</button></details> }
+        </main>
+
+        <aside>
+            <section class="side-card payment-card"><header><h2>Pago</h2><span class="badge @PaymentClass(_order.PaymentStatus)">@PaymentText(_order.PaymentStatus)</span></header><dl><div><dt>Total</dt><dd>Bs @OrderTotal.ToString("N2")</dd></div><div><dt>Pagado</dt><dd class="paid">Bs @_order.Paid.ToString("N2")</dd></div><div><dt>Saldo</dt><dd class="pending">Bs @_order.Balance.ToString("N2")</dd></div><div><dt>Estado</dt><dd>@PaymentText(_order.PaymentStatus)</dd></div><div><dt>Método</dt><dd>@MethodText(_order.PaymentMethod)</dd></div></dl>@if (_payments.Count > 0) { <h3>Historial de pagos</h3><ul class="payment-history">@foreach (var payment in _payments) { <li><span>@payment.PaymentDateUtc.ToLocalTime().ToString("dd/MM/yyyy · HH:mm") · @MethodText(payment.Method)</span><strong>Bs @payment.Amount.ToString("N2")</strong>@if (payment.EvidenceId != Guid.Empty) { <button class="link-button" @onclick="() => OpenPaymentEvidence(payment.EvidenceId)">Ver comprobante</button> }</li> }</ul> }@if (_paymentEvidenceUrl is not null) { <a class="panel-link" href="@_paymentEvidenceUrl" target="_blank">Abrir comprobante ↗</a> }</section>
+            @if (_order.Status != "Cancelled" && _order.Balance > 0) { <AuthorizeView Policy="@AppPolicies.ManageFinance"><Authorized><details class="side-card payment-entry"><summary>Registrar pago</summary><p>El respaldo es obligatorio.</p><label>Monto<input type="number" min="0.01" max="@_order.Balance" step="0.01" @bind="_paymentAmount" /></label><label>Método<select @bind="_paymentMethod"><option value="Qr">QR</option><option value="Cash">Efectivo</option></select></label><label>Fecha<input type="date" @bind="_paymentDate" /></label><label>Respaldo obligatorio<InputFile OnChange="e => _paymentEvidence = e.File" accept="image/jpeg,image/png,image/webp" /></label><label>Observación<input @bind="_paymentNotes" /></label><button @onclick="RegisterPaymentAsync">Guardar pago</button></details></Authorized></AuthorizeView> }
+            <section class="side-card delivery-card"><header><h2>Entrega</h2></header><dl><div><dt>Fecha prometida</dt><dd>@(_order.PromisedAtUtc?.ToLocalTime().ToString("dd/MM/yyyy") ?? "Sin definir")</dd></div><div><dt>Sucursal</dt><dd>@(_order.DeliveryPoint ?? "Sin asignar")</dd></div><div><dt>Contacto</dt><dd>@(_order.Contact ?? "Sin asignar")</dd></div><div><dt>Repartidor</dt><dd>@(_order.Driver ?? "Sin asignar")</dd></div><div><dt>Estado</dt><dd>@DeliveryText(_order.DeliveryStatus)</dd></div></dl>@if (!string.IsNullOrWhiteSpace(SelectedPoint?.Location)) { <a class="panel-link location-panel-link" href="@SelectedPoint.Location" target="_blank" rel="noopener noreferrer">Abrir ubicación ↗</a> }@if (_order.DeliveryStatus == "InRoute") { <button class="panel-link return-delivery-action" @onclick="ReturnDeliveryToPendingAsync">Volver a pendiente de salida</button> }@if (_order.Status is "Confirmed" or "InPreparation" or "Ready") { <a class="panel-link" href="/app/entregas">Organizar en Entregas →</a> }</section>
+            @if (!string.IsNullOrWhiteSpace(_order.Notes)) { <section class="side-card notes-card"><h2>Observación</h2><p>@_order.Notes</p></section> }
+        </aside>
+    </div>
+    <section class="timeline-card"><header><small>Trazabilidad</small><h2>Historial del pedido</h2></header>@if (_order.History.Count == 0) { <p>Aún no hay movimientos registrados.</p> } else { <ol>@foreach (var history in _order.History) { <li><time>@history.AtUtc.ToLocalTime().ToString("d MMM · HH:mm")</time><div><strong>@history.Kind</strong><p>@history.Description</p></div></li> }</ol> }</section>
+}
+
+@code {
+    [Parameter] public Guid OrderId { get; set; }
+    private TentacionSana.Application.Orders.OrderDetail? _order;
+    private IReadOnlyList<OrderOption> _customers = [];
+    private IReadOnlyList<ProductOption> _products = [];
+    private IReadOnlyList<PaymentHistoryItem> _payments = [];
+    private readonly List<string> _errors = [];
+    private string? _message;
+    private bool _saving;
+    private Form _form = new();
+    private LineForm _line = new();
+    private string _cancelReason = "", _revisionReason = "", _paymentMethod = "Qr", _paymentNotes = "";
+    private string? _pointImageUrl, _paymentEvidenceUrl;
+    private IBrowserFile? _paymentEvidence;
+    private decimal _paymentAmount;
+    private DateTime _paymentDate = DateTime.Today;
+    private DateTime _completedLocal = DateTime.Now;
+    private string _historicalReceiver = "";
+    private Guid? _revisionLineId;
+    private int _revisionSaleQuantity = 1, _revisionReplacementQuantity, _revisionTastingQuantity;
+    private decimal _revisionPrice;
+    private string? _revisionDiscountReason, _revisionReplacementReason, _revisionReplacementNotes, _revisionTastingReason, _revisionTastingNotes;
+    private static readonly string[] ReplacementReasons = ["Producto dañado", "Producto vencido", "Problema de conservación", "Error de entrega", "Producto defectuoso", "Acuerdo comercial", "Otro"];
+    private static readonly string[] TastingReasons = ["Degustación en punto de venta", "Muestra comercial", "Evento", "Influencer", "Promoción", "Prueba interna", "Otro"];
+
+    private bool IsDraft => _order?.Status == "Draft";
+    private bool CanConfirm => IsDraft && _order!.Lines.Count > 0 && _form.PromisedLocal is not null;
+    private bool CanRegisterCompletedOrder => CanConfirm && _completedLocal <= DateTime.Now && !string.IsNullOrWhiteSpace(_historicalReceiver);
+    private OrderOption? SelectedCustomer => _customers.FirstOrDefault(x => x.Id == _form.CustomerId);
+    private OrderPointOption? SelectedPoint => SelectedCustomer?.DeliveryPoints.FirstOrDefault(x => x.Id == _form.DeliveryPointId);
+    private OrderSubOption? SelectedContact => SelectedCustomer?.Contacts.FirstOrDefault(x => x.Id == _form.ContactId);
+    private OrderSubOption? SelectedPayer => SelectedCustomer?.Payers.FirstOrDefault(x => x.Id == _form.PayerId);
+    private int SoldQuantity => _order?.Lines.Sum(x => x.SaleQuantity) ?? 0;
+    private int ReplacementQuantity => _order?.Lines.Sum(x => x.ReplacementQuantity) ?? 0;
+    private int TastingQuantity => _order?.Lines.Sum(x => x.TastingQuantity) ?? 0;
+    private int TotalQuantity => SoldQuantity + ReplacementQuantity + TastingQuantity;
+    private decimal OrderTotal => _order?.Lines.Sum(x => x.SaleQuantity * x.SoldUnitPrice) ?? 0;
+    private decimal StandardSubtotal => _order?.Lines.Sum(x => x.SaleQuantity * x.StandardUnitPrice) ?? 0;
+    private decimal DiscountTotal => StandardSubtotal - OrderTotal;
+    private decimal StandardPrice => _products.FirstOrDefault(x => x.Id == _line.ProductId)?.CurrentPrice ?? 0;
+    private int LinePhysicalTotal => _line.SaleQuantity + _line.ReplacementQuantity + _line.TastingQuantity;
+    private decimal LineSubtotal => _line.SaleQuantity * _line.SoldPrice;
+
+    protected override async Task OnParametersSetAsync() { _customers = await Service.CustomerOptionsAsync(); _products = await Service.ProductOptionsAsync(); await LoadAsync(); }
+    private async Task LoadAsync() { _order = await Service.GetAsync(OrderId); _payments = await DeliveryService.PaymentsAsync(OrderId); if (_order is null) return; _form = new() { CustomerId = _order.CustomerId, DeliveryPointId = _order.DeliveryPointId, ContactId = _order.ContactId, PayerId = _order.PaymentResponsiblePartyId, PromisedLocal = _order.PromisedAtUtc?.ToLocalTime().DateTime, Notes = _order.Notes }; _pointImageUrl = _order.DeliveryPointId is null ? null : await PointImageService.GetUrlAsync(_order.DeliveryPointId.Value); if (_paymentAmount <= 0) _paymentAmount = _order.Balance; }
+    private Task CustomerChanged() { _form.DeliveryPointId = null; _form.ContactId = null; _form.PayerId = null; _pointImageUrl = null; return Task.CompletedTask; }
+    private async Task PointChanged() { _form.ContactId = SelectedPoint?.ContactId; _form.PayerId = SelectedPoint?.PayerId; _pointImageUrl = _form.DeliveryPointId is null ? null : await PointImageService.GetUrlAsync(_form.DeliveryPointId.Value); }
+    private Task ProductChanged() { _line.SoldPrice = _products.FirstOrDefault(x => x.Id == _line.ProductId)?.CurrentPrice ?? 0; return Task.CompletedTask; }
+    private async Task SaveAsync()
+    {
+        BeginOperation();
+        try
+        {
+            var userId = await UserId();
+            var saved = await SaveDraftAsync(userId);
+            if (!saved.Succeeded) { ShowErrors(saved); return; }
+            _order = _order! with { Version = _order.Version + 1 };
+            if (HasPendingLine && !await AddPendingLineAsync(userId)) return;
+            _message = "Pedido guardado correctamente.";
+        }
+        catch { _errors.Add("No se pudo guardar el pedido. Intenta nuevamente."); }
+        finally { _saving = false; }
+    }
+    private async Task AddAsync()
+    {
+        BeginOperation();
+        try
+        {
+            if (!ValidatePendingLine()) return;
+            if (await AddPendingLineAsync(await UserId())) _message = "Producto añadido al pedido.";
+        }
+        catch { _errors.Add("No se pudo añadir el producto. Intenta nuevamente."); }
+        finally { _saving = false; }
+    }
+    private bool HasPendingLine => _line.ProductId != Guid.Empty || LinePhysicalTotal > 0;
+    private bool ValidatePendingLine()
+    {
+        if (_line.ProductId == Guid.Empty) { _errors.Add("Selecciona el producto que deseas añadir."); return false; }
+        if (LinePhysicalTotal <= 0) { _errors.Add("La cantidad total del producto debe ser mayor que cero."); return false; }
+        return true;
+    }
+    private async Task<bool> AddPendingLineAsync(Guid userId)
+    {
+        if (!ValidatePendingLine()) return false;
+        var draft = _line;
+        var standardPrice = StandardPrice;
+        var result = await Service.AddLineAsync(OrderId, _order!.Version, new(draft.ProductId, draft.SaleQuantity, draft.ReplacementQuantity, draft.TastingQuantity, draft.SoldPrice, draft.DiscountReason, draft.ReplacementReason, draft.ReplacementNotes, draft.TastingReason, draft.TastingNotes), userId);
+        if (!result.Succeeded) { ShowErrors(result); return false; }
+        var productName = _products.First(x => x.Id == draft.ProductId).Name;
+        var detail = new OrderLineDetail(result.Id!.Value, draft.ProductId, productName, draft.SaleQuantity, draft.ReplacementQuantity, draft.TastingQuantity, draft.SaleQuantity + draft.ReplacementQuantity + draft.TastingQuantity, standardPrice, draft.SoldPrice, Math.Max(0, standardPrice - draft.SoldPrice), draft.DiscountReason, draft.ReplacementReason, draft.ReplacementNotes, draft.TastingReason, draft.TastingNotes, 0, 0);
+        _order = _order with { Version = _order.Version + 1, Lines = [.. _order.Lines, detail] };
+        _line = new();
+        return true;
+    }
+    private void BeginOperation() { _errors.Clear(); _message = null; _saving = true; }
+    private void ShowErrors(OrderOperationResult result) { _errors.Clear(); _errors.AddRange(result.Errors); }
+    private async Task RemoveAsync(Guid lineId) => await Handle(await Service.RemoveLineAsync(OrderId, lineId, _order!.Version, await UserId()));
+    private async Task ConfirmAsync()
+    {
+        if (!CanConfirm) { _errors.Clear(); _errors.Add("Agrega al menos un producto y define la fecha prometida antes de confirmar."); return; }
+        BeginOperation();
+        try
+        {
+            var userId = await UserId();
+            var saved = await SaveDraftAsync(userId);
+            if (!saved.Succeeded) { ShowErrors(saved); return; }
+            _order = _order! with { Version = _order.Version + 1 };
+            var confirmed = await Service.ConfirmAsync(OrderId, _order.Version, userId);
+            if (!confirmed.Succeeded) { ShowErrors(confirmed); return; }
+            _order = _order with { Status = "Confirmed", Version = _order.Version + 1 };
+            _message = "Pedido confirmado correctamente. La reserva y los insumos ya fueron calculados.";
+        }
+        catch { _errors.Add("No se pudo confirmar el pedido. Intenta nuevamente."); }
+        finally { _saving = false; }
+    }
+    private async Task RegisterCompletedOrderAsync() { if (!CanRegisterCompletedOrder) { _errors.Clear(); _errors.Add("Agrega un producto, define la fecha prometida y completa una fecha pasada o actual con la persona receptora."); return; } var userId = await UserId(); var completedAt = new DateTimeOffset(DateTime.SpecifyKind(_completedLocal, DateTimeKind.Local)).ToUniversalTime(); await Handle(await Service.RegisterCompletedOrderAsync(OrderId, _order!.Version, new(_form.CustomerId, _form.DeliveryPointId, _form.ContactId, _form.PayerId, UtcDate(_form.PromisedLocal), _form.Notes), completedAt, _historicalReceiver, userId), false); }
+    private Task<OrderOperationResult> SaveDraftAsync(Guid userId) => Service.ConfigureDraftAsync(OrderId, _order!.Version, new(_form.CustomerId, _form.DeliveryPointId, _form.ContactId, _form.PayerId, UtcDate(_form.PromisedLocal), _form.Notes), userId);
+    private async Task CancelAsync() => await Handle(await Service.CancelAsync(OrderId, _order!.Version, _cancelReason, await UserId()), false);
+    private async Task ReviseConfigurationAsync() => await Handle(await Service.ReviseConfigurationAsync(OrderId, _order!.Version, new(_form.CustomerId, _form.DeliveryPointId, _form.ContactId, _form.PayerId, UtcDate(_form.PromisedLocal), _form.Notes), _revisionReason, await UserId()), false);
+    private Task RevisionLineChanged() { var line = _order?.Lines.FirstOrDefault(x => x.Id == _revisionLineId); if (line is not null) { _revisionSaleQuantity = line.SaleQuantity; _revisionReplacementQuantity = line.ReplacementQuantity; _revisionTastingQuantity = line.TastingQuantity; _revisionPrice = line.SoldUnitPrice; _revisionDiscountReason = line.DiscountReason; _revisionReplacementReason = line.ReplacementReason; _revisionReplacementNotes = line.ReplacementNotes; _revisionTastingReason = line.TastingReason; _revisionTastingNotes = line.TastingNotes; } return Task.CompletedTask; }
+    private async Task ReviseLineAsync() { if (_revisionLineId is not null) await Handle(await Service.ReviseLineAsync(OrderId, _revisionLineId.Value, _order!.Version, new(_revisionSaleQuantity, _revisionReplacementQuantity, _revisionTastingQuantity, _revisionPrice, _revisionDiscountReason, _revisionReplacementReason, _revisionReplacementNotes, _revisionTastingReason, _revisionTastingNotes, _revisionReason), await UserId()), false); }
+    private async Task RemoveConfirmedLineAsync() { if (_revisionLineId is not null) await Handle(await Service.RemoveConfirmedLineAsync(OrderId, _revisionLineId.Value, _order!.Version, _revisionReason, await UserId()), false); }
+    private async Task OpenPaymentEvidence(Guid evidenceId) { var result = await DeliveryService.GetPaymentEvidenceUrlAsync(evidenceId, await UserId()); if (result.Succeeded) _paymentEvidenceUrl = result.Url; else { _errors.Clear(); _errors.AddRange(result.Errors); } }
+    private async Task RegisterPaymentAsync() { _errors.Clear(); if (_paymentEvidence is null) { _errors.Add("Debes adjuntar un respaldo para registrar este pago."); return; } await using var content = _paymentEvidence.OpenReadStream(10 * 1024 * 1024); var paymentDate = new DateTimeOffset(DateTime.SpecifyKind(_paymentDate, DateTimeKind.Local)).ToUniversalTime(); var result = await DeliveryService.RegisterPaymentAsync(new(OrderId, _order!.ReceivableVersion, Guid.NewGuid().ToString("N"), _paymentAmount, _paymentMethod, null, false, _order.Status != "Delivered", paymentDate, _paymentNotes, content, _paymentEvidence.Name, _paymentEvidence.ContentType, _paymentEvidence.Size), await UserId()); if (!result.Succeeded) _errors.AddRange(result.Errors); else { _paymentEvidence = null; _paymentAmount = 0; await LoadAsync(); } }
+    private async Task ReturnDeliveryToPendingAsync() { _errors.Clear(); var result = await DeliveryService.ReturnOrderToPendingAsync(OrderId, await UserId()); if (!result.Succeeded) _errors.AddRange(result.Errors); else await LoadAsync(); }
+    private async Task Handle(OrderOperationResult result, bool resetLine = true) { _errors.Clear(); if (!result.Succeeded) { _errors.AddRange(result.Errors); return; } if (resetLine) _line = new(); await LoadAsync(); }
+    private async Task<Guid> UserId() { var state = await AuthenticationStateProvider.GetAuthenticationStateAsync(); return Guid.Parse(state.User.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)!.Value); }
+    private static DateTimeOffset? UtcDate(DateTime? date) => date is null ? null : new DateTimeOffset(DateTime.SpecifyKind(date.Value, DateTimeKind.Local)).ToUniversalTime();
+    private static string Text(string? status) => status switch { "Delivered" => "Entregado", "Cancelled" => "Cancelado", _ => "Pendiente" };
+    private static string PaymentText(string status) => status switch { "Pending" => "Sin pago", "Partial" => "Parcial", "Paid" => "Pagado", _ => status };
+    private static string MethodText(string? method) => method switch { "Qr" => "QR", "Cash" => "Efectivo", "Transfer" => "Transferencia", "Mixed" => "Mixto", _ => "—" };
+    private static string DeliveryText(string? status) => status switch { "Scheduled" => "Programada", "Assigned" => "Asignada", "InRoute" => "En ruta", "Delivered" => "Entregada", "Partial" => "Parcial", "Failed" => "Fallida", "Cancelled" => "Cancelada", _ => "Sin programar" };
+    private static string StatusClass(string status) => status switch { "Delivered" => "status-delivered", "Cancelled" => "status-cancelled", _ => "status-draft" };
+    private static string PaymentClass(string status) => $"payment-{status.ToLowerInvariant()}";
+    private static string MethodClass(string? method) => method is null ? "method-none" : $"method-{method.ToLowerInvariant()}";
+    private static string Initials(string name) => string.Concat(name.Split(' ', StringSplitOptions.RemoveEmptyEntries).Take(2).Select(x => char.ToUpperInvariant(x[0])));
+    private static string WhatsApp(string phone) { var digits = new string(phone.Where(char.IsDigit).ToArray()); if (digits.Length == 8) digits = "591" + digits; return $"https://wa.me/{digits}"; }
+    private sealed class Form { public Guid CustomerId { get; set; } public Guid? DeliveryPointId { get; set; } public Guid? ContactId { get; set; } public Guid? PayerId { get; set; } public DateTime? PromisedLocal { get; set; } public string? Notes { get; set; } }
+    private sealed class LineForm { public Guid ProductId { get; set; } public int SaleQuantity { get; set; } = 1; public int ReplacementQuantity { get; set; } public int TastingQuantity { get; set; } public decimal SoldPrice { get; set; } public string? DiscountReason { get; set; } public string? ReplacementReason { get; set; } public string? ReplacementNotes { get; set; } public string? TastingReason { get; set; } public string? TastingNotes { get; set; } }
+}

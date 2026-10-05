@@ -1,0 +1,54 @@
+@page "/app/usuarios"
+@layout AdminLayout
+@rendermode InteractiveServer
+@attribute [Authorize(Policy = AppPolicies.Administration)]
+@inject IUserAdministrationService Service
+@inject AuthenticationStateProvider Auth
+
+<PageTitle>Usuarios y permisos | Tentación Sana</PageTitle>
+<header class="users-heading"><p>Administración</p><h1>Usuarios, roles y permisos</h1><span>Crea accesos y decide qué módulos puede usar cada rol.</span></header>
+@if(_message is not null){<div class="notice @(_isError?"error":null)">@_message</div>}
+
+<section class="security-summary"><article><strong>@_data.Users.Count</strong><span>usuarios</span></article><article><strong>@_data.Users.Count(x=>x.IsEnabled)</strong><span>activos</span></article><article><strong>@_data.Roles.Count</strong><span>roles</span></article></section>
+
+<div class="security-layout">
+<section class="security-card"><header><div><small>Nueva cuenta</small><h2>Crear usuario</h2></div></header>
+ <div class="field-grid"><label>Nombre completo<input @bind="_newDisplayName" /></label><label>Usuario<input @bind="_newUserName" autocomplete="off" /></label></div>
+ <label>Contraseña temporal<input type="password" @bind="_newPassword" autocomplete="new-password" /><small>Mínimo 10 caracteres, mayúscula, minúscula, número y símbolo.</small></label>
+ <fieldset><legend>Roles iniciales</legend><div class="check-grid">@foreach(var role in _data.Roles){<label class="check"><input type="checkbox" checked="@_newUserRoles.Contains(role.Id)" @onchange="e=>Toggle(_newUserRoles,role.Id,e)"/><span><b>@role.Name</b><small>@role.UserCount usuario(s)</small></span></label>}</div></fieldset>
+ <button class="primary" @onclick="CreateUserAsync" disabled="@_saving">Crear usuario</button>
+</section>
+
+<section class="security-card"><header><div><small>Nuevo perfil</small><h2>Crear rol</h2></div></header>
+ <label>Nombre del rol<input @bind="_newRoleName" placeholder="Ej.: Supervisora de sucursal" /></label>
+ <fieldset><legend>Permisos</legend><div class="permission-list">@foreach(var permission in _data.Permissions){<label class="permission"><input type="checkbox" checked="@_newRolePermissions.Contains(permission.Key)" @onchange="e=>Toggle(_newRolePermissions,permission.Key,e)"/><span><b>@permission.Name</b><small>@permission.Description</small></span></label>}</div></fieldset>
+ <button class="primary" @onclick="CreateRoleAsync" disabled="@_saving">Crear rol</button>
+</section>
+</div>
+
+<section class="security-card list-card"><header><div><small>Cuentas internas</small><h2>Usuarios</h2></div></header><div class="user-list">
+@foreach(var user in _data.Users){<article class="user-row"><div class="avatar">@Initials(user.DisplayName)</div><div class="user-identity"><strong>@user.DisplayName</strong><span>@@@user.UserName</span><div>@foreach(var role in user.RoleNames){<em>@role</em>}</div></div><div class="account-state @(user.IsEnabled?"enabled":"disabled")">@(user.IsEnabled?"Activo":"Deshabilitado")</div><button class="secondary" @onclick="()=>EditUser(user)">Administrar</button></article>}
+</div></section>
+
+<section class="security-card list-card"><header><div><small>Matriz de acceso</small><h2>Roles y permisos</h2></div></header><div class="role-grid">
+@foreach(var role in _data.Roles){<article class="role-card"><header><div><strong>@role.Name</strong><span>@role.UserCount usuario(s)</span></div>@if(role.IsSystem){<em>Sistema</em>}</header><div class="role-permissions">@foreach(var permission in _data.Permissions){<label><input type="checkbox" disabled="@(role.Name==AppRoles.Administrator)" checked="@(role.Name==AppRoles.Administrator||RolePermissions(role.Id).Contains(permission.Key))" @onchange="e=>Toggle(RolePermissions(role.Id),permission.Key,e)"/> @permission.Name</label>}</div>@if(role.Name!=AppRoles.Administrator){<button class="secondary" @onclick="()=>SaveRoleAsync(role.Id)" disabled="@_saving">Guardar permisos</button>}</article>}
+</div></section>
+
+@if(_editingUser is not null){<div class="modal-backdrop" @onclick="CloseUser"><section class="user-dialog" @onclick:stopPropagation><header><div><small>Administrar cuenta</small><h2>@_editingUser.DisplayName</h2></div><button @onclick="CloseUser">×</button></header><label>Nombre completo<input @bind="_editDisplayName" /></label><label class="enabled-switch"><input type="checkbox" @bind="_editEnabled"/><span>Cuenta habilitada</span></label><fieldset><legend>Roles</legend><div class="check-grid">@foreach(var role in _data.Roles){<label class="check"><input type="checkbox" checked="@_editUserRoles.Contains(role.Id)" @onchange="e=>Toggle(_editUserRoles,role.Id,e)"/><span><b>@role.Name</b></span></label>}</div></fieldset><footer><button class="secondary" @onclick="CloseUser">Cancelar</button><button class="primary" @onclick="SaveUserAsync" disabled="@_saving">Guardar usuario</button></footer></section></div>}
+
+@code{
+ private UserAdministrationSnapshot _data=new([],[],AppPermissions.All);private string? _message;private bool _isError,_saving;private string _newDisplayName="",_newUserName="",_newPassword="",_newRoleName="";private readonly HashSet<Guid> _newUserRoles=[];private readonly HashSet<string> _newRolePermissions=[];private readonly Dictionary<Guid,HashSet<string>> _rolePermissions=[];private ManagedUser? _editingUser;private string _editDisplayName="";private bool _editEnabled;private readonly HashSet<Guid> _editUserRoles=[];
+ protected override async Task OnInitializedAsync()=>await ReloadAsync();
+ private async Task ReloadAsync(){_data=await Service.GetAsync();_rolePermissions.Clear();foreach(var role in _data.Roles)_rolePermissions[role.Id]=role.Permissions.ToHashSet();}
+ private HashSet<string> RolePermissions(Guid id)=>_rolePermissions[id];
+ private static void Toggle<T>(HashSet<T> set,T value,ChangeEventArgs e) where T:notnull{if(e.Value is true)set.Add(value);else set.Remove(value);}
+ private async Task<Guid> ActorAsync(){var state=await Auth.GetAuthenticationStateAsync();return Guid.Parse(state.User.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)!.Value);}
+ private async Task CreateUserAsync(){await Run(async()=>await Service.CreateUserAsync(new(_newDisplayName,_newUserName,_newPassword,_newUserRoles.ToList()),await ActorAsync()),"Usuario creado. Deberá cambiar su contraseña al iniciar sesión.");if(!_isError){_newDisplayName=_newUserName=_newPassword="";_newUserRoles.Clear();}}
+ private async Task CreateRoleAsync(){await Run(async()=>await Service.CreateRoleAsync(new(_newRoleName,_newRolePermissions.ToList()),await ActorAsync()),"Rol creado correctamente.");if(!_isError){_newRoleName="";_newRolePermissions.Clear();}}
+ private async Task SaveRoleAsync(Guid id)=>await Run(async()=>await Service.UpdateRolePermissionsAsync(new(id,RolePermissions(id).ToList()),await ActorAsync()),"Permisos actualizados. Los usuarios los recibirán en su próximo inicio de sesión.");
+ private void EditUser(ManagedUser user){_editingUser=user;_editDisplayName=user.DisplayName;_editEnabled=user.IsEnabled;_editUserRoles.Clear();_editUserRoles.UnionWith(user.RoleIds);}
+ private void CloseUser(){if(!_saving)_editingUser=null;}
+ private async Task SaveUserAsync(){if(_editingUser is null)return;await Run(async()=>await Service.UpdateUserAsync(new(_editingUser.Id,_editDisplayName,_editEnabled,_editUserRoles.ToList()),await ActorAsync()),"Usuario actualizado. Sus permisos se aplicarán en su próximo inicio de sesión.");if(!_isError)_editingUser=null;}
+ private async Task Run(Func<Task<SecurityOperationResult>> action,string success){_saving=true;var result=await action();_saving=false;_isError=!result.Succeeded;_message=result.Succeeded?success:string.Join(" ",result.Errors);if(result.Succeeded)await ReloadAsync();}
+ private static string Initials(string value)=>string.Join("",value.Split(' ',StringSplitOptions.RemoveEmptyEntries).Take(2).Select(x=>char.ToUpperInvariant(x[0])));
+}

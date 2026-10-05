@@ -1,0 +1,29 @@
+@page "/contacto"
+@layout PublicLayout
+@inject IConfiguration Configuration
+
+<PageTitle>Contacto | Tentación Sana</PageTitle>
+
+<section class="contact-page">
+    <div>
+        <p class="label">Contacto</p>
+        <h1>Contanos qué estás buscando.</h1>
+    </div>
+    <div class="contact-panel">
+        <h2>Consultar disponibilidad</h2>
+        <p>Decinos qué producto, presentación y cantidad te interesan. Confirmaremos disponibilidad, precio y entrega antes de registrar un pedido.</p>
+        @if (WhatsAppUrl is not null)
+        {
+            <a class="contact-action" href="@WhatsAppUrl" target="_blank" rel="noopener noreferrer">Escribir por WhatsApp</a>
+        }
+        else
+        {
+            <p class="notice">El canal comercial de WhatsApp se habilitará cuando se configure el número oficial.</p>
+        }
+    </div>
+</section>
+
+@code {
+    private string? WhatsAppUrl => TentacionSana.Application.Contact.WhatsAppLinkBuilder.Build(
+        Configuration["Business:WhatsAppNumber"]);
+}

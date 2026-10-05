@@ -1,0 +1,10 @@
+root = true
+
+[*.cs]
+indent_style = space
+indent_size = 4
+charset = utf-8
+
+[**/Migrations/*.cs]
+# EF Core genera argumentos de matriz que activan CA1861. No se editan migraciones generadas para satisfacer esta regla.
+dotnet_diagnostic.CA1861.severity = none

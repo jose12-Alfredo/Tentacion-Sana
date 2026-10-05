@@ -1,0 +1,104 @@
+@page "/solicitar"
+@layout PublicLayout
+@attribute [Microsoft.AspNetCore.RateLimiting.EnableRateLimiting("public-product-requests")]
+@inject IPublicCatalogService CatalogService
+@inject IProductRequestService RequestService
+
+<PageTitle>Solicitar productos | Tentación Sana</PageTitle>
+
+<section class="request-page">
+    <div>
+        <p>Solicitud</p>
+        <h1>Contanos qué te interesa.</h1>
+        <span>No crea una compra ni reserva inventario. Confirmaremos disponibilidad contigo.</span>
+    </div>
+
+    <EditForm Model="Form" FormName="product-request" OnValidSubmit="SubmitAsync">
+        <DataAnnotationsValidator />
+        <ValidationSummary />
+        <AntiforgeryToken />
+        <input type="hidden" name="Form.IdempotencyKey" value="@Form.IdempotencyKey" />
+
+        <label>Nombre <InputText @bind-Value="Form.Name" /></label>
+        <label>WhatsApp <InputText @bind-Value="Form.Phone" /></label>
+        <label>Correo (opcional) <InputText @bind-Value="Form.Email" /></label>
+        <label>
+            Producto
+            <InputSelect @bind-Value="Form.ProductId">
+                <option value="">Seleccioná…</option>
+                @foreach (var product in _products)
+                {
+                    <option value="@product.Id">@product.Name · @product.Presentation</option>
+                }
+            </InputSelect>
+        </label>
+        <label>Cantidad <InputNumber @bind-Value="Form.Quantity" /></label>
+        <label>Observaciones <InputTextArea @bind-Value="Form.Notes" /></label>
+        <label>Ubicación (opcional) <InputTextArea @bind-Value="Form.Location" placeholder="Dirección, referencia o enlace de Google Maps" /></label>
+        <label class="consent"><InputCheckbox @bind-Value="Form.Consent" /> Acepto que me contacten para responder esta solicitud.</label>
+        <button type="submit">Enviar solicitud</button>
+
+        @if (_message is not null)
+        {
+            <p role="status">@_message</p>
+        }
+    </EditForm>
+</section>
+
+@code {
+    private IReadOnlyList<PublicProductSummary> _products = [];
+    private string? _message;
+
+    [SupplyParameterFromForm(FormName = "product-request")]
+    private RequestForm? SubmittedForm { get; set; }
+
+    private RequestForm Form => SubmittedForm ??= new RequestForm();
+
+    protected override async Task OnInitializedAsync()
+    {
+        _products = await CatalogService.GetPublishedProductsAsync();
+    }
+
+    private async Task SubmitAsync()
+    {
+        var result = await RequestService.CreateAsync(new CreateRequestCommand(
+            Form.Name,
+            Form.Phone,
+            Form.Email,
+            Form.Notes,
+            Form.Location,
+            Form.ProductId,
+            Form.Quantity,
+            Form.Consent,
+            Form.IdempotencyKey));
+
+        _message = result.Succeeded
+            ? "Recibimos tu solicitud. Te contactaremos para confirmar."
+            : string.Join(" ", result.Errors);
+
+        if (result.Succeeded)
+        {
+            SubmittedForm = new RequestForm();
+        }
+    }
+
+    private sealed class RequestForm
+    {
+        [System.ComponentModel.DataAnnotations.Required]
+        public string Name { get; set; } = string.Empty;
+
+        [System.ComponentModel.DataAnnotations.Required]
+        public string Phone { get; set; } = string.Empty;
+
+        public string? Email { get; set; }
+        public string? Notes { get; set; }
+        public string? Location { get; set; }
+
+        [System.ComponentModel.DataAnnotations.Required]
+        public Guid ProductId { get; set; }
+
+        public int Quantity { get; set; } = 1;
+        public bool Consent { get; set; }
+        public string IdempotencyKey { get; set; } = Guid.NewGuid().ToString("N");
+    }
+}

@@ -1,0 +1,14 @@
+interface:
+  display_name: Gestión Tentación Sana
+  short_description: Define y construye el sistema del negocio
+  default_prompt: Usa $gestionar-tentacion-sana para diseñar o validar una función
+    del sistema de Tentación Sana.
+  icon_small: assets/icon.svg
+  icon_large: assets/icon.svg
+policy:
+  products:
+  - chatgpt
+  - codex
+  - api
+  - atlas
+  allow_implicit_invocation: true

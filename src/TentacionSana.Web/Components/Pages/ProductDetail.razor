@@ -1,0 +1,89 @@
+@page "/productos/{Slug}"
+@layout PublicLayout
+@attribute [StreamRendering]
+@inject IPublicCatalogService CatalogService
+@inject IConfiguration Configuration
+
+@if (_product is null && !_loaded)
+{
+    <PageTitle>Producto | Tentación Sana</PageTitle>
+    <p class="loading">Cargando producto…</p>
+}
+else if (_product is null)
+{
+    <PageTitle>Producto no encontrado | Tentación Sana</PageTitle>
+    <section class="not-found">
+        <h1>Este producto no está disponible.</h1>
+        <a href="/catalogo">Volver al catálogo</a>
+    </section>
+}
+else
+{
+    <PageTitle>@_product.Name | Tentación Sana</PageTitle>
+    <HeadContent>
+        <meta name="description" content="@_product.Description" />
+        <meta property="og:type" content="product" />
+        <meta property="og:title" content="@($"{_product.Name} | Tentación Sana")" />
+        <meta property="og:description" content="@_product.Description" />
+        @if (_product.Images.Count > 0)
+        {
+            <meta property="og:image" content="@_product.Images[0].Url" />
+            <meta property="og:image:alt" content="@_product.Images[0].AltText" />
+        }
+    </HeadContent>
+    <nav class="breadcrumb" aria-label="Ruta de navegación">
+        <a href="/">Inicio</a><span>›</span><a href="/catalogo">Catálogo</a><span>›</span><span>@_product.Name</span>
+    </nav>
+    <article class="product-detail">
+        <div class="gallery">
+            @if (_product.Images.Count > 0)
+            {
+                <img src="@_product.Images[0].Url" alt="@_product.Images[0].AltText" width="@_product.Images[0].Width" height="@_product.Images[0].Height" />
+            }
+            else
+            {
+                <span aria-hidden="true">TS</span>
+            }
+        </div>
+        <div class="detail-copy">
+            <p class="label">@_product.Presentation</p>
+            <h1>@_product.Name</h1>
+            <p class="description">@_product.Description</p>
+            @if (!string.IsNullOrWhiteSpace(_product.ApprovedBenefits))
+            {
+                <p>@_product.ApprovedBenefits</p>
+            }
+            @if (_product.PublicPrice is not null)
+            {
+                <div class="price"><small>Precio público</small><strong>Bs @_product.PublicPrice.Value.ToString("0.00")</strong></div>
+            }
+            @if (_whatsAppUrl is not null)
+            {
+                <a class="cta" href="@_whatsAppUrl" target="_blank" rel="noopener noreferrer">Solicitar por WhatsApp</a>
+            }
+            else
+            {
+                <a class="cta" href="/contacto">Consultar disponibilidad</a>
+            }
+            <p class="purchase-note">Consultá disponibilidad y coordiná tu pedido directamente con Tentación Sana.</p>
+        </div>
+    </article>
+}
+
+@code {
+    [Parameter] public string Slug { get; set; } = string.Empty;
+    private PublicProductDetail? _product;
+    private bool _loaded;
+    private string? _whatsAppUrl;
+
+    protected override async Task OnParametersSetAsync()
+    {
+        _product = await CatalogService.GetPublishedProductAsync(Slug);
+        if (_product is not null)
+        {
+            _whatsAppUrl = TentacionSana.Application.Contact.WhatsAppLinkBuilder.Build(
+                Configuration["Business:WhatsAppNumber"], _product.Name, _product.Presentation);
+        }
+        _loaded = true;
+    }
+}

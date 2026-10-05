@@ -1,0 +1,324 @@
+@page "/app/solicitudes"
+@layout AdminLayout
+@rendermode InteractiveServer
+@attribute [Authorize(Policy = AppPolicies.ManageSales)]
+@inject IProductRequestService RequestService
+@inject IPublicCatalogService CatalogService
+@inject AuthenticationStateProvider AuthenticationStateProvider
+
+<PageTitle>Solicitudes | Tentación Sana</PageTitle>
+
+<h1>Solicitudes</h1>
+<p>Consultas recibidas desde el sitio público.</p>
+
+<details class="manual-request">
+    <summary>Registrar conversación de WhatsApp</summary>
+    <div class="manual-request-grid">
+        <label>Nombre <input @bind="_manualRequest.ContactName" maxlength="160" /></label>
+        <label>Teléfono <input @bind="_manualRequest.Phone" maxlength="40" /></label>
+        <label>Correo <input @bind="_manualRequest.Email" maxlength="256" /></label>
+        <label>
+            Producto
+            <select @bind="_manualRequest.ProductId">
+                <option value="@Guid.Empty">Seleccioná…</option>
+                @foreach (var product in _products)
+                {
+                    <option value="@product.Id">@product.Name · @product.Presentation</option>
+                }
+            </select>
+        </label>
+        <label>Cantidad <input type="number" min="1" @bind="_manualRequest.Quantity" /></label>
+        <label>Ubicación <textarea @bind="_manualRequest.Location" maxlength="1000"></textarea></label>
+        <label class="wide">Observaciones <textarea @bind="_manualRequest.Notes" maxlength="1500"></textarea></label>
+        <button @onclick="CreateManualRequestAsync">Guardar solicitud de WhatsApp</button>
+    </div>
+</details>
+
+@if (_errors.Count > 0)
+{
+    <div class="error-summary" role="alert">
+        @foreach (var error in _errors)
+        {
+            <p>@error</p>
+        }
+    </div>
+}
+
+@if (_selectedRequestId is not null)
+{
+    <section class="status-editor" aria-labelledby="status-editor-title">
+        <h2 id="status-editor-title">Registrar cambio de estado</h2>
+        <label>Motivo <input @bind="_statusReason" maxlength="500" /></label>
+        <button @onclick="SaveStatusAsync">Guardar como @StatusText(_targetStatus)</button>
+        <button class="secondary" @onclick="CancelStatusChange">Cancelar</button>
+    </section>
+}
+
+@if (_pendingDeleteRequest is not null)
+{
+    <section class="delete-confirmation" role="alertdialog" aria-labelledby="delete-request-title" aria-describedby="delete-request-description">
+        <h2 id="delete-request-title">Eliminar solicitud</h2>
+        <p id="delete-request-description">Se eliminará permanentemente la solicitud de <strong>@_pendingDeleteRequest.ContactName</strong> por @_pendingDeleteRequest.ProductName.</p>
+        <button class="danger" disabled="@(_deletingRequestId is not null)" @onclick="DeleteAsync">
+            @(_deletingRequestId is not null ? "Eliminando…" : "Sí, eliminar")
+        </button>
+        <button class="secondary" disabled="@(_deletingRequestId is not null)" @onclick="CancelDelete">Cancelar</button>
+    </section>
+}
+
+@if (_requests is null)
+{
+    <p>Cargando…</p>
+}
+else if (_requests.Count == 0)
+{
+    <p>Todavía no hay solicitudes.</p>
+}
+else
+{
+    <div class="requests-table" role="region" aria-label="Solicitudes recibidas" tabindex="0">
+        <table>
+            <thead>
+                <tr>
+                    <th>Fecha</th>
+                    <th>Cliente</th>
+                    <th>Teléfono</th>
+                    <th>Ubicación</th>
+                    <th>Origen</th>
+                    <th>Producto</th>
+                    <th>Cantidad</th>
+                    <th>Estado</th>
+                    <th><span class="visually-hidden">Acciones</span></th>
+                </tr>
+            </thead>
+            <tbody>
+                @foreach (var item in _requests)
+                {
+                    var locationLink = LocationLinkBuilder.Build(item.Location);
+                    <tr>
+                        <td>@item.CreatedAtUtc.ToLocalTime().ToString("g")</td>
+                        <td>@item.ContactName</td>
+                        <td>@item.Phone</td>
+                        <td>
+                            @if (string.IsNullOrWhiteSpace(item.Location))
+                            {
+                                <span>—</span>
+                            }
+                            else if (locationLink is not null)
+                            {
+                                <a href="@locationLink" target="_blank" rel="noopener noreferrer">Abrir mapa</a>
+                            }
+                            else
+                            {
+                                <span class="location-text">@item.Location</span>
+                            }
+                        </td>
+                        <td>@item.Origin</td>
+                        <td>@item.ProductName</td>
+                        <td>@item.Quantity</td>
+                        <td>@StatusText(item.Status)</td>
+                        <td>
+                            @if (item.OrderId is null)
+                            {
+                                <button disabled="@(_convertingRequestId == item.Id)" @onclick="() => ConvertAsync(item.Id)">
+                                    @(_convertingRequestId == item.Id ? "Convirtiendo…" : "Convertir a pedido")
+                                </button>
+                            }
+                            else
+                            {
+                                <span>Pedido creado</span>
+                            }
+                            @if (item.Status is "New")
+                            {
+                                <button class="secondary" @onclick='() => BeginStatusChange(item.Id, "Contacted")'>Marcar contactada</button>
+                            }
+                            @if (item.Status is not "Converted" and not "Closed")
+                            {
+                                <button class="secondary" @onclick='() => BeginStatusChange(item.Id, "Closed")'>Cerrar</button>
+                            }
+                            <button class="secondary" @onclick="() => LoadHistoryAsync(item.Id)">Ver historial</button>
+                            @if (item.OrderId is null)
+                            {
+                                <button class="danger-outline" @onclick="() => BeginDelete(item)">Eliminar</button>
+                            }
+                        </td>
+                    </tr>
+                }
+            </tbody>
+        </table>
+    </div>
+}
+
+@if (_history is not null)
+{
+    <section class="request-history">
+        <h2>Historial de estados</h2>
+        @if (_history.Count == 0)
+        {
+            <p>Esta solicitud todavía no tiene movimientos registrados.</p>
+        }
+        else
+        {
+            <ol>
+                @foreach (var entry in _history)
+                {
+                    <li><strong>@StatusText(entry.NewStatus)</strong> · @entry.ChangedAtUtc.ToLocalTime().ToString("g") · @entry.Reason</li>
+                }
+            </ol>
+        }
+    </section>
+}
+
+@code {
+    private readonly List<string> _errors = [];
+    private IReadOnlyList<RequestSummary>? _requests;
+    private IReadOnlyList<PublicProductSummary> _products = [];
+    private ManualRequestForm _manualRequest = new();
+    private Guid? _convertingRequestId;
+    private Guid? _deletingRequestId;
+    private RequestSummary? _pendingDeleteRequest;
+    private Guid? _selectedRequestId;
+    private string _targetStatus = string.Empty;
+    private string _statusReason = string.Empty;
+    private IReadOnlyList<RequestStatusHistoryItem>? _history;
+
+    protected override async Task OnInitializedAsync()
+    {
+        _products = await CatalogService.GetPublishedProductsAsync();
+        await LoadAsync();
+    }
+
+    private async Task LoadAsync()
+    {
+        _requests = await RequestService.GetAllAsync();
+    }
+
+    private async Task ConvertAsync(Guid id)
+    {
+        _errors.Clear();
+        _convertingRequestId = id;
+
+        try
+        {
+            var result = await RequestService.ConvertAsync(id, await GetCurrentUserIdAsync());
+            if (!result.Succeeded)
+            {
+                _errors.AddRange(result.Errors);
+            }
+
+            await LoadAsync();
+        }
+        catch
+        {
+            _errors.Add("No se pudo convertir la solicitud. Inténtalo nuevamente.");
+        }
+        finally
+        {
+            _convertingRequestId = null;
+        }
+    }
+
+    private void BeginStatusChange(Guid requestId, string status)
+    {
+        _selectedRequestId = requestId;
+        _targetStatus = status;
+        _statusReason = string.Empty;
+    }
+
+    private void CancelStatusChange()
+    {
+        _selectedRequestId = null;
+        _targetStatus = string.Empty;
+        _statusReason = string.Empty;
+    }
+
+    private async Task SaveStatusAsync()
+    {
+        if (_selectedRequestId is null) return;
+        _errors.Clear();
+        var result = await RequestService.ChangeStatusAsync(_selectedRequestId.Value, _targetStatus, _statusReason, await GetCurrentUserIdAsync());
+        if (!result.Succeeded) _errors.AddRange(result.Errors);
+        else CancelStatusChange();
+        await LoadAsync();
+    }
+
+    private async Task LoadHistoryAsync(Guid requestId)
+    {
+        _history = await RequestService.GetHistoryAsync(requestId);
+    }
+
+    private void BeginDelete(RequestSummary request)
+    {
+        _errors.Clear();
+        _pendingDeleteRequest = request;
+    }
+
+    private void CancelDelete() => _pendingDeleteRequest = null;
+
+    private async Task DeleteAsync()
+    {
+        if (_pendingDeleteRequest is null) return;
+        _errors.Clear();
+        _deletingRequestId = _pendingDeleteRequest.Id;
+        try
+        {
+            var result = await RequestService.DeleteAsync(_pendingDeleteRequest.Id, await GetCurrentUserIdAsync());
+            if (!result.Succeeded)
+            {
+                _errors.AddRange(result.Errors);
+                return;
+            }
+
+            if (_selectedRequestId == _pendingDeleteRequest.Id) CancelStatusChange();
+            _history = null;
+            _pendingDeleteRequest = null;
+            await LoadAsync();
+        }
+        catch
+        {
+            _errors.Add("No se pudo eliminar la solicitud. Inténtalo nuevamente.");
+        }
+        finally
+        {
+            _deletingRequestId = null;
+        }
+    }
+
+    private async Task CreateManualRequestAsync()
+    {
+        _errors.Clear();
+        var result = await RequestService.CreateManualAsync(new CreateManualRequestCommand(
+            _manualRequest.ContactName, _manualRequest.Phone, _manualRequest.Email, _manualRequest.Notes,
+            _manualRequest.Location, _manualRequest.ProductId, _manualRequest.Quantity, await GetCurrentUserIdAsync()));
+        if (!result.Succeeded) _errors.AddRange(result.Errors);
+        else _manualRequest = new ManualRequestForm();
+        await LoadAsync();
+    }
+
+    private async Task<Guid> GetCurrentUserIdAsync()
+    {
+        var authenticationState = await AuthenticationStateProvider.GetAuthenticationStateAsync();
+        var value = authenticationState.User.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value;
+        return Guid.TryParse(value, out var userId) ? userId : throw new InvalidOperationException("No se pudo identificar al usuario actual.");
+    }
+
+    private static string StatusText(string status) => status switch
+    {
+        "New" => "Nueva",
+        "Contacted" => "Contactada",
+        "Converted" => "Convertida",
+        "Closed" => "Cerrada",
+        _ => status
+    };
+
+    private sealed class ManualRequestForm
+    {
+        public string ContactName { get; set; } = string.Empty;
+        public string Phone { get; set; } = string.Empty;
+        public string? Email { get; set; }
+        public string? Notes { get; set; }
+        public string? Location { get; set; }
+        public Guid ProductId { get; set; }
+        public int Quantity { get; set; } = 1;
+    }
+}

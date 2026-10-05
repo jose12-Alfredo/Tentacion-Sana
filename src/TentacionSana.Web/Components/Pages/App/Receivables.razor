@@ -1,0 +1,304 @@
+@page "/app/cuentas-por-cobrar"
+@layout AdminLayout
+@rendermode InteractiveServer
+@attribute [Authorize(Policy=AppPolicies.ManageFinance)]
+@inject IReceivablesService AccountService
+@inject AuthenticationStateProvider Auth
+@inject IJSRuntime JS
+
+<PageTitle>Cuentas por cobrar | Tentaci&oacute;n Sana</PageTitle>
+
+<header class="receivables-heading">
+    <div><span>FINANZAS</span><h1>Cuentas por cobrar</h1><p>Controla saldos, registra pagos y genera estados de cuenta con sus respaldos.</p></div>
+    <time datetime="@DateTime.Today.ToString("yyyy-MM-dd")">@DateTime.Today.ToString("dddd, dd 'de' MMMM 'de' yyyy")</time>
+</header>
+
+@if (_message is not null) { <div class="status-message @(_isError ? "error" : null)" role="status">@_message</div> }
+
+@if (_overview is null)
+{
+    <div class="loading-state">Cargando cuentas por cobrar&hellip;</div>
+}
+else
+{
+    var filteredMetrics = CurrentFilterMetrics;
+    <section class="finance-metrics" aria-label="Resumen de cuentas por cobrar">
+        <article><span class="metric-icon money">$</span><div><strong>@Money(filteredMetrics.TotalPending)</strong><small>Total pendiente por cobrar</small></div></article>
+        <article><span class="metric-icon people">R</span><div><strong>@filteredMetrics.ResponsiblePartiesWithDebt</strong><small>Responsables con deuda</small></div></article>
+        <article><span class="metric-icon partial">&#189;</span><div><strong>@filteredMetrics.PartiallyPaidOrders</strong><small>Pedidos con pago parcial</small></div></article>
+        <article><span class="metric-icon overdue">!</span><div><strong>@filteredMetrics.OverdueOrders</strong><small>Pedidos vencidos</small></div></article>
+    </section>
+
+    <section class="receivable-filters" aria-label="Filtros">
+        <label class="search-field"><span>Buscar</span><input @bind="_search" @bind:event="oninput" placeholder="Responsable, cliente, sucursal o pedido" /></label>
+        <label><span>Cliente</span><select value="@_customer" @onchange="ChangeCustomer"><option value="All">Todos los clientes</option>@foreach (var customer in CustomerOptions) { <option value="@customer">@customer</option> }</select></label>
+        <label><span>Sucursal</span><select @bind="_branch"><option value="All">Todas las sucursales</option>@foreach (var branch in BranchOptions) { <option value="@branch">@branch</option> }</select></label>
+        <label><span>Estado</span><select @bind="_status"><option value="All">Todos</option><option value="Unpaid">Sin pago</option><option value="Partial">Parcial</option><option value="Paid">Pagado</option><option value="Overdue">Vencido</option></select></label>
+        <label><span>Antig&uuml;edad</span><select @bind="_age"><option value="All">Todas</option><option value="0-3">0-3 d&iacute;as</option><option value="4-7">4-7 d&iacute;as</option><option value="8+">+7 d&iacute;as</option></select></label>
+    </section>
+
+    @if (!FilteredPayers.Any())
+    {
+        <section class="empty-state"><strong>No hay cuentas que coincidan.</strong><span>Prueba con otros filtros o una b&uacute;squeda m&aacute;s amplia.</span></section>
+    }
+    else
+    {
+        <section class="payer-list" aria-label="Cuentas agrupadas por responsable">
+            @foreach (var payer in FilteredPayers)
+            {
+                var visibleOrders = FilteredOrders(payer).ToList();
+                <details class="payer-card" open>
+                    <summary>
+                        <div class="payer-identity"><span class="payer-mark" aria-hidden="true">R</span><div><h2>@payer.Name</h2><p>@string.Join(" \u00B7 ", payer.Customers)</p>@if (!string.IsNullOrWhiteSpace(payer.ContactName)) { <small>@payer.ContactName &middot; @payer.Phone</small> } else { <small>@payer.Phone</small> }</div></div>
+                        <div class="payer-count"><strong>@visibleOrders.Count</strong><span>@(visibleOrders.Count == 1 ? "pedido" : "pedidos")</span></div>
+                        <div class="payer-balance"><span>@(HasActiveFilters ? "SALDO FILTRADO" : "SALDO TOTAL")</span><strong>@Money(visibleOrders.Sum(x => x.Balance))</strong></div>
+                        <span class="expand-label">Ver pedidos</span>
+                    </summary>
+
+                    <div class="payer-actions">
+                        @if (!string.IsNullOrWhiteSpace(payer.Phone)) { <a class="whatsapp" href="@WhatsApp(payer.Phone)" target="_blank" rel="noopener noreferrer">WhatsApp</a> }
+                        <button class="primary-action" disabled="@(payer.Balance <= 0)" @onclick="() => OpenPayment(payer)">Registrar pago</button>
+                        <button @onclick="() => OpenFilteredReport(payer)">Generar PDF</button>
+                        <button @onclick="() => OpenHistoryAsync(payer)">Ver historial</button>
+                    </div>
+
+                    <div class="orders-table" role="table" aria-label="Pedidos de @payer.Name">
+                        <div class="order-row order-head" role="row"><span>Pedido</span><span>Sucursal</span><span>Entrega</span><span>Total</span><span>Pagado</span><span>Saldo</span><span>Antig&uuml;edad</span><span>Estado</span><span>Evidencias</span></div>
+                        @foreach (var order in visibleOrders)
+                        {
+                            <div class="order-row" role="row">
+                                <strong data-label="Pedido">#@order.OrderNumber</strong><span data-label="Sucursal">@order.Branch</span><span data-label="Entrega">@(order.DeliveredAtUtc?.ToLocalTime().ToString("dd/MM/yyyy") ?? "Sin fecha")</span>
+                                <span data-label="Total">@Money(order.Total)</span><span data-label="Pagado">@Money(order.Paid)</span><strong data-label="Saldo" class="balance-value">@Money(order.Balance)</strong>
+                                <span data-label="Antig&uuml;edad" class="age @AgeClass(order)">@order.AgeDays d&iacute;as</span><span data-label="Estado"><b class="status-pill @order.Status.ToLowerInvariant()">@StatusText(order.Status)</b></span>
+                                <span data-label="Evidencias" class="evidence-count">Entrega: @order.DeliveryEvidenceCount &middot; Pagos: @order.PaymentEvidenceCount</span>
+                            </div>
+                        }
+                        <div class="order-row totals"><strong>Totales</strong><span></span><span></span><strong>@Money(visibleOrders.Sum(x => x.Total))</strong><strong>@Money(visibleOrders.Sum(x => x.Paid))</strong><strong>@Money(visibleOrders.Sum(x => x.Balance))</strong><span></span><span></span><span></span></div>
+                    </div>
+                </details>
+            }
+        </section>
+    }
+}
+
+@if (_paymentPayer is not null)
+{
+    <div class="modal-backdrop" @onclick="ClosePayment">
+        <section class="modal-panel payment-panel" role="dialog" aria-modal="true" aria-labelledby="payment-title" @onclick:stopPropagation>
+            <header><div><span>COBRO</span><h2 id="payment-title">@(_paymentResult is null ? "Registrar pago" : "Pago registrado")</h2></div><button class="close-button" @onclick="ClosePayment" aria-label="Cerrar">&times;</button></header>
+            @if (_paymentResult is not null)
+            {
+                <div class="payment-success"><span aria-hidden="true">&#10003;</span><h3>Pago registrado correctamente.</h3><dl><div><dt>Pago recibido</dt><dd>@Money(_paymentResult.Amount)</dd></div><div><dt>Saldo anterior</dt><dd>@Money(_paymentResult.PreviousBalance)</dd></div><div><dt>Saldo actual</dt><dd>@Money(_paymentResult.CurrentBalance)</dd></div></dl></div>
+                <div class="modal-actions"><button @onclick="GenerateAfterPaymentAsync" disabled="@_saving">Generar reporte PDF</button><button class="secondary" @onclick="ClosePayment">Volver a cuenta</button></div>
+            }
+            else
+            {
+                <div class="payment-context"><div><small>Responsable de pago</small><strong>@_paymentPayer.Name</strong></div><div><small>Saldo actual</small><strong>@Money(_paymentPayer.Balance)</strong></div></div>
+                <div class="form-grid">
+                    <label><span>Monto recibido *</span><input type="number" min="0.01" max="@_paymentPayer.Balance" step="0.01" @bind="_paymentAmount" /></label>
+                    <label><span>M&eacute;todo *</span><select @bind="_paymentMethod"><option value="Qr">QR</option><option value="Cash">Efectivo</option></select></label>
+                    <label><span>Fecha *</span><input type="date" @bind="_paymentDate" /></label>
+                    <label class="evidence-upload"><span>Respaldo *</span><InputFile OnChange="SelectPaymentEvidence" accept="image/jpeg,image/png,image/webp" /><small>@(_paymentEvidence?.Name ?? "JPG, PNG o WebP; m\u00E1ximo 10 MB")</small></label>
+                    <label class="full-field"><span>Observaci&oacute;n</span><textarea @bind="_paymentNotes" rows="3"></textarea></label>
+                    <label class="full-field check-field"><input type="checkbox" @bind="_requiresSettlement" /><span>El usuario actual conserva el efectivo y debe rendirlo</span></label>
+                </div>
+                <fieldset class="allocation-options"><legend>Aplicar pago a pedidos</legend><label><input type="radio" name="allocation" checked="@_applyAutomatically" @onchange="_ => _applyAutomatically = true" /> Aplicar autom&aacute;ticamente a los pedidos m&aacute;s antiguos</label><label><input type="radio" name="allocation" checked="@(!_applyAutomatically)" @onchange="_ => _applyAutomatically = false" /> Seleccionar pedidos manualmente</label></fieldset>
+                @if (!_applyAutomatically)
+                {
+                    <div class="manual-allocations">@foreach (var allocation in _manualAllocations) { <label><span><strong>#@allocation.OrderNumber</strong><small>Saldo @Money(allocation.Balance)</small></span><input type="number" min="0" max="@allocation.Balance" step="0.01" @bind="allocation.Amount" /></label> }<p>Aplicado: <strong>@Money(_manualAllocations.Sum(x => x.Amount))</strong> de @Money(_paymentAmount)</p></div>
+                }
+                else { <p class="allocation-note">El pago se aplicar&aacute; primero a los saldos exigibles con mayor antig&uuml;edad.</p> }
+                <div class="modal-actions"><button class="secondary" @onclick="ClosePayment">Cancelar</button><button @onclick="SavePaymentAsync" disabled="@_saving">@(_saving ? "Registrando\u2026" : "Registrar pago")</button></div>
+            }
+        </section>
+    </div>
+}
+
+@if (_reportPayer is not null)
+{
+    <div class="modal-backdrop" @onclick="CloseReport">
+        <section class="modal-panel report-panel" role="dialog" aria-modal="true" aria-labelledby="report-title" @onclick:stopPropagation>
+            <header><div><span>DOCUMENTO</span><h2 id="report-title">Opciones del reporte PDF</h2></div><button class="close-button" @onclick="CloseReport" aria-label="Cerrar">&times;</button></header>
+            <p>Selecciona el alcance y las evidencias que acompa&ntilde;ar&aacute;n el estado de cuenta de <strong>@_reportPayer.Name</strong>.</p>
+            <label><span>Tipo de reporte</span><select @bind="_reportType"><option value="Current">Estado de cuenta actual</option><option value="History">Estado de cuenta con historial</option></select></label>
+            <fieldset class="report-scope">
+                <legend>Clientes, sucursales y pedidos</legend>
+                <div class="scope-toolbar">
+                    <div><strong>@SelectedReportOrders.Count pedido(s)</strong><span>@SelectedReportBranchCount sucursal(es) &middot; saldo @Money(SelectedReportOrders.Sum(x => x.Balance))</span></div>
+                    <div><button type="button" @onclick="SelectAllReportOrders">Seleccionar todo</button><button type="button" @onclick="ClearReportSelection">Limpiar</button></div>
+                </div>
+                @if (ReportCustomerGroups.Count == 0)
+                {
+                    <p class="empty-scope">No hay pedidos disponibles con las opciones actuales.</p>
+                }
+                else
+                {
+                    <div class="scope-list">
+                        @foreach (var customer in ReportCustomerGroups)
+                        {
+                            <article class="scope-customer">
+                                <label class="scope-customer-title"><input type="checkbox" checked="@AreAllSelected(customer.OrderIds)" @onchange="args => ToggleReportOrders(customer.OrderIds, CheckboxValue(args))" /><span><strong>@customer.Name</strong><small>@customer.Branches.Count sucursal(es)</small></span></label>
+                                @foreach (var branch in customer.Branches)
+                                {
+                                    <div class="scope-branch">
+                                        <label class="scope-branch-title"><input type="checkbox" checked="@AreAllSelected(branch.OrderIds)" @onchange="args => ToggleReportOrders(branch.OrderIds, CheckboxValue(args))" /><span><strong>@branch.Name</strong><small>@branch.Orders.Count pedido(s)</small></span></label>
+                                        <div class="scope-orders">
+                                            @foreach (var order in branch.Orders)
+                                            {
+                                                <label><input type="checkbox" checked="@_selectedReportOrderIds.Contains(order.OrderId)" @onchange="args => ToggleReportOrder(order.OrderId, CheckboxValue(args))" /><span><strong>#@order.OrderNumber</strong><small>@Money(order.Balance) pendiente</small></span></label>
+                                            }
+                                        </div>
+                                    </div>
+                                }
+                            </article>
+                        }
+                    </div>
+                }
+            </fieldset>
+            <fieldset class="report-options"><legend>Incluir en el reporte</legend><label><input type="checkbox" @bind="_includeDeliveryEvidence" /> Boletas de entrega</label><label><input type="checkbox" @bind="_includePaymentEvidence" /> Comprobantes de pago</label><label><input type="checkbox" @bind="_includePartialPayments" /> Pagos parciales</label><label><input type="checkbox" checked="@_includePaidOrders" @onchange="ToggleIncludePaidOrders" /> Pedidos hist&oacute;ricos ya pagados</label></fieldset>
+            <p class="report-hint">@(_reportType == "Current" && !_includePaidOrders ? "Se incluir\u00E1n solo pedidos con saldo pendiente." : "Se incluir\u00E1 el historial seg\u00FAn las opciones seleccionadas.")</p>
+            @if (_reportSelectionError is not null) { <p class="report-error" role="alert">@_reportSelectionError</p> }
+            <div class="modal-actions"><button class="secondary" @onclick="CloseReport">Cancelar</button><button @onclick="GenerateReportAsync" disabled="@_saving">@(_saving ? "Generando\u2026" : "Generar PDF")</button></div>
+        </section>
+    </div>
+}
+
+@if (_history is not null)
+{
+    <div class="modal-backdrop" @onclick="CloseHistory">
+        <section class="modal-panel history-panel" role="dialog" aria-modal="true" aria-labelledby="history-title" @onclick:stopPropagation>
+            <header><div><span>TRAZABILIDAD</span><h2 id="history-title">Historial de @_history.Name</h2></div><button class="close-button" @onclick="CloseHistory" aria-label="Cerrar">&times;</button></header>
+            <div class="history-actions"><button @onclick="OpenHistoricalReport">Generar estado con historial</button></div>
+            <h3>Pagos y aplicaciones</h3>
+            @if (_history.Payments.Count == 0) { <p class="empty-inline">Todav&iacute;a no hay pagos registrados.</p> }
+            else { <ul class="history-list">@foreach (var payment in _history.Payments) { <li><div><strong>@Money(payment.Amount) &middot; @MethodText(payment.Method)</strong><span>@payment.PaymentDateUtc.ToLocalTime().ToString("dd/MM/yyyy HH:mm")</span>@if (!string.IsNullOrWhiteSpace(payment.Notes)) { <small>@payment.Notes</small> }</div><p>@string.Join(" \u00B7 ", payment.Applications.Select(x => $"#{x.OrderNumber}: {Money(x.Amount)}"))</p></li> }</ul> }
+            <h3>Reportes generados</h3>
+            @if (_history.Reports.Count == 0) { <p class="empty-inline">Todav&iacute;a no hay reportes auditados.</p> }
+            else { <ul class="history-list reports">@foreach (var report in _history.Reports) { <li><div><strong>@report.ReportNumber</strong><span>@report.GeneratedAtUtc.ToLocalTime().ToString("dd/MM/yyyy HH:mm")</span></div><p>@ReportTypeText(report.Type) &middot; @report.OrderCount pedido(s) &middot; saldo @Money(report.BalanceAtGeneration)</p></li> }</ul> }
+        </section>
+    </div>
+}
+
+@code {
+    private ReceivablesOverview? _overview;
+    private string _search = string.Empty, _customer = "All", _branch = "All", _status = "All", _age = "All";
+    private string? _message; private bool _isError, _saving;
+    private PayerAccountItem? _paymentPayer, _reportPayer; private PayerAccountHistory? _history;
+    private decimal _paymentAmount; private string _paymentMethod = "Qr", _paymentNotes = string.Empty; private DateTime _paymentDate = DateTime.Today;
+    private bool _requiresSettlement, _applyAutomatically = true; private IBrowserFile? _paymentEvidence; private readonly List<AllocationInput> _manualAllocations = [];
+    private PayerPaymentResult? _paymentResult;
+    private string _reportType = "Current"; private bool _includeDeliveryEvidence = true, _includePaymentEvidence = true, _includePartialPayments = true, _includePaidOrders; private Guid? _reportPaymentId;
+    private string? _reportSelectionError; private readonly HashSet<Guid> _selectedReportOrderIds = []; private readonly HashSet<Guid> _reportTriggerOrderIds = [];
+
+    private IReadOnlyList<string> CustomerOptions => (_overview?.ResponsibleParties ?? []).SelectMany(x => x.Orders).Select(x => x.Customer).Distinct().OrderBy(x => x).ToList();
+    private IReadOnlyList<string> BranchOptions => (_overview?.ResponsibleParties ?? []).SelectMany(x => x.Orders)
+        .Where(x => _customer == "All" || x.Customer == _customer).Select(x => x.Branch).Distinct().OrderBy(x => x).ToList();
+    private bool HasActiveFilters => !string.IsNullOrWhiteSpace(_search) || _customer != "All" || _branch != "All" || _status != "All" || _age != "All";
+    private IEnumerable<PayerAccountItem> FilteredPayers => (_overview?.ResponsibleParties ?? []).Where(p => FilteredOrders(p).Any()).OrderByDescending(p => FilteredOrders(p).Sum(x => x.Balance));
+    private IEnumerable<ReceivableOrderItem> FilteredOrders(PayerAccountItem payer) => payer.Orders.Where(order =>
+        MatchesSearch(payer, order) &&
+        (_customer == "All" || order.Customer == _customer) &&
+        (_branch == "All" || order.Branch == _branch) &&
+        (_status == "All" || order.Status == _status) &&
+        (_age == "All" || _age == "0-3" && order.AgeDays <= 3 || _age == "4-7" && order.AgeDays is >= 4 and <= 7 || _age == "8+" && order.AgeDays > 7));
+    private FilterMetrics CurrentFilterMetrics
+    {
+        get
+        {
+            var groups = (_overview?.ResponsibleParties ?? []).Select(payer => new { payer.ResponsiblePartyId, Orders = FilteredOrders(payer).ToList() }).Where(x => x.Orders.Count > 0).ToList();
+            var orders = groups.SelectMany(x => x.Orders).ToList();
+            return new FilterMetrics(orders.Sum(x => x.Balance), groups.Count(x => x.Orders.Sum(order => order.Balance) > 0), orders.Count(x => x.Paid > 0 && x.Balance > 0), orders.Count(x => x.Status == "Overdue"));
+        }
+    }
+    protected override async Task OnInitializedAsync() => await ReloadAsync();
+    private async Task ReloadAsync() => _overview = await AccountService.GetOverviewAsync();
+    private bool MatchesSearch(PayerAccountItem payer, ReceivableOrderItem order) { var query = _search.Trim(); return query.Length == 0 || payer.Name.Contains(query, StringComparison.OrdinalIgnoreCase) || order.Customer.Contains(query, StringComparison.OrdinalIgnoreCase) || order.Branch.Contains(query, StringComparison.OrdinalIgnoreCase) || order.OrderNumber.ToString().Contains(query, StringComparison.OrdinalIgnoreCase); }
+    private void ChangeCustomer(ChangeEventArgs args) { _customer = args.Value?.ToString() ?? "All"; if (_branch != "All" && !BranchOptions.Contains(_branch)) _branch = "All"; }
+
+    private void OpenPayment(PayerAccountItem payer) { _paymentPayer = payer; _paymentAmount = payer.Balance; _paymentMethod = "Qr"; _paymentDate = DateTime.Today; _paymentNotes = string.Empty; _paymentEvidence = null; _requiresSettlement = false; _applyAutomatically = true; _paymentResult = null; _manualAllocations.Clear(); _manualAllocations.AddRange(payer.Orders.Where(x => x.Balance > 0).Select(x => new AllocationInput(x.OrderId, x.OrderNumber, x.Balance))); ClearMessage(); }
+    private void ClosePayment() { _paymentPayer = null; _paymentResult = null; }
+    private void SelectPaymentEvidence(InputFileChangeEventArgs e) => _paymentEvidence = e.File;
+    private async Task SavePaymentAsync()
+    {
+        if (_paymentPayer is null || _saving) return;
+        if (_paymentEvidence is null) { SetMessage("Debes adjuntar un respaldo para registrar el pago.", true); return; }
+        if (_paymentAmount <= 0 || _paymentAmount > _paymentPayer.Balance) { SetMessage("Ingresa un monto v\u00E1lido que no supere el saldo.", true); return; }
+        _saving = true; ClearMessage();
+        try
+        {
+            var userId = await CurrentUserIdAsync();
+            await using var content = _paymentEvidence.OpenReadStream(10 * 1024 * 1024);
+            var paidAt = new DateTimeOffset(DateTime.SpecifyKind(_paymentDate, DateTimeKind.Local)).ToUniversalTime();
+            var result = await AccountService.RegisterPaymentAsync(new(_paymentPayer.ResponsiblePartyId, Guid.NewGuid().ToString("N"), _paymentAmount, _paymentMethod, paidAt, _paymentNotes, _requiresSettlement, _applyAutomatically,
+                _manualAllocations.Where(x => x.Amount > 0).Select(x => new ManualPaymentAllocation(x.OrderId, x.Amount)).ToList(), content, _paymentEvidence.Name, _paymentEvidence.ContentType, _paymentEvidence.Size), userId);
+            if (!result.Succeeded) { SetMessage(string.Join(" ", result.Errors), true); return; }
+            _paymentResult = result; _reportPaymentId = result.PaymentId; await ReloadAsync();
+        }
+        finally { _saving = false; }
+    }
+
+    private IReadOnlyList<ReceivableOrderItem> ReportEligibleOrders => _reportPayer?.Orders
+        .Where(x => _includePaidOrders || x.Balance > 0 || _reportTriggerOrderIds.Contains(x.OrderId))
+        .OrderBy(x => x.Customer).ThenBy(x => x.Branch).ThenBy(x => x.OrderNumber).ToList() ?? [];
+    private IReadOnlyList<ReceivableOrderItem> SelectedReportOrders => ReportEligibleOrders.Where(x => _selectedReportOrderIds.Contains(x.OrderId)).ToList();
+    private int SelectedReportBranchCount => SelectedReportOrders.Select(x => (x.Customer, x.Branch)).Distinct().Count();
+    private IReadOnlyList<ReportCustomerGroup> ReportCustomerGroups => ReportEligibleOrders.GroupBy(x => x.Customer)
+        .Select(customer => new ReportCustomerGroup(customer.Key, customer.GroupBy(x => x.Branch)
+            .Select(branch => new ReportBranchGroup(branch.Key, branch.ToList())).OrderBy(x => x.Name).ToList()))
+        .OrderBy(x => x.Name).ToList();
+
+    private void OpenReport(PayerAccountItem payer, Guid? paymentId = null, IReadOnlyList<Guid>? triggerOrderIds = null)
+    {
+        _reportPayer = payer; _reportType = "Current"; _includeDeliveryEvidence = true; _includePaymentEvidence = true; _includePartialPayments = true; _includePaidOrders = false;
+        _reportPaymentId = paymentId; _reportSelectionError = null; _reportTriggerOrderIds.Clear();
+        if (triggerOrderIds is not null) _reportTriggerOrderIds.UnionWith(triggerOrderIds);
+        SelectAllReportOrders(); ClearMessage();
+    }
+    private void OpenFilteredReport(PayerAccountItem payer)
+    {
+        var visibleOrders = FilteredOrders(payer).ToList();
+        OpenReport(payer);
+        if (visibleOrders.Any(x => x.Balance <= 0)) { _includePaidOrders = true; SelectAllReportOrders(); }
+        _selectedReportOrderIds.IntersectWith(visibleOrders.Select(x => x.OrderId));
+    }
+    private void CloseReport() { _reportPayer = null; _reportSelectionError = null; }
+    private void SelectAllReportOrders() { _selectedReportOrderIds.Clear(); _selectedReportOrderIds.UnionWith(ReportEligibleOrders.Select(x => x.OrderId)); _reportSelectionError = null; }
+    private void ClearReportSelection() { _selectedReportOrderIds.Clear(); _reportSelectionError = null; }
+    private bool AreAllSelected(IReadOnlyList<Guid> orderIds) => orderIds.Count > 0 && orderIds.All(_selectedReportOrderIds.Contains);
+    private static bool CheckboxValue(ChangeEventArgs args) => args.Value is true || bool.TryParse(args.Value?.ToString(), out var value) && value;
+    private void ToggleReportOrder(Guid orderId, bool selected) { if (selected) _selectedReportOrderIds.Add(orderId); else _selectedReportOrderIds.Remove(orderId); _reportSelectionError = null; }
+    private void ToggleReportOrders(IReadOnlyList<Guid> orderIds, bool selected) { foreach (var orderId in orderIds) ToggleReportOrder(orderId, selected); }
+    private void ToggleIncludePaidOrders(ChangeEventArgs args) { _includePaidOrders = CheckboxValue(args); _selectedReportOrderIds.IntersectWith(ReportEligibleOrders.Select(x => x.OrderId)); _reportSelectionError = null; }
+    private async Task GenerateReportAsync()
+    {
+        if (_reportPayer is null || _saving) return;
+        var selectedOrderIds = SelectedReportOrders.Select(x => x.OrderId).ToList();
+        if (selectedOrderIds.Count == 0) { _reportSelectionError = "Selecciona al menos un pedido para generar el reporte."; return; }
+        _saving = true; _reportSelectionError = null; ClearMessage();
+        try
+        {
+            var result = await AccountService.GenerateStatementAsync(new(_reportPayer.ResponsiblePartyId, _reportType, _includeDeliveryEvidence, _includePaymentEvidence, _includePartialPayments, _includePaidOrders, _reportPaymentId, selectedOrderIds), await CurrentUserIdAsync());
+            if (!result.Succeeded || result.Content is null || result.FileName is null) { _reportSelectionError = string.Join(" ", result.Errors); return; }
+            await JS.InvokeVoidAsync("tentacionSana.downloadBase64", result.FileName, "application/pdf", Convert.ToBase64String(result.Content));
+            SetMessage($"Reporte {result.ReportNumber} generado correctamente.", false); _reportPayer = null;
+        }
+        finally { _saving = false; }
+    }
+    private Task GenerateAfterPaymentAsync() { if (_paymentPayer is null || _paymentResult?.PaymentId is null) return Task.CompletedTask; var payer = (_overview?.ResponsibleParties ?? []).SingleOrDefault(x => x.ResponsiblePartyId == _paymentPayer.ResponsiblePartyId) ?? _paymentPayer; var paymentId = _paymentResult.PaymentId; var triggerOrderIds = _paymentResult.Applications.Select(x => x.OrderId).ToList(); _paymentPayer = null; OpenReport(payer, paymentId, triggerOrderIds); return Task.CompletedTask; }
+    private async Task OpenHistoryAsync(PayerAccountItem payer) { _history = await AccountService.GetHistoryAsync(payer.ResponsiblePartyId); }
+    private void CloseHistory() => _history = null;
+    private void OpenHistoricalReport() { if (_history is null || _overview is null) return; var payer = _overview.ResponsibleParties.Single(x => x.ResponsiblePartyId == _history.ResponsiblePartyId); _history = null; OpenReport(payer); _reportType = "History"; _includePaidOrders = true; SelectAllReportOrders(); }
+    private async Task<Guid> CurrentUserIdAsync() { var state = await Auth.GetAuthenticationStateAsync(); return Guid.Parse(state.User.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)!.Value); }
+    private void SetMessage(string value, bool error) { _message = value; _isError = error; }
+    private void ClearMessage() { _message = null; _isError = false; }
+    private static string Money(decimal value) => $"Bs {value:N2}";
+    private static string StatusText(string status) => status switch { "Paid" => "Pagado", "Partial" => "Parcial", "Overdue" => "Vencido", _ => "Sin pago" };
+    private static string MethodText(string method) => method == "Qr" ? "QR" : "Efectivo";
+    private static string ReportTypeText(string type) => type == "History" ? "Con historial" : "Actual";
+    private static string AgeClass(ReceivableOrderItem order) => order.AgeDays > 7 ? "late" : order.AgeDays > 3 ? "warning" : string.Empty;
+    private static string WhatsApp(string phone) { var digits = new string(phone.Where(char.IsDigit).ToArray()); if (!digits.StartsWith("591", StringComparison.Ordinal)) digits = "591" + digits.TrimStart('0'); return $"https://wa.me/{digits}"; }
+    private sealed class AllocationInput(Guid orderId, long orderNumber, decimal balance) { public Guid OrderId { get; } = orderId; public long OrderNumber { get; } = orderNumber; public decimal Balance { get; } = balance; public decimal Amount { get; set; } }
+    private sealed record FilterMetrics(decimal TotalPending, int ResponsiblePartiesWithDebt, int PartiallyPaidOrders, int OverdueOrders);
+    private sealed record ReportBranchGroup(string Name, IReadOnlyList<ReceivableOrderItem> Orders) { public IReadOnlyList<Guid> OrderIds { get; } = Orders.Select(x => x.OrderId).ToList(); }
+    private sealed record ReportCustomerGroup(string Name, IReadOnlyList<ReportBranchGroup> Branches) { public IReadOnlyList<Guid> OrderIds { get; } = Branches.SelectMany(x => x.OrderIds).ToList(); }
+}

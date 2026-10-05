@@ -1,0 +1,337 @@
+@page "/app/inventario"
+@layout AdminLayout
+@rendermode InteractiveServer
+@attribute [Authorize(Policy = AppPolicies.ManageProduction)]
+@inject IInventoryService Inventory
+@inject IOrderManagementService Orders
+@inject AuthenticationStateProvider Auth
+
+<PageTitle>Inventario de insumos | Tentación Sana</PageTitle>
+
+<header class="inventory-heading">
+    <div><p>Inventario de producción</p><h1>De la compra a cada receta</h1><span>Registra paquetes completos; el sistema convierte y descuenta gramos, mililitros o unidades.</span></div>
+    <a href="/app/produccion">Registrar producción <span>→</span></a>
+</header>
+
+@if (_message is not null) { <p class="status-message">@_message</p> }
+@if (_errors.Count > 0) { <div class="error-summary" role="alert">@foreach (var error in _errors) { <p>@error</p> }</div> }
+
+<section class="inventory-summary" aria-label="Resumen del inventario">
+    <article><small>Insumos activos</small><strong>@_dashboard.Supplies.Count</strong><span>con saldo controlado</span></article>
+    <article class="alert"><small>Faltantes para pedidos</small><strong>@ShortageCount</strong><span>insumos por comprar</span></article>
+    <article><small>Compra estimada</small><strong>Bs @EstimatedPurchase.ToString("N2")</strong><span>según el último precio</span></article>
+    <article class="recipe"><small>Productos sin receta</small><strong>@_dashboard.ProductsWithoutRecipe.Count</strong><span>con producción pendiente</span></article>
+</section>
+
+<section class="purchase-plan">
+    <header><div><small>Lista calculada</small><h2>Qué hace falta comprar</h2><p>Se calcula con los faltantes de producto terminado de pedidos confirmados. El pedido puede confirmarse aunque falten insumos.</p></div><span class="plan-state">@(_dashboard.Requirements.Any(x => x.Shortage > 0) ? "Requiere compra" : "Producción cubierta")</span></header>
+    @if (_dashboard.ProductsWithoutRecipe.Count > 0)
+    {
+        <div class="recipe-warning"><strong>No se pudo calcular todo.</strong> Configura la receta de @_dashboard.ProductsWithoutRecipe.Count producto(s): @string.Join(", ", _dashboard.ProductsWithoutRecipe.Select(x => $"{x.Product} ({x.UnitsToProduce} uds)"))</div>
+    }
+    @if (_dashboard.Requirements.Count == 0)
+    {
+        <div class="empty-state">No hay insumos pendientes. Cuando un pedido confirmado genere producción, aquí aparecerá la lista de compra.</div>
+    }
+    else
+    {
+        <div class="table-shell"><table><thead><tr><th>Insumo</th><th>Necesario</th><th>Saldo</th><th>Falta</th><th>Presentación</th><th>Comprar</th><th>Costo est.</th><th>Estado</th></tr></thead><tbody>
+            @foreach (var item in _dashboard.Requirements)
+            {
+                <tr><td data-label="Insumo"><strong>@item.Supply</strong></td><td data-label="Necesario">@Quantity(item.Required) @item.Unit</td><td data-label="Saldo">@Quantity(item.Stock) @item.Unit</td><td data-label="Falta"><strong class="@(item.Shortage > 0 ? "shortage" : "covered")">@Quantity(item.Shortage) @item.Unit</strong></td><td data-label="Presentación">@item.PurchasePresentation <small>@Quantity(item.BaseQuantityPerPackage) @item.Unit</small></td><td data-label="Comprar"><strong>@Quantity(item.PackagesToBuy)</strong> paquete(s)</td><td data-label="Costo">@(item.EstimatedCost is null ? "Sin precio" : $"Bs {item.EstimatedCost:N2}")</td><td data-label="Estado"><span class="status-chip @(item.Shortage > 0 ? "missing" : "ready")">@(item.Shortage > 0 ? "Falta comprar" : "Disponible")</span></td></tr>
+            }
+        </tbody></table></div>
+    }
+</section>
+
+<div class="work-grid">
+    <section class="work-card purchase-card">
+        <header><span class="step">01</span><div><small>Entrada</small><h2>Registrar una compra</h2></div></header>
+        <label>Insumo<select @bind="_purchaseSupplyId" @bind:after="PurchaseSupplyChanged"><option value="">Selecciona</option>@foreach (var item in _dashboard.Supplies) { <option value="@item.Id">@item.Name</option> }</select></label>
+        @if (SelectedPurchaseSupply is not null) { <p class="conversion">Puedes cambiar la presentación solo para esta compra. Todo se convertirá a <strong>@PurchaseUnitText</strong> y se sumará al mismo saldo.</p> }
+        <div class="field-grid purchase-presentation"><label>Fecha<input type="date" @bind="_purchaseDate" /></label><label>Unidad de medida<select @bind="_purchaseUnit"><option value="Gram">Gramos (g)</option><option value="Milliliter">Mililitros (ml)</option><option value="Unit">Unidades</option></select></label><label>Presentación comprada<input @bind="_purchasePresentation" placeholder="Ej.: bolsa de 800 g" /></label><label>Contenido de cada paquete<input type="number" min="0.0001" step="0.0001" @bind="_purchasePackageContent" /><span class="field-unit">@PurchaseUnitText por paquete</span></label></div>
+        <div class="field-grid purchase-amount"><label>Cantidad de paquetes<input type="number" min="0.0001" step="0.0001" @bind="_purchasePackages" /></label><label>Precio por paquete (Bs)<input type="number" min="0" step="0.01" @bind="_purchaseUnitPrice" /></label></div>
+        <div class="field-grid purchase-amount"><label>Forma de pago<select @bind="_purchasePaymentMethod"><option value="">Selecciona</option><option value="Qr">Banco / QR</option><option value="Cash">Caja / efectivo</option><option value="Rendition">Rendición</option></select></label>@if(_purchasePaymentMethod=="Rendition"){<label>Persona que pagó<input @bind="_purchaseRenditionPerson" placeholder="Nombre completo" /></label>}<label>Foto del comprobante<InputFile OnChange="e=>_purchaseEvidence=e.File" accept="image/jpeg,image/png,image/webp" /></label></div>
+        <div class="calculation"><span>Entrada al saldo</span><strong>@Quantity(PurchaseBaseQuantity) @(SelectedPurchaseSupply?.Unit ?? "")</strong><span>Total: Bs @((_purchasePackages * _purchaseUnitPrice).ToString("N2"))</span></div>
+        <button class="primary" @onclick="RegisterPurchaseAsync" disabled="@(_saving || _purchaseSupplyId == Guid.Empty || string.IsNullOrWhiteSpace(_purchasePresentation) || _purchasePackageContent <= 0 || _purchasePackages <= 0 || string.IsNullOrWhiteSpace(_purchasePaymentMethod) || _purchaseEvidence is null || (_purchasePaymentMethod=="Rendition"&&string.IsNullOrWhiteSpace(_purchaseRenditionPerson)))">@(_saving ? "Guardando compra…" : "Registrar compra")</button>
+    </section>
+
+    <section class="work-card supply-card">
+        <header><span class="step">02</span><div><small>Catálogo</small><h2>Crear un insumo</h2></div></header>
+        <label>Nombre<input @bind="_supplyName" placeholder="Ej.: Cocoa Celinda" /></label>
+        <div class="field-grid"><label>Unidad usada en la receta<select @bind="_supplyUnit"><option value="Gram">Gramos (g)</option><option value="Milliliter">Mililitros (ml)</option><option value="Unit">Unidades</option></select></label><label>Nombre de una presentación<input @bind="_supplyPresentation" placeholder="Ej.: caja de 1 litro" /></label><label>Contenido de UNA presentación<input type="number" min="0.0001" step="0.0001" @bind="_supplyPackageContent" /><span class="field-unit">@NewSupplyUnitText</span></label></div>
+        <p class="helper"><strong>Ejemplo para leche:</strong> unidad “ml”, presentación “caja de 1 litro” y contenido “1.000”. Luego una compra de 21 cajas suma 21.000 ml.</p>
+        <button class="primary" @onclick="CreateSupplyAsync" disabled="@_saving">Crear insumo</button>
+    </section>
+</div>
+
+<section class="recipe-builder">
+    <header><div><small>Fórmula de producción</small><h2>Receta por rendimiento</h2><p>Escribe lo que consume una tanda. Para el budín del ejemplo, el rendimiento es 5 unidades.</p></div><span class="version-tag">@(_loadedRecipe is null ? "Nueva receta" : $"Versión {_loadedRecipe.Version + 1}")</span></header>
+    <div class="recipe-top"><label>Producto<select @bind="_recipeProductId" @bind:after="LoadRecipeAsync"><option value="">Selecciona</option>@foreach (var product in _products) { <option value="@product.Id">@product.Name</option> }</select></label><label>Nombre de la receta<input @bind="_recipeName" placeholder="Ej.: Budín estándar" /></label><label>Esta receta rinde<input type="number" min="0.0001" step="0.0001" @bind="_recipeYield" /><span>unidades terminadas</span></label></div>
+    <div class="recipe-lines">
+        <div class="line-heading"><span>Insumo</span><span>Cantidad usada en la tanda</span><span></span></div>
+        @foreach (var line in _recipeLines)
+        {
+            <div class="recipe-line" @key="line.RowId"><select @bind="line.SupplyId"><option value="">Selecciona un insumo</option>@foreach (var supply in _dashboard.Supplies) { <option value="@supply.Id" disabled="@IsSupplySelectedInAnotherLine(supply.Id, line)">@supply.Name</option> }</select><label><input type="number" min="0.0001" step="0.0001" @bind="line.Quantity" /><span>@UnitFor(line.SupplyId)</span></label><button aria-label="Quitar insumo" @onclick="() => RemoveRecipeLine(line)">×</button></div>
+        }
+    </div>
+    <div class="recipe-actions"><button class="secondary" @onclick="AddRecipeLine">+ Añadir insumo</button><button class="primary" @onclick="SaveRecipeAsync" disabled="@(_saving || _recipeProductId == Guid.Empty)">Guardar nueva versión</button></div>
+    <aside class="drop-note"><strong>Conversión del edulcorante</strong><span>100 gotas = 5 ml, por tanto 60 gotas = 3 ml. En la receta de 5 budines registra <b>3 ml</b>.</span></aside>
+</section>
+
+<section class="stock-section">
+    <header><div><small>Saldo actual</small><h2>Inventario de insumos</h2></div><span>Usa “Stock inicial / ajustar” para cargar sin costo lo que ya tienes en tu cocina.</span></header>
+    @if (_dashboard.Supplies.Count == 0) { <div class="empty-state">Crea el primer insumo para comenzar.</div> }
+    else { <div class="stock-grid">@foreach (var item in _dashboard.Supplies) { <article class="@(item.Stock < 0 ? "negative" : null)"><div><strong>@item.Name</strong><small>@item.PurchasePresentation · @Quantity(item.BaseQuantityPerPackage) @item.Unit</small></div><p>@Quantity(item.Stock) <span>@item.Unit</span></p><footer><span>@Quantity(item.PackageEquivalent) paquetes</span><div class="stock-actions"><button @onclick="() => OpenEdit(item)">Editar</button><button @onclick="() => OpenCount(item)">Stock inicial / ajustar</button></div></footer></article> }</div> }
+</section>
+
+@if (_countSupply is not null)
+{
+    <div class="modal-backdrop" @onclick="CloseCount"><section class="count-dialog" role="dialog" aria-modal="true" @onclick:stopPropagation><header><div><small>Entrada sin costo / conteo físico</small><h2>@_countSupply.Name</h2></div><button @onclick="CloseCount">×</button></header><p>Saldo del sistema: <strong>@Quantity(_countSupply.Stock) @_countSupply.Unit</strong>. Escribe la <strong>cantidad total que realmente tienes en la cocina</strong>. El sistema ajustará la diferencia sin registrar una compra ni asignarle costo.</p>@if (_errors.Count > 0) { <div class="modal-errors">@foreach (var error in _errors) { <span>@error</span> }</div> }<label>Cantidad total disponible<input type="number" min="0" step="0.0001" @bind="_countedQuantity" /><span class="field-unit">@_countSupply.Unit</span></label><label>Motivo<input @bind="_countReason" placeholder="Ej.: stock inicial existente antes del sistema" /></label><footer><button class="secondary" @onclick="CloseCount">Cancelar</button><button class="primary" @onclick="RegisterCountAsync" disabled="@(string.IsNullOrWhiteSpace(_countReason) || _saving)">@(_saving ? "Guardando ajuste…" : "Guardar sin costo")</button></footer></section></div>
+}
+
+@if (_editSupply is not null)
+{
+    <div class="modal-backdrop" @onclick="CloseEdit"><section class="count-dialog edit-dialog" role="dialog" aria-modal="true" @onclick:stopPropagation><header><div><small>Editar insumo</small><h2>@_editSupply.Name</h2></div><button @onclick="CloseEdit">×</button></header><p>Los cambios de presentación se aplican a compras futuras. El historial conserva la presentación realmente comprada.</p>@if (_errors.Count > 0) { <div class="modal-errors">@foreach (var error in _errors) { <span>@error</span> }</div> }<label>Nombre<input @bind="_editName" /></label><label>Unidad de medida<select @bind="_editUnit"><option value="Gram">Gramos (g)</option><option value="Milliliter">Mililitros (ml)</option><option value="Unit">Unidades</option></select></label><label>Presentación habitual<input @bind="_editPresentation" placeholder="Ej.: paquete de 1 kilo" /></label><label>Contenido de una presentación<input type="number" min="0.0001" step="0.0001" @bind="_editPackageContent" /><span class="field-unit">@EditUnitText por presentación</span></label><footer><button class="secondary" @onclick="CloseEdit">Cancelar</button><button class="primary" @onclick="SaveSupplyAsync" disabled="@(_saving || string.IsNullOrWhiteSpace(_editName) || string.IsNullOrWhiteSpace(_editPresentation) || _editPackageContent <= 0)">@(_saving ? "Guardando cambios…" : "Guardar cambios")</button></footer></section></div>
+}
+
+<div class="history-grid">
+    <section><header><h2>Últimas compras</h2></header>@if (_dashboard.RecentPurchases.Count == 0) { <div class="empty-state">Aún no hay compras.</div> } else { <div class="table-shell"><table><thead><tr><th>Fecha</th><th>Insumo</th><th>Compra</th><th>Entrada</th><th>Total</th></tr></thead><tbody>@foreach (var item in _dashboard.RecentPurchases) { <tr><td>@item.PurchasedAtUtc.ToLocalTime().ToString("dd/MM/yyyy")</td><td><strong>@item.Supply</strong></td><td>@Quantity(item.Packages) × @item.Presentation</td><td>@Quantity(item.BaseQuantity) @item.Unit</td><td>Bs @item.TotalPrice.ToString("N2")</td></tr> }</tbody></table></div> }</section>
+    <section><header><h2>Movimientos de insumos</h2></header>@if (_dashboard.RecentMovements.Count == 0) { <div class="empty-state">Aún no hay movimientos.</div> } else { <div class="movement-list">@foreach (var item in _dashboard.RecentMovements.Take(12)) { <article><div><strong>@item.Supply</strong><small>@item.Kind · @item.AtUtc.ToLocalTime().ToString("dd/MM HH:mm")</small></div><span class="@(item.Quantity < 0 ? "out" : "in")">@(item.Quantity > 0 ? "+" : "")@Quantity(item.Quantity) @item.Unit</span></article> }</div> }</section>
+</div>
+
+@code {
+    private SupplyInventoryDashboard _dashboard = new([], [], [], [], []);
+    private IReadOnlyList<ProductOption> _products = [];
+    private readonly List<string> _errors = [];
+    private string? _message;
+    private bool _saving;
+    private Guid _purchaseSupplyId;
+    private DateTime _purchaseDate = DateTime.Today;
+    private decimal _purchasePackages = 1;
+    private decimal _purchaseUnitPrice;
+    private string _purchasePresentation = "";
+    private decimal _purchasePackageContent;
+    private string _purchaseUnit = "Gram";
+    private string _purchasePaymentMethod = "";
+    private string _purchaseRenditionPerson = "";
+    private IBrowserFile? _purchaseEvidence;
+    private string _supplyName = "";
+    private string _supplyUnit = "Gram";
+    private string _supplyPresentation = "";
+    private decimal _supplyPackageContent = 1;
+    private Guid _recipeProductId;
+    private string _recipeName = "";
+    private decimal _recipeYield = 5;
+    private RecipeDetail? _loadedRecipe;
+    private readonly List<RecipeLineDraft> _recipeLines = [];
+    private SupplyStockItem? _countSupply;
+    private decimal _countedQuantity;
+    private string _countReason = "";
+    private SupplyStockItem? _editSupply;
+    private string _editName = "";
+    private string _editUnit = "Gram";
+    private string _editPresentation = "";
+    private decimal _editPackageContent;
+    private int ShortageCount => _dashboard.Requirements.Count(x => x.Shortage > 0);
+    private decimal EstimatedPurchase => _dashboard.Requirements.Sum(x => x.EstimatedCost ?? 0);
+    private SupplyStockItem? SelectedPurchaseSupply => _dashboard.Supplies.FirstOrDefault(x => x.Id == _purchaseSupplyId);
+    private decimal PurchaseBaseQuantity => _purchasePackageContent * _purchasePackages;
+    private string NewSupplyUnitText => _supplyUnit switch { "Gram" => "gramos por presentación", "Milliliter" => "ml por presentación", "Unit" => "unidades por presentación", _ => "" };
+    private string PurchaseUnitText => _purchaseUnit switch { "Gram" => "g", "Milliliter" => "ml", "Unit" => "unid.", _ => "" };
+    private string EditUnitText => _editUnit switch { "Gram" => "g", "Milliliter" => "ml", "Unit" => "unid.", _ => "" };
+
+    protected override async Task OnInitializedAsync() { _products = await Orders.ProductOptionsAsync(); await ReloadAsync(); }
+    private async Task ReloadAsync() { _dashboard = await Inventory.GetSupplyDashboardAsync(); }
+    private async Task<Guid> UserIdAsync() { var state = await Auth.GetAuthenticationStateAsync(); return Guid.Parse(state.User.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)!.Value); }
+    private void ResetFeedback() { _errors.Clear(); _message = null; }
+    private void PurchaseSupplyChanged() { if (SelectedPurchaseSupply is null) { _purchasePresentation = ""; _purchasePackageContent = 0; return; } _purchasePresentation = SelectedPurchaseSupply.PurchasePresentation; _purchasePackageContent = SelectedPurchaseSupply.BaseQuantityPerPackage; _purchaseUnit = SelectedPurchaseSupply.Unit switch { "g" => "Gram", "ml" => "Milliliter", _ => "Unit" }; }
+    private async Task RegisterPurchaseAsync()
+    {
+        ResetFeedback();
+        var supply = SelectedPurchaseSupply;
+        if (supply is null) { _errors.Add("Selecciona el insumo comprado."); return; }
+        var purchasedAt = new DateTimeOffset(_purchaseDate).ToUniversalTime();
+        var presentation = _purchasePresentation;
+        var packageContent = _purchasePackageContent;
+        var packages = _purchasePackages;
+        var unitPrice = _purchaseUnitPrice;
+        var baseQuantity = PurchaseBaseQuantity;
+        var unit = PurchaseUnitText;
+        _saving = true;
+        try
+        {
+            if(_purchaseEvidence is null){_errors.Add("La foto del comprobante es obligatoria.");return;}
+            await using var evidenceContent=_purchaseEvidence.OpenReadStream(10*1024*1024);
+            var result = await Inventory.RegisterPurchaseAsync(new(_purchaseSupplyId, purchasedAt, _purchaseUnit, presentation, packageContent, packages, unitPrice,_purchasePaymentMethod,_purchaseRenditionPerson,evidenceContent,_purchaseEvidence.Name,_purchaseEvidence.ContentType,_purchaseEvidence.Size), await UserIdAsync());
+            if (!result.Succeeded) { _errors.AddRange(result.Errors); return; }
+            ApplyPurchaseLocally(result.Id!.Value, supply, purchasedAt, presentation, packages, unitPrice, baseQuantity, unit);
+            _message = $"Compra registrada. El saldo aumentó en {Quantity(baseQuantity)} {unit}.";
+            _purchasePackages = 1;
+            _purchaseUnitPrice = 0;
+            _purchasePaymentMethod = ""; _purchaseRenditionPerson = ""; _purchaseEvidence = null;
+        }
+        catch
+        {
+            _errors.Add("No se pudo registrar la compra. La pantalla quedó habilitada para que vuelvas a intentarlo.");
+        }
+        finally { _saving = false; }
+    }
+    private void ApplyPurchaseLocally(Guid purchaseId,SupplyStockItem supply,DateTimeOffset purchasedAt,string presentation,decimal packages,decimal unitPrice,decimal baseQuantity,string unit)
+    {
+        var newStock = supply.Stock + baseQuantity;
+        var updatedSupply = supply with { Unit = unit, Stock = newStock, PackageEquivalent = newStock / supply.BaseQuantityPerPackage, LastUnitPrice = unitPrice, LastPurchaseAtUtc = purchasedAt };
+        var requirements = _dashboard.Requirements.Select(item =>
+        {
+            if (item.SupplyId != supply.Id) return item;
+            var shortage = Math.Max(0, item.Required - newStock);
+            var packagesToBuy = shortage == 0 ? 0 : Math.Ceiling(shortage / item.BaseQuantityPerPackage);
+            return item with { Unit = unit, Stock = newStock, Shortage = shortage, PackagesToBuy = packagesToBuy, EstimatedCost = packagesToBuy * unitPrice };
+        }).ToList();
+        var purchase = new SupplyPurchaseItem(purchaseId, supply.Name, purchasedAt, packages, presentation, baseQuantity, unit, unitPrice, packages * unitPrice, "Tú");
+        var movement = new SupplyMovementItem(purchaseId, supply.Name, unit, "Compra", baseQuantity, $"Compra de {Quantity(packages)} {presentation}", DateTimeOffset.UtcNow);
+        _dashboard = _dashboard with
+        {
+            Supplies = _dashboard.Supplies.Select(x => x.Id == supply.Id ? updatedSupply : x).ToList(),
+            Requirements = requirements,
+            RecentPurchases = [purchase, .. _dashboard.RecentPurchases.Take(19)],
+            RecentMovements = [movement, .. _dashboard.RecentMovements.Take(29)]
+        };
+    }
+    private async Task CreateSupplyAsync() { ResetFeedback(); _saving = true; var result = await Inventory.CreateSupplyAsync(new(_supplyName, _supplyUnit, _supplyPresentation, _supplyPackageContent), await UserIdAsync()); _saving = false; if (!result.Succeeded) { _errors.AddRange(result.Errors); return; } _message = $"Insumo {_supplyName.Trim()} creado."; _supplyName = _supplyPresentation = ""; _supplyPackageContent = 1; await ReloadAsync(); }
+    private async Task LoadRecipeAsync() { _recipeLines.Clear(); _loadedRecipe = _recipeProductId == Guid.Empty ? null : await Inventory.GetRecipeAsync(_recipeProductId); if (_loadedRecipe is null) { _recipeName = _products.FirstOrDefault(x => x.Id == _recipeProductId)?.Name is { } name ? $"Receta de {name}" : ""; _recipeYield = 5; AddRecipeLine(); } else { _recipeName = _loadedRecipe.Name; _recipeYield = _loadedRecipe.YieldQuantity; _recipeLines.AddRange(_loadedRecipe.Lines.Select(x => new RecipeLineDraft { SupplyId = x.SupplyId, Quantity = x.RequiredQuantity })); } }
+    private void AddRecipeLine()
+    {
+        ResetFeedback();
+        if (_recipeLines.Count(x => x.SupplyId != Guid.Empty) >= _dashboard.Supplies.Count)
+        {
+            _errors.Add("Ya agregaste todos los insumos disponibles a la receta.");
+            return;
+        }
+        _recipeLines.Add(new RecipeLineDraft());
+    }
+    private void RemoveRecipeLine(RecipeLineDraft line) { _recipeLines.Remove(line); }
+    private bool IsSupplySelectedInAnotherLine(Guid supplyId, RecipeLineDraft current) =>
+        _recipeLines.Any(x => !ReferenceEquals(x, current) && x.SupplyId == supplyId);
+    private async Task SaveRecipeAsync()
+    {
+        ResetFeedback();
+        if (_recipeLines.Count == 0) { _errors.Add("Añade al menos un insumo a la receta."); return; }
+        var incompleteRow = _recipeLines.FindIndex(x => x.SupplyId == Guid.Empty);
+        if (incompleteRow >= 0) { _errors.Add($"Selecciona un insumo en la fila {incompleteRow + 1}."); return; }
+        var duplicate = _recipeLines.GroupBy(x => x.SupplyId).FirstOrDefault(x => x.Count() > 1);
+        if (duplicate is not null)
+        {
+            var name = _dashboard.Supplies.FirstOrDefault(x => x.Id == duplicate.Key)?.Name ?? "El insumo seleccionado";
+            _errors.Add($"{name} está repetido en la receta. Deja una sola fila y suma las cantidades.");
+            return;
+        }
+
+        _saving = true;
+        try
+        {
+            var command = new SaveRecipeCommand(_recipeProductId, _recipeName, _recipeYield,
+                _recipeLines.Select(x => new RecipeLineCommand(x.SupplyId, x.Quantity)).ToList());
+            var result = await Inventory.SaveRecipeAsync(command, await UserIdAsync());
+            if (!result.Succeeded) { _errors.AddRange(result.Errors); return; }
+            _message = "Receta guardada. La lista de compra y los próximos consumos ya usan esta versión.";
+            await LoadRecipeAsync();
+            await ReloadAsync();
+        }
+        catch
+        {
+            _errors.Add("No se pudo guardar la receta. La pantalla quedó habilitada para volver a intentarlo.");
+        }
+        finally { _saving = false; }
+    }
+    private void OpenCount(SupplyStockItem item) { ResetFeedback(); _countSupply = item; _countedQuantity = Math.Max(0, item.Stock); _countReason = item.Stock <= 0 ? "Stock inicial existente antes del sistema" : "Conteo físico de inventario"; }
+    private void CloseCount() { if (_saving) return; _countSupply = null; _countReason = ""; _errors.Clear(); }
+    private async Task RegisterCountAsync()
+    {
+        if (_countSupply is null) return;
+        ResetFeedback();
+        var supply = _countSupply;
+        var counted = _countedQuantity;
+        var reason = _countReason;
+        var saved = false;
+        _saving = true;
+        try
+        {
+            var result = await Inventory.RegisterSupplyCountAsync(new(supply.Id, counted, reason), await UserIdAsync());
+            if (!result.Succeeded) { _errors.AddRange(result.Errors); return; }
+            ApplyCountLocally(result.Id!.Value, supply, counted, reason);
+            _message = $"Stock de {supply.Name} ajustado sin costo a {Quantity(counted)} {supply.Unit}.";
+            saved = true;
+        }
+        catch { _errors.Add("No se pudo guardar el ajuste. La pantalla quedó habilitada para volver a intentarlo."); }
+        finally { _saving = false; }
+        if (saved) CloseCount();
+    }
+    private void ApplyCountLocally(Guid countId,SupplyStockItem supply,decimal counted,string reason)
+    {
+        var difference = counted - supply.Stock;
+        var updatedSupply = supply with { Stock = counted, PackageEquivalent = counted / supply.BaseQuantityPerPackage };
+        var requirements = _dashboard.Requirements.Select(item =>
+        {
+            if (item.SupplyId != supply.Id) return item;
+            var shortage = Math.Max(0, item.Required - counted);
+            var packagesToBuy = shortage == 0 ? 0 : Math.Ceiling(shortage / item.BaseQuantityPerPackage);
+            return item with { Stock = counted, Shortage = shortage, PackagesToBuy = packagesToBuy, EstimatedCost = item.EstimatedCost is null || item.PackagesToBuy == 0 ? item.EstimatedCost : packagesToBuy * (item.EstimatedCost.Value / item.PackagesToBuy) };
+        }).ToList();
+        var movements = _dashboard.RecentMovements;
+        if (difference != 0)
+        {
+            var movement = new SupplyMovementItem(countId, supply.Name, supply.Unit, difference > 0 ? "Ajuste +" : "Ajuste −", difference, reason, DateTimeOffset.UtcNow);
+            movements = [movement, .. movements.Take(29)];
+        }
+        _dashboard = _dashboard with { Supplies = _dashboard.Supplies.Select(x => x.Id == supply.Id ? updatedSupply : x).ToList(), Requirements = requirements, RecentMovements = movements };
+    }
+    private void OpenEdit(SupplyStockItem item) { ResetFeedback(); _editSupply = item; _editName = item.Name; _editUnit = item.Unit switch { "g" => "Gram", "ml" => "Milliliter", _ => "Unit" }; _editPresentation = item.PurchasePresentation; _editPackageContent = item.BaseQuantityPerPackage; }
+    private void CloseEdit() { if (_saving) return; _editSupply = null; _errors.Clear(); }
+    private async Task SaveSupplyAsync()
+    {
+        if (_editSupply is null) return;
+        ResetFeedback();
+        var original = _editSupply;
+        var saved = false;
+        _saving = true;
+        try
+        {
+            var result = await Inventory.UpdateSupplyAsync(new(original.Id, _editName, _editUnit, _editPresentation, _editPackageContent), await UserIdAsync());
+            if (!result.Succeeded) { _errors.AddRange(result.Errors); return; }
+            ApplySupplyEditLocally(original);
+            _message = $"Insumo {_editName.Trim()} actualizado.";
+            saved = true;
+        }
+        catch { _errors.Add("No se pudo actualizar el insumo. La pantalla quedó habilitada para volver a intentarlo."); }
+        finally { _saving = false; }
+        if (saved) CloseEdit();
+    }
+    private void ApplySupplyEditLocally(SupplyStockItem original)
+    {
+        var name = _editName.Trim(); var unit = EditUnitText; var presentation = _editPresentation.Trim(); var content = _editPackageContent;
+        var updated = original with { Name = name, Unit = unit, PurchasePresentation = presentation, BaseQuantityPerPackage = content, PackageEquivalent = original.Stock / content };
+        var requirements = _dashboard.Requirements.Select(item =>
+        {
+            if (item.SupplyId != original.Id) return item;
+            var packages = item.Shortage == 0 ? 0 : Math.Ceiling(item.Shortage / content);
+            var unitPrice = item.EstimatedCost is null || item.PackagesToBuy == 0 ? (decimal?)null : item.EstimatedCost.Value / item.PackagesToBuy;
+            return item with { Supply = name, Unit = unit, PurchasePresentation = presentation, BaseQuantityPerPackage = content, PackagesToBuy = packages, EstimatedCost = unitPrice is null ? null : packages * unitPrice.Value };
+        }).ToList();
+        _dashboard = _dashboard with
+        {
+            Supplies = _dashboard.Supplies.Select(x => x.Id == original.Id ? updated : x).OrderBy(x => x.Name).ToList(),
+            Requirements = requirements,
+            RecentPurchases = _dashboard.RecentPurchases.Select(x => x.Supply == original.Name ? x with { Supply = name } : x).ToList(),
+            RecentMovements = _dashboard.RecentMovements.Select(x => x.Supply == original.Name ? x with { Supply = name, Unit = unit } : x).ToList()
+        };
+    }
+    private string UnitFor(Guid supplyId) => _dashboard.Supplies.FirstOrDefault(x => x.Id == supplyId)?.Unit ?? "unidad";
+    private static string Quantity(decimal value) => value.ToString("0.####");
+    private sealed class RecipeLineDraft
+    {
+        public Guid RowId { get; } = Guid.NewGuid();
+        public Guid SupplyId { get; set; }
+        public decimal Quantity { get; set; }
+    }
+}

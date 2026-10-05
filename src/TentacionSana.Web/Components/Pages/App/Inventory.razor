@@ -1,0 +1,148 @@
+@page "/app/produccion"
+@layout AdminLayout
+@rendermode InteractiveServer
+@attribute [Authorize(Policy = AppPolicies.ManageProduction)]
+@inject IInventoryService StockService
+@inject IOrderManagementService Orders
+@inject AuthenticationStateProvider Auth
+
+<PageTitle>Producción | Tentación Sana</PageTitle>
+
+<header class="production-heading">
+    <div><p>Producción</p><h1>¿Qué falta producir?</h1><span>Prioriza pedidos confirmados, registra lotes y completa sus reservas automáticamente.</span></div>
+    <div class="today-pill">Hoy · @DateTime.Today.ToString("dd/MM/yyyy")</div>
+</header>
+
+@if (_message is not null) { <p class="status-message">@_message</p> }
+@if (_errors.Count > 0) { <div class="error-summary">@foreach (var error in _errors) { <p>@error</p> }</div> }
+
+<section class="summary-grid" aria-label="Resumen de producción">
+    <article class="summary-card"><span class="summary-icon amber">◇</span><div><small>Productos con faltantes</small><strong>@_dashboard.ProductsWithShortage</strong><span>requieren producción</span></div></article>
+    <article class="summary-card"><span class="summary-icon coral">!</span><div><small>Unidades por producir</small><strong>@_dashboard.UnitsToProduce</strong><span>según pedidos confirmados</span></div></article>
+    <article class="summary-card"><span class="summary-icon green">↗</span><div><small>Producido hoy</small><strong>@_dashboard.ProducedToday</strong><span>unidades aprovechables</span></div></article>
+    <article class="summary-card"><span class="summary-icon blue">≋</span><div><small>Stock disponible total</small><strong>@_dashboard.TotalAvailable</strong><span>unidades libres</span></div></article>
+</section>
+
+<div class="production-layout">
+    <section class="card needs-card">
+        <div class="section-heading"><div><h2>Necesidad de producción</h2><p>La sugerencia usa el faltante real de reservas confirmadas.</p></div>
+            <div class="filters" role="group" aria-label="Filtrar por fecha">
+                @foreach (var filter in new[] { "Todos", "Hoy", "Mañana", "Próximos días" })
+                { <button class="@(_filter == filter ? "active" : null)" @onclick="() => _filter = filter">@filter</button> }
+            </div>
+        </div>
+        @if (!FilteredNeeds.Any()) { <div class="empty-state">No hay demanda para este período.</div> }
+        else
+        {
+            <div class="table-shell needs-table"><table><thead><tr><th>Producto</th><th>Requerido</th><th>Stock físico</th><th>Reservado</th><th>Disponible</th><th>Faltante</th><th>Sugerir</th><th>Acciones</th></tr></thead>
+                <tbody>@foreach (var item in FilteredNeeds) { <tr>
+                    <td data-label="Producto"><strong>@item.Product</strong>@if (item.PendingDemand > 0) { <span class="future-demand">+@item.PendingDemand pendiente</span> }</td>
+                    <td data-label="Requerido">@item.Required</td><td data-label="Stock">@item.Physical</td><td data-label="Reservado">@item.Reserved</td><td data-label="Disponible">@item.Available</td>
+                    <td data-label="Faltante"><strong class="@(item.Shortage > 0 ? "shortage" : "covered")">@item.Shortage</strong></td><td data-label="Sugerir">@item.Shortage</td>
+                    <td data-label="Acciones"><div class="row-actions"><button class="primary small" disabled="@(item.Shortage == 0)" @onclick="() => SelectForProduction(item)">Registrar</button><button class="secondary small" @onclick="() => ShowOrdersAsync(item)">Ver pedidos</button></div></td>
+                </tr> }</tbody></table></div>
+        }
+    </section>
+
+    <section class="card register-card">
+        <div class="section-heading"><div><h2>Registrar producción</h2><p>El lote entra al inventario por sus unidades aprovechables.</p></div></div>
+        <label>Producto<select value="@_productId" @onchange="ProductChanged"><option value="">Selecciona un producto</option>@foreach (var product in _products) { <option value="@product.Id">@product.Name</option> }</select></label>
+        @if (SelectedNeed is not null)
+        {
+            <div class="inventory-state"><h3>Estado actual</h3><dl><div><dt>Stock físico</dt><dd>@SelectedNeed.Physical</dd></div><div><dt>Reservado</dt><dd>@SelectedNeed.Reserved</dd></div><div><dt>Disponible</dt><dd>@SelectedNeed.Available</dd></div><div class="danger"><dt>Faltante por pedidos</dt><dd>@SelectedNeed.Shortage</dd></div></dl></div>
+        }
+        <div class="amount-grid"><label>Cantidad producida <input type="number" min="1" step="1" @bind="_quantity" /></label><label>Merma <span>(opcional)</span><input type="number" min="0" step="1" @bind="_waste" /></label></div>
+        <div class="usable"><div><small>Unidades aprovechables</small><strong>@GoodUnits</strong><span>unidades</span></div><p>Solo esta cantidad aumenta el stock.</p></div>
+        @if (SelectedNeed is not null)
+        {
+            <div class="projection"><h3>Proyección después de producir</h3><div class="projection-grid"><dl><b>Antes</b><div><dt>Stock físico</dt><dd>@SelectedNeed.Physical</dd></div><div><dt>Reservado</dt><dd>@SelectedNeed.Reserved</dd></div><div><dt>Disponible</dt><dd>@SelectedNeed.Available</dd></div><div><dt>Faltante</dt><dd>@SelectedNeed.Shortage</dd></div></dl><span class="arrow">→</span><dl class="after"><b>Después (estimado)</b><div><dt>Stock físico</dt><dd>@(SelectedNeed.Physical + GoodUnits)</dd></div><div><dt>Nuevo stock asignado</dt><dd>@ProjectedAssignment</dd></div><div><dt>Disponible libre</dt><dd>@ProjectedAvailable</dd></div><div><dt>Faltante</dt><dd>@ProjectedShortage</dd></div></dl></div></div>
+        }
+        <button class="primary register-button" @onclick="RegisterProductionAsync" disabled="@(_saving || _productId == Guid.Empty)">@(_saving ? "Registrando…" : "Registrar producción")</button>
+    </section>
+</div>
+
+@if (_detailProduct is not null)
+{
+    <section class="card order-detail"><div class="section-heading"><div><h2>Detalle por pedidos · @_detailProduct.Product</h2><p>Confirmados y ordenados por fecha prometida.</p></div><button class="icon-button" aria-label="Cerrar detalle" @onclick="CloseDetail">×</button></div>
+        <div class="table-shell"><table><thead><tr><th>Pedido</th><th>Cliente</th><th>Sucursal</th><th>Fecha prometida</th><th>Requerido</th><th>Reservado</th><th>Falta</th><th>Estado</th></tr></thead><tbody>
+            @foreach (var order in _orderDemand) { <tr><td><strong>#@order.OrderNumber</strong></td><td>@order.Customer</td><td>@order.Branch</td><td>@DateText(order.PromisedAtUtc)</td><td>@order.Required</td><td>@order.Reserved</td><td><strong class="shortage">@order.Shortage</strong></td><td><span class="badge">@StatusText(order.Status)</span></td></tr> }
+        </tbody><tfoot><tr><th colspan="4">Total</th><th>@_orderDemand.Sum(x => x.Required)</th><th>@_orderDemand.Sum(x => x.Reserved)</th><th class="shortage">@_orderDemand.Sum(x => x.Shortage)</th><th></th></tr></tfoot></table></div>
+    </section>
+}
+
+<section class="card batches-card"><div class="section-heading"><div><h2>Últimos lotes generados</h2><p>Historial de producción y saldo disponible por FIFO.</p></div></div>
+    @if (_batches.Count == 0) { <div class="empty-state">Aún no se registraron lotes de producción.</div> }
+    else { <div class="table-shell"><table><thead><tr><th>Lote</th><th>Producto</th><th>Fecha y hora</th><th>Producido</th><th>Merma</th><th>Aprovechable</th><th>Restante</th><th>Estado</th><th>Registrado por</th><AuthorizeView Policy="@AppPolicies.Administration"><Authorized><th>Acciones</th></Authorized></AuthorizeView></tr></thead><tbody>
+        @foreach (var batch in _batches) { <tr><td><strong>@batch.Number</strong></td><td>@batch.Product</td><td>@batch.ProducedAtUtc.ToLocalTime().ToString("dd/MM/yyyy HH:mm")</td><td>@(batch.GoodUnits + batch.WasteUnits)</td><td>@batch.WasteUnits</td><td>@batch.GoodUnits</td><td>@batch.Remaining</td><td><span class="badge @BatchStatusClass(batch)">@BatchStatus(batch)</span></td><td>@batch.RegisteredBy</td><AuthorizeView Policy="@AppPolicies.Administration"><Authorized><td><div class="row-actions"><button class="secondary small" @onclick="() => OpenEdit(batch)">Editar</button><button class="danger-button small" @onclick="() => OpenDelete(batch)">Eliminar</button></div></td></Authorized></AuthorizeView></tr> }
+    </tbody></table></div> }
+</section>
+
+@if (_editBatch is not null)
+{
+    <div class="modal-backdrop" @onclick="CloseBatchDialog"><section class="batch-dialog" role="dialog" aria-modal="true" @onclick:stopPropagation><header><div><small>Corrección administrativa</small><h2>Editar @_editBatch.Number</h2></div><button class="icon-button" @onclick="CloseBatchDialog">×</button></header><p>El inventario y las reservas se ajustarán automáticamente. Las unidades ya consumidas por FIFO no pueden eliminarse.</p><div class="amount-grid"><label>Cantidad producida<input type="number" min="1" @bind="_editProduced" /></label><label>Merma<input type="number" min="0" @bind="_editWaste" /></label></div><label>Motivo de la corrección<input @bind="_batchReason" placeholder="Ej.: cantidad digitada incorrectamente" /></label><footer><button class="secondary" @onclick="CloseBatchDialog">Cancelar</button><button class="primary" @onclick="SaveBatchAsync" disabled="@(_batchSaving || string.IsNullOrWhiteSpace(_batchReason))">@(_batchSaving ? "Guardando…" : "Guardar corrección")</button></footer></section></div>
+}
+@if (_deleteBatch is not null)
+{
+    <div class="modal-backdrop" @onclick="CloseBatchDialog"><section class="batch-dialog danger-dialog" role="alertdialog" aria-modal="true" @onclick:stopPropagation><header><div><small>Solo administradores</small><h2>Eliminar @_deleteBatch.Number</h2></div><button class="icon-button" @onclick="CloseBatchDialog">×</button></header><p>Se retirarán sus @_deleteBatch.Remaining unidades restantes del inventario. Si hace falta, las reservas más recientes volverán a quedar como faltantes. Las salidas históricas se conservarán.</p><label>Motivo de eliminación<input @bind="_batchReason" placeholder="Explica por qué se elimina el lote" /></label><footer><button class="secondary" @onclick="CloseBatchDialog">Cancelar</button><button class="danger-button" @onclick="DeleteBatchAsync" disabled="@(_batchSaving || string.IsNullOrWhiteSpace(_batchReason))">@(_batchSaving ? "Eliminando…" : "Eliminar lote")</button></footer></section></div>
+}
+
+@code {
+    private ProductionDashboard _dashboard = new([], 0, 0, 0, 0);
+    private IReadOnlyList<ProductOption> _products = [];
+    private IReadOnlyList<BatchItem> _batches = [];
+    private IReadOnlyList<ProductionOrderDemand> _orderDemand = [];
+    private readonly List<string> _errors = [];
+    private ProductionNeed? _detailProduct;
+    private Guid _productId;
+    private int _quantity = 1;
+    private int _waste;
+    private string _filter = "Todos";
+    private string? _message;
+    private bool _saving;
+    private BatchItem? _editBatch;
+    private BatchItem? _deleteBatch;
+    private int _editProduced;
+    private int _editWaste;
+    private string _batchReason = "";
+    private bool _batchSaving;
+    private ProductionNeed? SelectedNeed => _dashboard.Products.FirstOrDefault(x => x.ProductId == _productId);
+    private int GoodUnits => Math.Max(0, _quantity - _waste);
+    private int ProjectedAssignment => SelectedNeed is null ? 0 : Math.Min(SelectedNeed.Shortage, Math.Max(0, SelectedNeed.Available + GoodUnits));
+    private int ProjectedShortage => Math.Max(0, (SelectedNeed?.Shortage ?? 0) - ProjectedAssignment);
+    private int ProjectedAvailable => SelectedNeed is null ? GoodUnits : Math.Max(0, SelectedNeed.Available + GoodUnits - ProjectedAssignment);
+    private IEnumerable<ProductionNeed> FilteredNeeds => _dashboard.Products.Where(MatchesFilter);
+
+    protected override async Task OnInitializedAsync() { _products = await Orders.ProductOptionsAsync(); await ReloadAsync(); }
+    private async Task ReloadAsync() { _dashboard = await StockService.GetProductionDashboardAsync(); _batches = await StockService.GetRecentBatchesAsync(10); if (_detailProduct is not null) await ShowOrdersAsync(_dashboard.Products.FirstOrDefault(x => x.ProductId == _detailProduct.ProductId)); }
+    private bool MatchesFilter(ProductionNeed item) { if (_filter == "Todos") return true; var date = item.NearestPromisedAtUtc?.ToLocalTime().Date; return _filter switch { "Hoy" => date == DateTime.Today, "Mañana" => date == DateTime.Today.AddDays(1), "Próximos días" => date > DateTime.Today.AddDays(1), _ => true }; }
+    private void SelectForProduction(ProductionNeed item) { _productId = item.ProductId; _quantity = Math.Max(1, item.Shortage); _waste = 0; }
+    private void ProductChanged(ChangeEventArgs e) { _productId = Guid.TryParse(e.Value?.ToString(), out var id) ? id : Guid.Empty; }
+    private async Task ShowOrdersAsync(ProductionNeed? item) { if (item is null) { CloseDetail(); return; } _detailProduct = item; _orderDemand = await StockService.GetProductionOrderDemandAsync(item.ProductId); }
+    private void CloseDetail() { _detailProduct = null; _orderDemand = []; }
+    private async Task RegisterProductionAsync()
+    {
+        _errors.Clear(); _message = null;
+        if (_productId == Guid.Empty) { _errors.Add("Selecciona el producto que se produjo."); return; }
+        if (_quantity < 1) { _errors.Add("La cantidad producida debe ser mayor que cero."); return; }
+        if (_waste < 0 || _waste > _quantity) { _errors.Add("La merma no puede superar la cantidad producida."); return; }
+        _saving = true;
+        var result = await StockService.RegisterProductionAsync(new ProductionCommand(_productId, DateTimeOffset.UtcNow, _quantity, _waste), await UserIdAsync());
+        _saving = false;
+        if (!result.Succeeded) { _errors.AddRange(result.Errors); return; }
+        await ReloadAsync();
+        var batch = _batches.FirstOrDefault(x => x.Id == result.Id);
+        _message = $"Producción registrada{(batch is null ? "" : $" en el lote {batch.Number}")}. {GoodUnits} unidades aprovechables; {result.AssignedUnits} asignadas a {result.AssignedOrders} pedidos.";
+        if (result.Warnings is { Count: > 0 }) _message += " " + string.Join(" ", result.Warnings);
+        _quantity = 1; _waste = 0;
+    }
+    private async Task<Guid> UserIdAsync() { var state = await Auth.GetAuthenticationStateAsync(); return Guid.Parse(state.User.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)!.Value); }
+    private static string DateText(DateTimeOffset? value) => value?.ToLocalTime().ToString("dd/MM/yyyy") ?? "Sin fecha";
+    private static string StatusText(string status) => status switch { "Confirmed" => "Confirmado", "InPreparation" => "En preparación", "Ready" => "Listo", "OutForDelivery" => "En reparto", _ => status };
+    private static string BatchStatus(BatchItem batch) => batch.Remaining == 0 ? "Agotado" : batch.Remaining == batch.GoodUnits ? "Activo" : "En uso";
+    private static string BatchStatusClass(BatchItem batch) => batch.Remaining == 0 ? "exhausted" : batch.Remaining == batch.GoodUnits ? "active" : "in-use";
+    private void OpenEdit(BatchItem batch) { _editBatch = batch; _deleteBatch = null; _editProduced = batch.GoodUnits + batch.WasteUnits; _editWaste = batch.WasteUnits; _batchReason = ""; }
+    private void OpenDelete(BatchItem batch) { _deleteBatch = batch; _editBatch = null; _batchReason = ""; }
+    private void CloseBatchDialog() { if (_batchSaving) return; _editBatch = null; _deleteBatch = null; _batchReason = ""; }
+    private async Task SaveBatchAsync() { if (_editBatch is null) return; _batchSaving = true; var result = await StockService.UpdateProductionBatchAsync(new(_editBatch.Id, _editBatch.Version, _editProduced, _editWaste, _batchReason), await UserIdAsync()); _batchSaving = false; if (!result.Succeeded) { _errors.Clear(); _errors.AddRange(result.Errors); return; } _message = $"Lote {_editBatch.Number} corregido y auditado."; CloseBatchDialog(); await ReloadAsync(); }
+    private async Task DeleteBatchAsync() { if (_deleteBatch is null) return; _batchSaving = true; var number = _deleteBatch.Number; var result = await StockService.DeleteProductionBatchAsync(new(_deleteBatch.Id, _deleteBatch.Version, _batchReason), await UserIdAsync()); _batchSaving = false; if (!result.Succeeded) { _errors.Clear(); _errors.AddRange(result.Errors); return; } _message = $"Lote {number} eliminado. El inventario y las reservas fueron recalculados."; CloseBatchDialog(); await ReloadAsync(); }
+}

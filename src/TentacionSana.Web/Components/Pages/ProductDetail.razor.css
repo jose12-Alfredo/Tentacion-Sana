@@ -1,0 +1,18 @@
+.breadcrumb { padding: 1rem clamp(1rem, 5vw, 5.5rem); display: flex; gap: .65rem; overflow: hidden; background: #fffdf7; color: #6a675d; font-size: .85rem; white-space: nowrap; }
+.breadcrumb a { color: #315e00; }
+.breadcrumb span:last-child { overflow: hidden; text-overflow: ellipsis; }
+.product-detail { min-height: calc(100vh - 8rem); padding: clamp(1rem, 4vw, 4rem); display: grid; grid-template-columns: minmax(0, 1.08fr) minmax(22rem, .92fr); gap: clamp(1.5rem, 5vw, 5rem); background: var(--color-cacao); color: #fff; }
+.gallery { min-height: 35rem; display: grid; place-items: center; overflow: hidden; border-radius: 1.25rem; background: var(--color-pistachio); color: var(--color-cacao); box-shadow: 1rem 1rem 0 rgba(120,224,0,.18); }
+.gallery img { width: 100%; height: 100%; object-fit: cover; }
+.gallery span { font-family: var(--font-display); font-size: clamp(5rem, 14vw, 12rem); font-weight: 800; }
+.detail-copy { padding: clamp(1rem, 3vw, 3rem) 0; display: flex; flex-direction: column; justify-content: center; align-items: flex-start; }
+.label { color: var(--color-leaf); font-family: var(--font-utility); letter-spacing: .1em; text-transform: uppercase; }
+h1 { margin: .5rem 0 1.5rem; font-family: var(--font-display); font-size: clamp(3rem, 6vw, 6rem); letter-spacing: -.04em; line-height: .9; text-transform: uppercase; }
+.description { color: rgba(255, 255, 255, .78); font-size: 1.1rem; line-height: 1.7; }
+.price { margin: 1.25rem 0; display: grid; gap: .15rem; }
+.price small { color: rgba(255,255,255,.6); }
+.price strong { font: 800 2rem/1 var(--font-display); }
+.cta, .not-found a { min-height: 3.5rem; padding: .95rem 1.5rem; display: inline-flex; align-items: center; border-radius: .65rem; background: var(--color-leaf); color: var(--color-cacao); font-weight: 800; text-decoration: none; box-shadow: 0 .5rem 1.3rem rgba(0,0,0,.2); }
+.purchase-note { max-width: 34rem; margin-top: 1rem; color: rgba(255,255,255,.58); font-size: .86rem; line-height: 1.5; }
+.loading, .not-found { min-height: 60vh; padding: 4rem; display: grid; place-items: center; text-align: center; }
+@media (max-width: 760px) { .product-detail { grid-template-columns: 1fr; padding: 1rem; } .gallery { min-height: auto; aspect-ratio: 4/3; box-shadow: .5rem .5rem 0 rgba(120,224,0,.18); } .detail-copy { padding: 1.5rem .25rem 2.5rem; } h1 { font-size: clamp(2.5rem, 13vw, 4rem); } .cta { width: 100%; justify-content: center; } }

@@ -1,0 +1,64 @@
+@page "/catalogo"
+@layout PublicLayout
+@attribute [StreamRendering]
+@inject IPublicCatalogService CatalogService
+
+<PageTitle>Catálogo | Tentación Sana</PageTitle>
+
+<section class="page-hero">
+    <p>Catálogo</p>
+    <h1>Elegí lo que te provoca.</h1>
+    <span>Productos e información aprobados para publicación.</span>
+</section>
+
+@if (_products is null)
+{
+    <section class="empty-catalog"><p>Cargando productos…</p></section>
+}
+else if (_products.Count == 0)
+{
+    <section class="empty-catalog" aria-labelledby="catalog-status">
+        <div aria-hidden="true">TS</div>
+        <h2 id="catalog-status">Estamos preparando el catálogo.</h2>
+        <p>Mientras cargamos los productos, podés consultarnos directamente.</p>
+        <a href="/contacto">Consultar disponibilidad</a>
+    </section>
+}
+else
+{
+    <section class="product-grid" aria-label="Productos publicados">
+        @foreach (var product in _products)
+        {
+            <article class="product-card">
+                <a class="product-image" href="/productos/@product.Slug" aria-label="Ver @product.Name">
+                    @if (!string.IsNullOrWhiteSpace(product.ImageUrl))
+                    {
+                        <img src="@product.ImageUrl" alt="@product.ImageAltText" loading="lazy" />
+                    }
+                    else
+                    {
+                        <span aria-hidden="true">TS</span>
+                    }
+                </a>
+                <div class="product-content">
+                    @if (product.IsFeatured) { <p class="tag">Destacado</p> }
+                    <h2><a href="/productos/@product.Slug">@product.Name</a></h2>
+                    <p class="presentation">@product.Presentation</p>
+                    <p>@product.Description</p>
+                    @if (product.PublicPrice is not null)
+                    {
+                        <strong>Bs @product.PublicPrice.Value.ToString("0.00")</strong>
+                    }
+                    <a class="card-action" href="/productos/@product.Slug">Ver producto <span>→</span></a>
+                </div>
+            </article>
+        }
+    </section>
+}
+
+@code {
+    private IReadOnlyList<PublicProductSummary>? _products;
+
+    protected override async Task OnInitializedAsync() =>
+        _products = await CatalogService.GetPublishedProductsAsync();
+}

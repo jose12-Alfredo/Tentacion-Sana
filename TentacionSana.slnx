@@ -1,0 +1,13 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/TentacionSana.Application/TentacionSana.Application.csproj" />
+    <Project Path="src/TentacionSana.Domain/TentacionSana.Domain.csproj" />
+    <Project Path="src/TentacionSana.Infrastructure/TentacionSana.Infrastructure.csproj" />
+    <Project Path="src/TentacionSana.Web/TentacionSana.Web.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/TentacionSana.IntegrationTests/TentacionSana.IntegrationTests.csproj" />
+    <Project Path="tests/TentacionSana.UnitTests/TentacionSana.UnitTests.csproj" />
+  </Folder>
+  <Project Path="TentacionSana/TentacionSana.csproj" />
+</Solution>

@@ -1,0 +1,19 @@
+@page "/app"
+@attribute [Authorize(Policy = AppPolicies.InternalAccess)]
+@layout AdminLayout
+
+<PageTitle>Panel interno | Tentación Sana</PageTitle>
+<header class="dashboard-heading"><p>Administración</p><h1>Panel interno</h1><span>Catálogo, ventas, producción, entregas y cobros en un solo lugar.</span></header>
+
+<section class="dashboard-grid" aria-label="Módulos disponibles">
+    <AuthorizeView Policy="@AppPolicies.ManageSales"><Authorized><ModuleCard Href="/app/productos" Eyebrow="Catálogo" Title="Productos" Description="Productos, precios, publicación e imágenes." />
+        <ModuleCard Href="/app/solicitudes" Eyebrow="Ventas" Title="Solicitudes" Description="Prospectos web y WhatsApp, estados y conversión." />
+        <ModuleCard Href="/app/clientes" Eyebrow="Ventas" Title="Clientes" Description="Personas, empresas, contactos, sucursales y pagadores." />
+        <ModuleCard Href="/app/pedidos" Eyebrow="Operación" Title="Pedidos" Description="Borradores, precios, reservas, cambios e historial." />
+        <ModuleCard Href="/app/entregas" Eyebrow="Logística" Title="Entregas" Description="Programación, asignación y seguimiento operativo." />
+    </Authorized></AuthorizeView>
+    <AuthorizeView Policy="@AppPolicies.ManageProduction"><Authorized><ModuleCard Href="/app/inventario" Eyebrow="Operación" Title="Inventario de insumos" Description="Compras, saldos, recetas y lista automática de faltantes." /><ModuleCard Href="/app/produccion" Eyebrow="Producción" Title="Registrar producción" Description="Descuenta recetas, genera lotes y completa reservas." /></Authorized></AuthorizeView>
+    <AuthorizeView Policy="@AppPolicies.ManageDeliveries"><Authorized><ModuleCard Href="/app/mis-entregas" Eyebrow="Reparto" Title="Mis entregas" Description="Ruta, salida de productos, receptor, evidencia y cobro." /></Authorized></AuthorizeView>
+    <AuthorizeView Policy="@AppPolicies.ManageFinance"><Authorized><ModuleCard Href="/app/cuentas-por-cobrar" Eyebrow="Finanzas" Title="Cuentas por cobrar" Description="Anticipos, pagos, saldos, pagadores y antigüedad." /><ModuleCard Href="/app/arqueo" Eyebrow="Tesorería" Title="Caja y movimientos" Description="Entradas, salidas, transferencias y arqueos con respaldo." /><ModuleCard Href="/app/cuentas-contables" Eyebrow="Configuración" Title="Cuentas contables" Description="Crea y organiza ingresos, costos, gastos, activos y aportes." /><ModuleCard Href="/app/estado-resultados" Eyebrow="Contabilidad" Title="Estado de resultados" Description="Ingresos, costo de ventas, gastos y utilidad por período." /></Authorized></AuthorizeView>
+    <AuthorizeView Policy="@AppPolicies.Administration"><Authorized><ModuleCard Href="/app/usuarios" Eyebrow="Seguridad" Title="Usuarios y permisos" Description="Cuentas, roles personalizados y acceso por módulo." /></Authorized></AuthorizeView>
+</section>

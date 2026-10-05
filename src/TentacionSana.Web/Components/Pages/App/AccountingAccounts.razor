@@ -1,0 +1,133 @@
+@page "/app/cuentas-contables"
+@layout AdminLayout
+@rendermode InteractiveServer
+@attribute [Authorize(Policy = AppPolicies.ManageFinance)]
+@inject IAccountingAccountService Accounts
+@inject AuthenticationStateProvider Auth
+
+<PageTitle>Cuentas contables | Tentación Sana</PageTitle>
+
+<header class="accounts-heading">
+    <p>Configuración contable</p>
+    <h1>Plan de cuentas</h1>
+    <span>Crea los conceptos que podrás seleccionar al registrar dinero en caja o banco.</span>
+</header>
+
+@if (_errors.Count > 0)
+{
+    <div class="accounts-errors" role="alert">@foreach (var error in _errors) { <p>@error</p> }</div>
+}
+@if (_message is not null) { <p class="accounts-ok">@_message</p> }
+
+<section class="account-creator">
+    <div>
+        <small>Nueva cuenta</small>
+        <h2>¿Qué quieres controlar?</h2>
+        <p>La naturaleza determina dónde aparecerá cada movimiento en el estado de resultados.</p>
+    </div>
+    <div class="account-fields">
+        <label>Código *<input @bind="_code" maxlength="20" placeholder="Ej.: 5201" /></label>
+        <label>Nombre *<input @bind="_name" maxlength="120" placeholder="Ej.: Transporte del personal" /></label>
+        <label>Naturaleza *
+            <select @bind="_kind">
+                <option value="Income">Ingreso</option>
+                <option value="DirectCost">Costo directo</option>
+                <option value="OperatingExpense">Gasto operativo</option>
+                <option value="Asset">Inversión / activo</option>
+                <option value="Liability">Pasivo / anticipo</option>
+                <option value="Equity">Aporte / patrimonio</option>
+            </select>
+        </label>
+        <button @onclick="CreateAsync" disabled="@_saving">@(_saving ? "Creando…" : "Crear cuenta")</button>
+    </div>
+    <p class="kind-explanation">@KindExplanation(_kind)</p>
+</section>
+
+<section class="accounts-list">
+    <header><div><small>Catálogo disponible</small><h2>Cuentas contables</h2></div><span>@_accounts.Count cuentas</span></header>
+    @if (_accounts.Count == 0)
+    {
+        <p>No hay cuentas contables. Crea la primera para registrar movimientos.</p>
+    }
+    else
+    {
+        <div class="accounts-table">
+            <table>
+                <thead><tr><th>Código</th><th>Cuenta</th><th>Naturaleza</th><th>Uso</th><th>Estado</th><th><span class="visually-hidden">Acción</span></th></tr></thead>
+                <tbody>
+                @foreach (var account in _accounts)
+                {
+                    <tr class="@(!account.IsActive ? "inactive" : null)">
+                        <td data-label="Código"><strong>@account.Code</strong></td>
+                        <td data-label="Cuenta">@account.Name</td>
+                        <td data-label="Naturaleza"><span class="kind @account.Kind.ToLowerInvariant()">@KindText(account.Kind)</span></td>
+                        <td data-label="Uso">@account.MovementCount movimiento(s)</td>
+                        <td data-label="Estado">@(account.IsActive ? "Activa" : "Inactiva")</td>
+                        <td data-label="Acción"><button class="toggle" @onclick="() => ToggleAsync(account)">@(account.IsActive ? "Desactivar" : "Activar")</button></td>
+                    </tr>
+                }
+                </tbody>
+            </table>
+        </div>
+    }
+</section>
+
+@code {
+    private IReadOnlyList<AccountingAccountItem> _accounts = [];
+    private readonly List<string> _errors = [];
+    private string _code = "52";
+    private string _name = "";
+    private string _kind = "OperatingExpense";
+    private string? _message;
+    private bool _saving;
+
+    protected override Task OnInitializedAsync() => LoadAsync();
+
+    private async Task LoadAsync() => _accounts = await Accounts.GetAllAsync();
+
+    private async Task CreateAsync()
+    {
+        _errors.Clear(); _message = null; _saving = true;
+        try
+        {
+            var result = await Accounts.CreateAsync(new(_code, _name, _kind), await UserId());
+            if (!result.Succeeded) { _errors.AddRange(result.Errors); return; }
+            _name = "";
+            _message = "Cuenta contable creada.";
+            await LoadAsync();
+        }
+        catch { _errors.Add("No se pudo crear la cuenta contable."); }
+        finally { _saving = false; }
+    }
+
+    private async Task ToggleAsync(AccountingAccountItem account)
+    {
+        _errors.Clear(); _message = null;
+        var result = await Accounts.SetActiveAsync(account.Id, !account.IsActive, await UserId());
+        if (!result.Succeeded) _errors.AddRange(result.Errors);
+        else { _message = account.IsActive ? "Cuenta desactivada." : "Cuenta activada."; await LoadAsync(); }
+    }
+
+    private async Task<Guid> UserId()
+    {
+        var state = await Auth.GetAuthenticationStateAsync();
+        return Guid.Parse(state.User.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)!.Value);
+    }
+
+    private static string KindText(string kind) => kind switch
+    {
+        "Income" => "Ingreso", "DirectCost" => "Costo directo", "OperatingExpense" => "Gasto operativo",
+        "Asset" => "Inversión / activo", "Liability" => "Pasivo / anticipo", "Equity" => "Aporte / patrimonio", _ => kind
+    };
+
+    private static string KindExplanation(string kind) => kind switch
+    {
+        "Income" => "Aumenta los ingresos del estado de resultados.",
+        "DirectCost" => "Se resta de los ingresos para calcular la utilidad bruta.",
+        "OperatingExpense" => "Se resta de la utilidad bruta para calcular la utilidad neta; úsala para transporte, pasajes, servicios y similares.",
+        "Asset" => "Registra equipos o utensilios duraderos y se muestra fuera del resultado inmediato.",
+        "Liability" => "Registra dinero recibido que todavía se debe cumplir o devolver, como anticipos.",
+        "Equity" => "Registra aportes del propietario sin tratarlos como ventas.",
+        _ => ""
+    };
+}

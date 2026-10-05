@@ -1,0 +1,42 @@
+@inherits LayoutComponentBase
+
+<div class="public-shell">
+    <div class="announcement">Hecho para disfrutar · Consultas directas por WhatsApp</div>
+    <header class="public-header">
+        <a class="brand-link" href="/" aria-label="Tentación Sana, inicio">
+            <img src="/images/brand/logo-oficial-tentacion-sana.png" alt="Tentación Sana" />
+        </a>
+
+        <nav class="desktop-nav" aria-label="Navegación principal">
+            <NavLink href="/" Match="NavLinkMatch.All">Inicio</NavLink>
+            <NavLink href="/catalogo">Catálogo</NavLink>
+            <a href="/#como-pedir">Cómo pedir</a>
+            <NavLink href="/contacto">Contacto</NavLink>
+            <a class="staff-link" href="/login">Iniciar sesión</a>
+        </nav>
+        <details class="mobile-menu">
+            <summary aria-label="Abrir menú"><span></span><span></span><span></span></summary>
+            <nav aria-label="Navegación móvil">
+                <a href="/">Inicio</a><a href="/catalogo">Catálogo</a><a href="/#como-pedir">Cómo pedir</a><a href="/contacto">Contacto</a><a href="/login">Iniciar sesión</a>
+            </nav>
+        </details>
+    </header>
+
+    <main>
+        @Body
+    </main>
+
+    <footer class="public-footer">
+        <div class="footer-brand">
+            <img src="/images/brand/logo-oficial-tentacion-sana.png" alt="Tentación Sana" />
+            <p>El antojo también puede cuidarte.</p>
+        </div>
+        <div>
+            <a href="/">Inicio</a>
+            <a href="/catalogo">Ver catálogo</a>
+            <a href="/#como-pedir">Cómo pedir</a>
+            <a href="/contacto">Contactar</a>
+        </div>
+        <small>© @DateTime.Now.Year Tentación Sana</small>
+    </footer>
+</div>

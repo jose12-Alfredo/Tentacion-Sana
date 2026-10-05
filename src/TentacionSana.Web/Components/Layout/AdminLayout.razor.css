@@ -1,0 +1,20 @@
+.admin-shell { min-height: 100vh; display: grid; grid-template-columns: 17rem minmax(0, 1fr); background: #f5f1e7; }
+.admin-sidebar { position: sticky; top: 0; height: 100vh; overflow-y: auto; display: flex; flex-direction: column; padding: 1.5rem; background: #171810; color: #fff; }
+.admin-brand { display: block; padding-bottom: 1.5rem; border-bottom: 1px solid #3b3d2e; }
+.admin-brand img { display: block; width: 10rem; max-width: 100%; height: auto; }
+nav { display: grid; gap: .35rem; margin-top: 1.5rem; }
+nav ::deep a, .coming { display: flex; justify-content: space-between; align-items: center; min-height: 2.8rem; padding: .7rem .8rem; border-radius: .45rem; color: #f5f1e7; text-decoration: none; }
+nav ::deep a:hover, nav ::deep a.active { background: #c8f59a; color: #18220f; }
+.coming { color: #aaa99e; }
+.coming small { font-size: .65rem; }
+.public-link { margin-top: auto; padding: 1rem 0; color: #c8f59a; }
+form button { width: 100%; min-height: 2.7rem; border: 1px solid #666953; border-radius: .45rem; background: transparent; color: #fff; cursor: pointer; }
+.admin-content { width: 100%; max-width: 88rem; padding: clamp(1.25rem, 4vw, 3.5rem); }
+@media (max-width: 760px) {
+    .admin-shell { grid-template-columns: 1fr; }
+    .admin-sidebar { position: static; height: auto; padding: 1rem; }
+    .admin-brand img { width: 8rem; }
+    nav { grid-template-columns: repeat(2, minmax(0, 1fr)); margin-top: 1rem; }
+    .coming { display: none; }
+    .public-link { margin-top: 1rem; }
+}

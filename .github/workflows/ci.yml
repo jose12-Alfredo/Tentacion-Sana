@@ -1,0 +1,44 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Obtener el codigo
+        uses: actions/checkout@v4
+
+      - name: Instalar .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          global-json-file: global.json
+          cache: true
+          cache-dependency-path: '**/*.csproj'
+
+      - name: Restaurar dependencias
+        run: dotnet restore TentacionSana.slnx
+
+      - name: Compilar
+        run: dotnet build TentacionSana.slnx --configuration Release --no-restore
+
+      - name: Ejecutar pruebas
+        run: dotnet test TentacionSana.slnx --configuration Release --no-build --logger "trx;LogFileName=test-results.trx"
+
+      - name: Publicar resultados de pruebas
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-results
+          path: '**/TestResults/*.trx'
+          if-no-files-found: ignore
+          retention-days: 7

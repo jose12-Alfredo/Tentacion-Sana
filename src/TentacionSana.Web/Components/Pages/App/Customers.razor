@@ -1,0 +1,32 @@
+@page "/app/clientes"
+@layout AdminLayout
+@rendermode InteractiveServer
+@attribute [Authorize(Policy = AppPolicies.ManageSales)]
+@inject IOperationsQueryService QueryService
+@inject ICustomerManagementService CustomerService
+@inject AuthenticationStateProvider AuthenticationStateProvider
+
+<PageTitle>Clientes | Tentación Sana</PageTitle>
+<header class="page-heading"><div><p>Relaciones comerciales</p><h1>Clientes</h1><span>Personas, empresas, sucursales, contactos y cobranza en un solo lugar.</span></div><button @onclick="()=>_showCreate=true">+ Nuevo cliente</button></header>
+<section class="search-bar"><label><span>⌕</span><input @bind="_search" @bind:event="oninput" placeholder="Buscar cliente, teléfono o correo…"/></label><span>@Filtered.Count clientes</span></section>
+@if(_errors.Count>0){<div class="error-summary">@foreach(var e in _errors){<p>@e</p>}</div>}
+@if(_items is null){<div class="empty">Cargando clientes…</div>}
+else if(Filtered.Count==0){<div class="empty"><strong>No encontramos clientes.</strong><span>Cambia la búsqueda o crea un cliente nuevo.</span></div>}
+else{<section class="customer-list"><div class="list-head"><span>Cliente</span><span>Contacto</span><span>Estructura</span><span></span></div>@foreach(var c in Filtered){<a class="customer-row" href="@($"/app/clientes/{c.Id}")"><div class="identity"><span class="monogram">@Initials(c.Name)</span><span><strong>@c.Name</strong><small>@(c.Kind=="Company"?"Empresa":"Persona")</small></span></div><div><strong>@(string.IsNullOrWhiteSpace(c.Phone)?"Sin teléfono":c.Phone)</strong><small>@(c.Email??"Sin correo")</small></div><div class="counts"><span>@c.DeliveryPointCount puntos</span><span>@c.ContactCount contactos</span><span>@c.PaymentResponsibleCount pagadores</span></div><b>Ver ficha ›</b></a>}</section>}
+
+@if(_showCreate)
+{
+ <div class="modal-backdrop" @onclick="()=>_showCreate=false"><section class="modal" @onclick:stopPropagation><header><div><small>Nuevo registro</small><h2>Crear cliente</h2></div><button @onclick="()=>_showCreate=false">×</button></header><div class="modal-body"><div class="two"><label>Tipo<select @bind="_form.Kind" @bind:after="KindChanged"><option value="Individual">Persona</option><option value="Company">Empresa</option></select></label><label>Categoría<select @bind="_form.Category"><option value="Individual">Particular</option><option value="Gym">Gimnasio</option><option value="HealthStore">Tienda saludable</option><option value="Minimarket">Minimarket</option><option value="Reseller">Revendedor</option><option value="Distributor">Distribuidor</option><option value="Other">Otro</option></select></label></div><label>Nombre<input @bind="_form.Name"/></label><div class="two"><label>Teléfono general<input @bind="_form.Phone"/></label><label>Correo<input @bind="_form.Email"/></label></div>@if(_form.Kind=="Individual"){<div class="simple-person"><strong>Domicilio principal</strong><span>Crearemos el contacto y responsable de pago automáticamente con estos datos.</span><label>Dirección<input @bind="_form.Address"/></label><label>Link de Google Maps<input @bind="_form.Location"/></label></div>}</div><footer><button class="secondary" @onclick="()=>_showCreate=false">Cancelar</button><button @onclick="Create" disabled="@_saving">@(_saving?"Guardando…":"Crear cliente")</button></footer></section></div>
+}
+
+@code{
+ private IReadOnlyList<CustomerSummary>? _items;private readonly List<string> _errors=[];private bool _showCreate,_saving;private string _search="";private Form _form=new();
+ private List<CustomerSummary> Filtered=>(_items??[]).Where(x=>string.IsNullOrWhiteSpace(_search)||x.Name.Contains(_search,StringComparison.OrdinalIgnoreCase)||x.Phone.Contains(_search,StringComparison.OrdinalIgnoreCase)||(x.Email?.Contains(_search,StringComparison.OrdinalIgnoreCase)??false)).ToList();
+ protected override Task OnInitializedAsync()=>Load();
+ private async Task Load()=>_items=await QueryService.GetCustomersAsync();
+ private Task KindChanged(){_form.Category=_form.Kind=="Individual"?"Individual":"Other";return Task.CompletedTask;}
+ private async Task Create(){_saving=true;_errors.Clear();var r=await CustomerService.CreateCustomerAsync(new(_form.Kind,_form.Category,_form.Name,_form.Phone,_form.Email,null,true,await UserId(),_form.Address,_form.Location));if(r.Succeeded&&r.Id is not null){_showCreate=false;_form=new();await Load();}else _errors.AddRange(r.Errors);_saving=false;}
+ private async Task<Guid>UserId(){var s=await AuthenticationStateProvider.GetAuthenticationStateAsync();return Guid.Parse(s.User.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)!.Value);}
+ private static string Initials(string name)=>string.Concat(name.Split(' ',StringSplitOptions.RemoveEmptyEntries).Take(2).Select(x=>char.ToUpperInvariant(x[0])));
+ private sealed class Form{public string Kind{get;set;}="Individual";public string Category{get;set;}="Individual";public string Name{get;set;}="";public string? Phone{get;set;}public string? Email{get;set;}public string? Address{get;set;}public string? Location{get;set;}}
+}

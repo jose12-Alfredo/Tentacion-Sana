@@ -1,0 +1,164 @@
+@page "/"
+@layout PublicLayout
+@rendermode InteractiveServer
+@implements IDisposable
+@inject IPublicCatalogService CatalogService
+@inject IConfiguration Configuration
+@inject IJSRuntime JS
+
+<PageTitle>Tentación Sana | Disfrutá algo rico</PageTitle>
+
+@if (_slides is null)
+{
+    <section class="hero-loading" aria-label="Cargando productos destacados" aria-busy="true">
+        <div class="hero-loading-mark" aria-hidden="true"></div>
+        <span>Cargando sabores</span>
+    </section>
+}
+else if (_slides.Count > 0)
+{
+    <section class="hero-slider" aria-roledescription="carrusel" aria-label="Productos destacados"
+             @onmouseenter="Pause" @onmouseleave="Resume" @onfocusin="Pause" @onfocusout="Resume"
+             @onpointerdown="BeginSwipe" @onpointerup="EndSwipe">
+        <div class="slides" aria-live="off">
+            @for (var index = 0; index < _slides.Count; index++)
+            {
+                var slide = _slides[index];
+                var isActive = index == _currentSlide;
+                <article class="hero-slide @(isActive ? "active" : null)" aria-hidden="@(!isActive)" @key="slide.Id">
+                    <div class="hero-copy">
+                        <p class="eyebrow">Delicioso · saludable · premium</p>
+                        @if (!string.IsNullOrWhiteSpace(slide.LandingBadgeText))
+                        {
+                            <span class="hero-badge">@slide.LandingBadgeText</span>
+                        }
+                        <div class="hero-title-frame">
+                            <h1 @key="(_currentSlide, _currentPhrase)">@ActiveHeroTitle(slide)</h1>
+                        </div>
+                        @if (!string.Equals(ActiveHeroTitle(slide), slide.Name, StringComparison.OrdinalIgnoreCase))
+                        {
+                            <p class="product-name">@slide.Name</p>
+                        }
+                        <p class="hero-intro">@HeroSubtitle(slide)</p>
+                        <ul class="benefit-list" aria-label="Beneficios destacados">
+                            @foreach (var benefit in Benefits(slide))
+                            {
+                                <li><span aria-hidden="true">✓</span>@benefit</li>
+                            }
+                        </ul>
+                        @if (slide.PublicPrice is not null)
+                        {
+                            <p class="hero-price"><small>Precio público</small> Bs @slide.PublicPrice.Value.ToString("0.00")</p>
+                        }
+                        <div class="hero-actions">
+                            <a class="button button-primary" href="@WhatsAppUrl(slide)" target="@WhatsAppTarget" rel="noopener noreferrer" tabindex="@(isActive ? 0 : -1)">Pedir por WhatsApp <span aria-hidden="true">→</span></a>
+                            <a class="button button-secondary" href="/catalogo" tabindex="@(isActive ? 0 : -1)">Ver catálogo <span aria-hidden="true">→</span></a>
+                        </div>
+                    </div>
+                    <a class="hero-media" href="/productos/@slide.Slug" tabindex="@(isActive ? 0 : -1)" aria-label="Ver @slide.Name">
+                        <span class="media-glow" aria-hidden="true"></span>
+                        <img src="@CloudinaryUrl(slide.ImageUrl, 1000)"
+                             srcset="@ImageSrcSet(slide.ImageUrl)"
+                             sizes="(max-width: 640px) 100vw, (max-width: 1024px) 48vw, 52vw"
+                             width="@slide.ImageWidth" height="@slide.ImageHeight"
+                             alt="@slide.ImageAltText"
+                             loading="@(index == 0 ? "eager" : "lazy")"
+                             fetchpriority="@(index == 0 ? "high" : "auto")" />
+                        <span class="view-product">Ver producto</span>
+                    </a>
+                </article>
+            }
+        </div>
+        @if (_slides.Count > 1)
+        {
+            <button class="slider-arrow previous" type="button" @onclick="Previous" aria-label="Producto anterior">‹</button>
+            <button class="slider-arrow next" type="button" @onclick="Next" aria-label="Producto siguiente">›</button>
+            <div class="slider-status">
+                <span class="slide-count"><strong>@(_currentSlide + 1).ToString("00")</strong> / @_slides.Count.ToString("00")</span>
+                <div class="slider-dots" role="tablist" aria-label="Elegir producto destacado">
+                    @for (var index = 0; index < _slides.Count; index++)
+                    {
+                        var target = index;
+                        <button type="button" class="@(target == _currentSlide ? "active" : null)" @onclick="() => GoTo(target)" role="tab" aria-selected="@(target == _currentSlide)" aria-label="Ir al producto @(target + 1)"><span></span></button>
+                    }
+                </div>
+            </div>
+        }
+    </section>
+}
+else
+{
+    <section class="hero-fallback">
+        <div><p class="eyebrow">Delicioso · saludable · premium</p><h1>No tenés que elegir entre cuidarte y disfrutar.</h1><p>Estamos preparando nuevos sabores. Mientras tanto, conocé el catálogo o escribinos directamente.</p><div class="hero-actions"><a class="button button-primary" href="/catalogo">Ver catálogo</a><a class="button button-secondary" href="/contacto">Contactar</a></div></div>
+        <img src="/images/brand/logo-oficial-tentacion-sana.png" alt="Tentación Sana" />
+    </section>
+}
+
+@if (_products is { Count: > 0 })
+{
+    <section class="featured-products" aria-labelledby="featured-title">
+        <div class="featured-heading"><div><p class="section-label">Hechos para tentar</p><h2 id="featured-title">Conocé nuestros productos.</h2></div><a href="/catalogo">Ver catálogo completo →</a></div>
+        <div class="featured-grid">
+            @foreach (var product in _products.Take(4))
+            {
+                <a class="featured-card" href="/productos/@product.Slug"><div class="featured-image">@if (!string.IsNullOrWhiteSpace(product.ImageUrl)){<img src="@CloudinaryUrl(product.ImageUrl, 640)" alt="@product.ImageAltText" loading="lazy" />}else{<span>TS</span>}</div><div><small>@product.Presentation</small><h3>@product.Name</h3><strong>@(product.PublicPrice is null ? "Consultar" : $"Bs {product.PublicPrice:0.00}")</strong></div></a>
+            }
+        </div>
+    </section>
+}
+
+<section class="promise" id="como-pedir" aria-labelledby="promise-title">
+    <div><p class="section-label">Cómo pedir</p><h2 id="promise-title">Del antojo a tus manos.</h2></div>
+    <div class="promise-grid"><article><span>01</span><h3>Elegí tu favorito</h3><p>Revisá sabores, presentaciones y beneficios en el catálogo.</p></article><article><span>02</span><h3>Escribinos</h3><p>Consultá por WhatsApp y contanos qué producto querés.</p></article><article><span>03</span><h3>Coordinamos</h3><p>Confirmamos disponibilidad, precio y entrega directamente contigo.</p></article></div>
+</section>
+<section class="catalog-callout"><p class="section-label">Tentación Sana</p><h2>Tu próxima favorita está acá.</h2><p>Descubrí productos pensados para que cuidarte también se sienta como un gusto.</p><a class="text-link" href="/catalogo">Ver productos <span aria-hidden="true">→</span></a></section>
+
+@code {
+    private const int AutoPlayMilliseconds = 5000;
+    private const int PhraseRotationMilliseconds = 3200;
+    private IReadOnlyList<LandingProductSlide>? _slides;
+    private IReadOnlyList<PublicProductSummary>? _products;
+    private Timer? _timer;
+    private Timer? _phraseTimer;
+    private int _currentSlide;
+    private int _currentPhrase;
+    private bool _isPaused;
+    private double? _pointerStartX;
+    private string WhatsAppTarget => string.IsNullOrWhiteSpace(Configuration["Business:WhatsAppNumber"]) ? "_self" : "_blank";
+
+    protected override async Task OnInitializedAsync()
+    {
+        _slides = await CatalogService.GetLandingProductsAsync();
+        _products = await CatalogService.GetPublishedProductsAsync();
+        if (_slides.Count > 1) _timer = new Timer(_ => _ = InvokeAsync(AdvanceAutomatically), null, AutoPlayMilliseconds, AutoPlayMilliseconds);
+        if (_slides.Any(slide => HeroTitles(slide).Count > 1)) _phraseTimer = new Timer(_ => _ = InvokeAsync(AdvancePhrase), null, PhraseRotationMilliseconds, PhraseRotationMilliseconds);
+    }
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (firstRender && await JS.InvokeAsync<bool>("tentacionSana.prefersReducedMotion"))
+        {
+            _timer?.Dispose();
+            _timer = null;
+            _phraseTimer?.Dispose();
+            _phraseTimer = null;
+        }
+    }
+    private void AdvanceAutomatically(){if(!_isPaused&&_slides is {Count:>1}){_currentSlide=(_currentSlide+1)%_slides.Count;_currentPhrase=0;StateHasChanged();}}
+    private void AdvancePhrase(){if(!_isPaused&&_slides is {Count:>0}){var phrases=HeroTitles(_slides[_currentSlide]);if(phrases.Count>1){_currentPhrase=(_currentPhrase+1)%phrases.Count;StateHasChanged();}}}
+    private void Previous()=>GoTo((_currentSlide-1+(_slides?.Count??1))%(_slides?.Count??1));
+    private void Next()=>GoTo((_currentSlide+1)%(_slides?.Count??1));
+    private void GoTo(int index){_currentSlide=index;_currentPhrase=0;RestartTimer();}
+    private void Pause()=>_isPaused=true;
+    private void Resume(){_isPaused=false;RestartTimer();}
+    private void BeginSwipe(PointerEventArgs args)=>_pointerStartX=args.ClientX;
+    private void EndSwipe(PointerEventArgs args){if(_pointerStartX is not { } start||_slides is not {Count:>1})return;var distance=args.ClientX-start;if(Math.Abs(distance)>=45){if(distance<0)Next();else Previous();}_pointerStartX=null;}
+    private void RestartTimer(){_timer?.Change(AutoPlayMilliseconds,AutoPlayMilliseconds);_phraseTimer?.Change(PhraseRotationMilliseconds,PhraseRotationMilliseconds);}
+    private string ActiveHeroTitle(LandingProductSlide slide){var titles=HeroTitles(slide);return titles[_currentPhrase%titles.Count];}
+    private static IReadOnlyList<string> HeroTitles(LandingProductSlide slide){var titles=(slide.LandingTitle??string.Empty).Split('|',StringSplitOptions.RemoveEmptyEntries|StringSplitOptions.TrimEntries);return titles.Length==0?[slide.Name]:titles;}
+    private static string HeroSubtitle(LandingProductSlide slide)=>string.IsNullOrWhiteSpace(slide.LandingSubtitle)?slide.Description:slide.LandingSubtitle;
+    private static IReadOnlyList<string> Benefits(LandingProductSlide slide)=>!string.IsNullOrWhiteSpace(slide.ApprovedBenefits)?slide.ApprovedBenefits.Split([',',';','\n'],StringSplitOptions.RemoveEmptyEntries|StringSplitOptions.TrimEntries).Take(3).ToList():[slide.Presentation,"Hecho para disfrutar"];
+    private string WhatsAppUrl(LandingProductSlide slide)=>TentacionSana.Application.Contact.WhatsAppLinkBuilder.Build(Configuration["Business:WhatsAppNumber"],slide.Name,slide.Presentation)??"/contacto";
+    private static string ImageSrcSet(string url)=>$"{CloudinaryUrl(url,640)} 640w, {CloudinaryUrl(url,1000)} 1000w, {CloudinaryUrl(url,1440)} 1440w";
+    private static string CloudinaryUrl(string url,int width){const string marker="/upload/";var index=url.IndexOf(marker,StringComparison.OrdinalIgnoreCase);return index<0?url:url.Insert(index+marker.Length,$"f_auto,q_auto:good,c_fill,g_auto,w_{width}/");}
+    public void Dispose(){_timer?.Dispose();_phraseTimer?.Dispose();}
+}

@@ -1,0 +1,67 @@
+# Compilacion y publicacion de .NET
+**/[Bb]in/
+**/[Oo]bj/
+**/[Pp]ublish/
+artifacts/
+.artifacts/
+.build-check/
+TestResults/
+**/TestResults/
+coverage/
+coverage.*
+*.coverage
+*.coveragexml
+*.trx
+*.nupkg
+*.snupkg
+packages/
+
+# Configuracion local y secretos
+.env
+.env.*
+!.env.example
+appsettings.Local.json
+appsettings.*.local.json
+secrets.json
+**/.data-protection-keys/
+**/keys/
+*.pfx
+*.p12
+*.pem
+*.key
+
+# Bases de datos, registros y archivos temporales
+*.db
+*.db-shm
+*.db-wal
+*.sqlite
+*.sqlite3
+*.log
+*.tmp
+*.temp
+tmp/
+temp/
+
+# Visual Studio, Rider, VS Code y Fleet
+.vs/
+.idea/
+.vscode/
+.fleet/
+*.suo
+*.user
+*.userosscache
+*.sln.docstates
+*.DotSettings.user
+_ReSharper*/
+*.sln.iml
+
+# Sistema operativo
+.DS_Store
+Thumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+
+# Reportes y herramientas locales
+BenchmarkDotNet.Artifacts/
+*.dotCover
+*.dotCover.xml

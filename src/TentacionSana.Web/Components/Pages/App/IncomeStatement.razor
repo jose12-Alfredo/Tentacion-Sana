@@ -1,0 +1,136 @@
+@page "/app/estado-resultados"
+@layout AdminLayout
+@rendermode InteractiveServer
+@attribute [Authorize(Policy = AppPolicies.ManageFinance)]
+@inject IIncomeStatementService Statements
+
+<PageTitle>Estado de resultados | Tentación Sana</PageTitle>
+
+<header class="statement-heading">
+    <div>
+        <p>Contabilidad</p>
+        <h1>Estado de resultados</h1>
+        <span>Ventas, costos y gastos del negocio en un solo informe.</span>
+    </div>
+    <div class="period-controls">
+        <label>Desde <input type="date" @bind="_from" /></label>
+        <label>Hasta <input type="date" @bind="_to" /></label>
+        <button @onclick="LoadAsync" disabled="@_loading">@(_loading ? "Calculando…" : "Generar estado")</button>
+    </div>
+</header>
+
+@if (_error is not null)
+{
+    <p class="statement-error" role="alert">@_error</p>
+}
+else if (_report is null)
+{
+    <p>Calculando el estado de resultados…</p>
+}
+else
+{
+    <section class="result-hero @(_report.NetIncome >= 0 ? "positive" : "negative")">
+        <div><small>Resultado del período</small><strong>@Money(_report.NetIncome)</strong><span>@(_report.NetIncome >= 0 ? "Utilidad" : "Pérdida") neta</span></div>
+        <dl>
+            <div><dt>Margen bruto</dt><dd>@_report.GrossMargin.ToString("N1")%</dd></div>
+            <div><dt>Margen neto</dt><dd>@_report.NetMargin.ToString("N1")%</dd></div>
+            <div><dt>Período</dt><dd>@_report.From.ToString("dd/MM/yyyy") – @_report.To.ToString("dd/MM/yyyy")</dd></div>
+        </dl>
+    </section>
+
+    @if (_report.SalesWithoutCalculatedCost > 0)
+    {
+        <p class="cost-warning"><strong>Revisa los costos:</strong> @_report.SalesWithoutCalculatedCost venta(s) no tienen costo de producción calculado y podrían aumentar la utilidad mostrada.</p>
+    }
+
+    <section class="statement-sheet" aria-label="Detalle del estado de resultados">
+        <header><span>Tentación Sana</span><strong>Estado de resultados</strong><small>Expresado en bolivianos</small></header>
+
+        <div class="statement-group">
+            <h2>Ingresos</h2>
+            <div class="statement-row"><span>Ventas entregadas</span><strong>@Money(_report.SalesRevenue)</strong></div>
+            @if (_report.OtherIncome != 0)
+            {
+                <div class="statement-row"><span>Otros ingresos operativos</span><strong>@Money(_report.OtherIncome)</strong></div>
+            }
+            <div class="statement-row subtotal"><span>Total ingresos</span><strong>@Money(_report.TotalRevenue)</strong></div>
+        </div>
+
+        <div class="statement-group">
+            <h2>Costos</h2>
+            <div class="statement-row"><span>Costo de los productos vendidos</span><strong>(@Money(_report.CostOfSales))</strong></div>
+            @if (_report.OtherDirectCosts != 0)
+            {
+                <div class="statement-row"><span>Otros costos directos</span><strong>(@Money(_report.OtherDirectCosts))</strong></div>
+            }
+            <div class="statement-row subtotal"><span>Total costos</span><strong>(@Money(_report.TotalCosts))</strong></div>
+            <div class="statement-row result"><span>Utilidad bruta</span><strong>@Money(_report.GrossProfit)</strong></div>
+        </div>
+
+        <div class="statement-group">
+            <h2>Gastos operativos</h2>
+            @if (_report.OperatingExpenses.Count == 0)
+            {
+                <div class="statement-row muted"><span>No se registraron gastos operativos</span><strong>@Money(0)</strong></div>
+            }
+            else
+            {
+                @foreach (var line in _report.OperatingExpenses)
+                {
+                    <div class="statement-row"><span>@line.Category</span><strong>(@Money(line.Amount))</strong></div>
+                }
+            }
+            <div class="statement-row subtotal"><span>Total gastos operativos</span><strong>(@Money(_report.TotalOperatingExpenses))</strong></div>
+        </div>
+
+        <div class="statement-row net-result @(_report.NetIncome >= 0 ? "positive" : "negative")">
+            <span>@(_report.NetIncome >= 0 ? "Utilidad neta" : "Pérdida neta")</span>
+            <strong>@Money(_report.NetIncome)</strong>
+        </div>
+    </section>
+
+    <section class="outside-result">
+        <div>
+            <small>Movimiento de inventario</small>
+            <strong>@Money(_report.InventoryPurchases)</strong>
+            <p>Compras de insumos. No se gastan inmediatamente: pasan al costo cuando el producto se vende.</p>
+        </div>
+        <div>
+            <small>Inversión en equipos</small>
+            <strong>@Money(_report.Investments)</strong>
+            <p>Equipos y utensilios duraderos. Se muestran fuera del resultado del período.</p>
+        </div>
+    </section>
+
+    <p class="accounting-note">Los cobros de clientes, transferencias, aportes de socios, anticipos y ajustes de arqueo no se cuentan nuevamente como ingresos o gastos. Este informe muestra el resultado operativo antes de impuestos y depreciación.</p>
+}
+
+@code {
+    private DateTime _from = new(DateTime.Today.Year, DateTime.Today.Month, 1);
+    private DateTime _to = DateTime.Today;
+    private IncomeStatementReport? _report;
+    private string? _error;
+    private bool _loading;
+
+    protected override Task OnInitializedAsync() => LoadAsync();
+
+    private async Task LoadAsync()
+    {
+        _loading = true;
+        _error = null;
+        try
+        {
+            _report = await Statements.GetAsync(DateOnly.FromDateTime(_from), DateOnly.FromDateTime(_to));
+        }
+        catch
+        {
+            _error = "No se pudo generar el estado de resultados. Inténtalo nuevamente.";
+        }
+        finally
+        {
+            _loading = false;
+        }
+    }
+
+    private static string Money(decimal amount) => $"Bs {amount:N2}";
+}

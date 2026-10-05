@@ -1,0 +1,31 @@
+.accounts-heading { padding: 1.7rem 2rem; border-radius: 22px; background: #173d25; color: white; }
+.accounts-heading p, .accounts-heading h1 { margin: .12rem 0; }
+.accounts-heading span { opacity: .82; }
+.account-creator, .accounts-list { margin-top: 1rem; padding: 1.2rem; border: 1px solid #dbe4d8; border-radius: 17px; background: white; }
+.account-creator { display: grid; grid-template-columns: minmax(13rem, .7fr) 2fr; gap: 1.5rem; }
+.account-creator small, .accounts-list small { color: #537451; text-transform: uppercase; letter-spacing: .08em; }
+.account-creator h2, .accounts-list h2 { margin: .15rem 0; }
+.account-creator p { color: #657060; }
+.account-fields { display: grid; grid-template-columns: .7fr 1.4fr 1.2fr auto; gap: .7rem; align-items: end; }
+.account-fields label { display: grid; gap: .35rem; font-weight: 700; }
+.account-fields input, .account-fields select { min-height: 2.75rem; padding: .55rem .7rem; border: 1px solid #cbd7c7; border-radius: 9px; background: white; }
+.account-fields button { min-height: 2.75rem; padding: .6rem 1rem; border: 0; border-radius: 9px; background: #267a32; color: white; font-weight: 800; }
+.kind-explanation { grid-column: 2; margin: 0 !important; padding: .7rem .85rem; border-left: 4px solid #d3a72b; background: #fff9e5; }
+.accounts-list > header { display: flex; justify-content: space-between; align-items: end; }
+.accounts-table { margin-top: 1rem; overflow: auto; }
+.accounts-table table { width: 100%; border-collapse: collapse; }
+.accounts-table th, .accounts-table td { padding: .75rem; border-bottom: 1px solid #edf1e9; text-align: left; }
+.accounts-table th { color: #687465; font-size: .72rem; text-transform: uppercase; letter-spacing: .05em; }
+.accounts-table tr.inactive { opacity: .58; }
+.kind { display: inline-block; padding: .3rem .5rem; border-radius: 7px; background: #eef3eb; color: #37543d; font-weight: 700; }
+.kind.operatingexpense { background: #fff0e8; color: #91491f; }
+.kind.directcost { background: #fff7d9; color: #765d0d; }
+.kind.income { background: #e3f4e8; color: #246b45; }
+.kind.asset { background: #e4eff9; color: #235a87; }
+.toggle { border: 1px solid #8b826f; border-radius: 8px; background: transparent; padding: .45rem .7rem; }
+.accounts-errors, .accounts-ok { padding: 1rem; border-radius: 12px; }
+.accounts-errors { background: #fff0ef; color: #a5221d; }
+.accounts-errors p { margin: 0; }
+.accounts-ok { background: #e9f8e8; color: #176c32; }
+@media (max-width: 1000px) { .account-creator { grid-template-columns: 1fr; } .account-fields { grid-template-columns: repeat(2, 1fr); } .kind-explanation { grid-column: 1; } }
+@media (max-width: 650px) { .account-fields { grid-template-columns: 1fr; } .accounts-table table, .accounts-table tbody, .accounts-table tr, .accounts-table td { display: block; } .accounts-table thead { display: none; } .accounts-table tr { margin-bottom: .7rem; padding: .5rem; border: 1px solid #dbe4d8; border-radius: 12px; } .accounts-table td { display: grid; grid-template-columns: 7rem 1fr; border: 0; padding: .35rem; } .accounts-table td::before { content: attr(data-label); color: #687465; font-weight: 700; } }
