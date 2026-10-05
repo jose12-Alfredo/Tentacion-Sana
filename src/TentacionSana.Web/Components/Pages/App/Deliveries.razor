@@ -75,32 +75,36 @@
         .deliveries-workspace > .route-map-card { grid-column: 1; grid-row: 2; }
         .deliveries-workspace > .route-panel { grid-column: 1; grid-row: 3; position: static; }
     }
-    @@media (max-width: 900px) {
+    @@media (max-width: 1180px) {
         .delivery-filters { grid-template-columns: 1fr 1fr !important; }
         .delivery-search { grid-column: 1 / -1 !important; }
         .bulk-action-bar { align-items: stretch; position: static; flex-wrap: wrap; margin: .65rem .75rem 0; }
         .bulk-action-bar strong { width: 100%; margin: 0; }
         .bulk-action-bar button { flex: 1 1 9rem; }
         .delivery-table { display: none; }
-        .mobile-deliveries { display: grid; gap: 0; padding: 0 .75rem .65rem; }
+        .mobile-deliveries { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: .75rem; padding: .75rem; }
         .interactive-route-map, .route-map-frame { height: 23rem; min-height: 23rem; }
         .route-map-card > header { align-items: flex-start; flex-direction: column; }
         .route-map-card > header a { width: 100%; box-sizing: border-box; text-align: center; }
-        .mobile-delivery { display: grid; position: relative; gap: .7rem !important; padding: 1rem .15rem !important; border: 0; border-bottom: 1px solid #e4e9e1; border-radius: 0; background: transparent; }
-        .mobile-delivery header { align-items: flex-start !important; }
+        .mobile-delivery { display: grid; position: relative; align-content: start; gap: .72rem !important; min-width: 0; padding: .9rem !important; border: 1px solid #e2e8df; border-radius: .82rem; background: #fff; box-shadow: 0 5px 15px rgba(35,55,38,.045); }
+        .mobile-delivery.status-inroute { border-left: 3px solid #7961c8; }
+        .mobile-delivery.status-incident { border-left: 3px solid #d59a25; }
+        .mobile-delivery header { display: flex; align-items: flex-start !important; justify-content: space-between; gap: .65rem; }
         .mobile-delivery header label { display: flex; align-items: center; gap: .45rem; color: #24362a; font-size: .88rem; }
-        .mobile-order-body { grid-template-columns: minmax(0,1fr) !important; padding-left: 1.55rem !important; }
+        .mobile-delivery header .delivery-status { margin-top: 0; }
+        .mobile-order-body { display: grid; grid-template-columns: minmax(0,1fr) !important; min-width: 0; padding-left: 0 !important; }
+        .mobile-customer { display: grid; min-width: 0; gap: .08rem; }
         .mobile-customer strong, .mobile-customer span { white-space: normal !important; }
         .mobile-customer strong { font-size: .87rem; }
-        .mobile-customer span { margin-top: .08rem; font-size: .74rem; }
+        .mobile-customer span { margin-top: .08rem; color: #748078; font-size: .74rem; }
         .mobile-promise { margin-top: .5rem; }
-        .mobile-facts { display: grid; grid-template-columns: 1fr 1fr; gap: .55rem; padding-left: 1.55rem; }
+        .mobile-facts { display: grid; grid-template-columns: 1fr 1fr; gap: .55rem; padding-left: 0; }
         .mobile-fact { display: grid; gap: .12rem; padding: .58rem .65rem; border-radius: .58rem; background: #f6f8f4; }
         .mobile-fact small { color: #758078; font-size: .61rem; font-weight: 800; text-transform: uppercase; }
         .mobile-fact strong { color: #2b392e; font-size: .82rem; }
         .mobile-fact span { color: #707b73; font-size: .65rem; }
-        .mobile-driver { display: flex; align-items: center; justify-content: space-between; gap: .75rem; padding-left: 1.55rem; color: #657067; font-size: .69rem; }
-        .mobile-actions { align-items: center; padding-left: 1.55rem !important; }
+        .mobile-driver { display: flex; align-items: center; justify-content: space-between; gap: .75rem; padding: .1rem 0; border-top: 1px solid #edf1eb; color: #657067; font-size: .69rem; }
+        .mobile-actions { display: flex; align-items: center; gap: .55rem; min-height: 2.15rem; padding-left: 0 !important; }
         .mobile-actions .view-pin { display: inline-flex; width: auto; height: 2.15rem; padding: 0 .72rem; font-size: .7rem; }
         .mobile-actions .row-menu { margin-left: auto; }
     }
@@ -156,8 +160,8 @@
         .deliveries-workspace { display: grid; width: 100%; gap: .8rem; }
         .deliveries-list-card > header { gap: .45rem; padding: .9rem; }
         .deliveries-list-card > header p { overflow-wrap: anywhere; }
-        .mobile-deliveries { padding: .1rem .85rem .65rem !important; }
-        .mobile-delivery { min-width: 0; padding: .85rem 0 !important; }
+        .mobile-deliveries { grid-template-columns: minmax(0, 1fr); padding: .65rem !important; }
+        .mobile-delivery { min-width: 0; padding: .85rem !important; }
         .mobile-order-body,
         .mobile-facts,
         .mobile-driver,
