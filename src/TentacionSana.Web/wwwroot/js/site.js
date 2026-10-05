@@ -16,6 +16,14 @@ window.tentacionSana = {
     }
 };
 
+document.addEventListener('components-reconnect-state-changed', event => {
+    if (event.detail?.state !== 'rejected') return;
+
+    // Render replaced the server process and the old Blazor circuit no longer exists.
+    // Reloading creates a new circuit instead of leaving a visible but inert page.
+    window.location.reload();
+});
+
 document.addEventListener('click', event => {
     if (!(event.target instanceof Element)) return;
 
