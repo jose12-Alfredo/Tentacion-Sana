@@ -6,6 +6,7 @@ using CloudinaryDotNet;
 using CloudinaryDotNet.Actions;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using TentacionSana.Application.Receivables;
 using TentacionSana.Domain.Deliveries;
@@ -21,10 +22,15 @@ public sealed class ReceivablesService(
     TimeProvider clock,
     IOptions<CloudinaryOptions> cloudinaryOptions,
     IHttpClientFactory httpClientFactory,
-    IHostEnvironment environment) : IReceivablesService
+    IHostEnvironment environment,
+    ILogger<ReceivablesService> logger) : IReceivablesService
 {
     private const long MaximumEvidenceBytes = 10 * 1024 * 1024;
     private static readonly string[] AllowedEvidenceTypes = ["image/jpeg", "image/png", "image/webp"];
+    private static readonly Action<ILogger, string, long, Exception?> UnexpectedEvidenceDownloadError =
+        LoggerMessage.Define<string, long>(LogLevel.Error,
+            new EventId(1, nameof(UnexpectedEvidenceDownloadError)),
+            "Unexpected error downloading evidence {FileName} for order {OrderNumber}.");
 
     public async Task<ReceivablesOverview> GetOverviewAsync(CancellationToken cancellationToken = default)
     {
@@ -316,8 +322,6 @@ public sealed class ReceivablesService(
         var settings = cloudinaryOptions.Value;
         if (items.Count > 0 && (string.IsNullOrWhiteSpace(settings.CloudName) || string.IsNullOrWhiteSpace(settings.ApiKey) || string.IsNullOrWhiteSpace(settings.ApiSecret)))
             return ([], ["Cloudinary no est\u00E1 configurado para recuperar las evidencias."]);
-        var cloudinary = CreateCloudinary(settings);
-        var client = httpClientFactory.CreateClient();
         var result = new List<AccountStatementEvidence>();
         var errors = new List<string>();
         var numberByOrder = orders.ToDictionary(x => x.OrderId, x => x.OrderNumber);
@@ -325,13 +329,23 @@ public sealed class ReceivablesService(
         {
             try
             {
-                var url = cloudinary.DownloadPrivate(source.PublicId, false, source.Format, "authenticated", clock.GetUtcNow().AddMinutes(10).ToUnixTimeSeconds(), "image", null, source.FileName);
-                using var response = await client.GetAsync(url, cancellationToken);
-                response.EnsureSuccessStatusCode();
-                var bytes = await response.Content.ReadAsByteArrayAsync(cancellationToken);
-                result.Add(new AccountStatementEvidence(numberByOrder[source.OrderId], source.Type, source.AtUtc, bytes));
+                var downloaded = await CloudinaryPrivateMedia.DownloadAsync(settings, httpClientFactory,
+                    source.PublicId, source.Format, source.FileName, clock.GetUtcNow().AddMinutes(10),
+                    cancellationToken, logger);
+                if (downloaded is null)
+                {
+                    errors.Add($"No se pudo recuperar la evidencia '{source.FileName}' del pedido #{numberByOrder[source.OrderId]}.");
+                    continue;
+                }
+
+                result.Add(new AccountStatementEvidence(numberByOrder[source.OrderId], source.Type, source.AtUtc,
+                    downloaded.Value.Content));
             }
-            catch { errors.Add($"No se pudo recuperar la evidencia '{source.FileName}' del pedido #{numberByOrder[source.OrderId]}."); }
+            catch (Exception exception) when (exception is not OperationCanceledException)
+            {
+                UnexpectedEvidenceDownloadError(logger, source.FileName, numberByOrder[source.OrderId], exception);
+                errors.Add($"No se pudo recuperar la evidencia '{source.FileName}' del pedido #{numberByOrder[source.OrderId]}.");
+            }
         }
         return (result, errors);
     }
