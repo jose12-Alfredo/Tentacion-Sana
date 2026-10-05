@@ -20,4 +20,11 @@
     <UserSecretsId>ab352788-7b79-4224-8592-fc3c2de4fbb5</UserSecretsId>
   </PropertyGroup>
 
+  <Target Name="CopyBlazorWebScriptForProduction" AfterTargets="Publish">
+    <Copy SourceFiles="$(PublishDir)wwwroot/_framework/blazor.web.js"
+          DestinationFiles="$(PublishDir)wwwroot/js/blazor.web.js"
+          SkipUnchangedFiles="true"
+          Condition="Exists('$(PublishDir)wwwroot/_framework/blazor.web.js')" />
+  </Target>
+
 </Project>
