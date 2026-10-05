@@ -7,7 +7,7 @@ namespace TentacionSana.IntegrationTests.Media;
 public sealed class CloudinaryPrivateMediaTests
 {
     [Fact]
-    public async Task DownloadAsyncFallsBackToSignedCdnWhenPrivateEndpointRejectsRequest()
+    public async Task DownloadAsyncFallsBackToPrivateEndpointWhenSignedCdnRejectsRequest()
     {
         var handler = new SequenceHandler(
             new HttpResponseMessage(HttpStatusCode.Unauthorized),
@@ -35,12 +35,12 @@ public sealed class CloudinaryPrivateMediaTests
         Assert.Equal([1, 2, 3], result.Value.Content);
         Assert.Equal("image/png", result.Value.ContentType);
         Assert.Collection(handler.Requests,
-            request => Assert.Equal("api.cloudinary.com", request.Host),
             request =>
             {
                 Assert.Equal("res.cloudinary.com", request.Host);
                 Assert.Contains("/image/authenticated/", request.AbsolutePath, StringComparison.Ordinal);
-            });
+            },
+            request => Assert.Equal("api.cloudinary.com", request.Host));
     }
 
     private sealed class TestHttpClientFactory(HttpClient client) : IHttpClientFactory

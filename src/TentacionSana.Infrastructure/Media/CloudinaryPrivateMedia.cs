@@ -5,18 +5,14 @@ namespace TentacionSana.Infrastructure.Media;
 
 internal static class CloudinaryPrivateMedia
 {
-    private static readonly Action<ILogger, int, string?, Exception?> PrivateDownloadRejected =
-        LoggerMessage.Define<int, string?>(LogLevel.Warning, new EventId(1, nameof(PrivateDownloadRejected)),
-            "Cloudinary private download returned HTTP {StatusCode} for {FileName}; trying the signed CDN URL.");
-    private static readonly Action<ILogger, string?, Exception?> PrivateDownloadFailed =
-        LoggerMessage.Define<string?>(LogLevel.Warning, new EventId(2, nameof(PrivateDownloadFailed)),
-            "Cloudinary private download failed for {FileName}; trying the signed CDN URL.");
-    private static readonly Action<ILogger, int, string?, Exception?> SignedCdnDownloadRejected =
-        LoggerMessage.Define<int, string?>(LogLevel.Error, new EventId(3, nameof(SignedCdnDownloadRejected)),
-            "Cloudinary signed CDN download returned HTTP {StatusCode} for {FileName}.");
-    private static readonly Action<ILogger, string?, Exception?> SignedCdnDownloadFailed =
-        LoggerMessage.Define<string?>(LogLevel.Error, new EventId(4, nameof(SignedCdnDownloadFailed)),
-            "Cloudinary signed CDN download failed for {FileName}.");
+    private static readonly Action<ILogger, string, int, string?, Exception?> DownloadRejected =
+        LoggerMessage.Define<string, int, string?>(LogLevel.Warning,
+            new EventId(1, nameof(DownloadRejected)),
+            "Cloudinary {DownloadMethod} returned HTTP {StatusCode} for {FileName}.");
+    private static readonly Action<ILogger, string, string?, Exception?> DownloadFailed =
+        LoggerMessage.Define<string, string?>(LogLevel.Warning,
+            new EventId(2, nameof(DownloadFailed)),
+            "Cloudinary {DownloadMethod} failed for {FileName}.");
 
     public static async Task<(byte[] Content, string ContentType)?> DownloadAsync(
         CloudinaryOptions settings,
@@ -40,26 +36,10 @@ internal static class CloudinaryPrivateMedia
         {
             Api = { Secure = true }
         };
-        var privateDownloadUrl = cloudinary.DownloadPrivate(publicId, false, format, "authenticated",
-            expiresAt.ToUnixTimeSeconds(), "image", null, fileName);
         var client = httpClientFactory.CreateClient();
 
-        try
-        {
-            using var response = await client.GetAsync(
-                privateDownloadUrl, HttpCompletionOption.ResponseHeadersRead, cancellationToken);
-            if (response.IsSuccessStatusCode)
-            {
-                return await ReadAsync(response, format, cancellationToken);
-            }
-
-            if (logger is not null) PrivateDownloadRejected(logger, (int)response.StatusCode, fileName, null);
-        }
-        catch (HttpRequestException exception)
-        {
-            if (logger is not null) PrivateDownloadFailed(logger, fileName, exception);
-        }
-
+        // Render only needs the image bytes; a signed authenticated CDN URL avoids the
+        // time-sensitive download API while keeping the URL on the server.
         var source = string.IsNullOrWhiteSpace(format)
             || publicId.EndsWith($".{format}", StringComparison.OrdinalIgnoreCase)
                 ? publicId
@@ -69,34 +49,57 @@ internal static class CloudinaryPrivateMedia
             .Signed(true)
             .Secure(true)
             .BuildUrl(source);
+        var downloaded = await TryDownloadAsync(client, signedCdnUrl, format, fileName,
+            "signed CDN download", logger, cancellationToken);
+        if (downloaded is not null) return downloaded;
 
+        // Keep the time-limited API URL as a fallback for Cloudinary environments that
+        // don't accept signed delivery URLs for the original resource.
+        var privateDownloadUrl = cloudinary.DownloadPrivate(publicId, false, format, "authenticated",
+            expiresAt.ToUnixTimeSeconds(), "image", null, fileName);
+        return await TryDownloadAsync(client, privateDownloadUrl, format, fileName,
+            "private download", logger, cancellationToken);
+    }
+
+    private static async Task<(byte[] Content, string ContentType)?> TryDownloadAsync(
+        HttpClient client,
+        string url,
+        string format,
+        string? fileName,
+        string method,
+        ILogger? logger,
+        CancellationToken cancellationToken)
+    {
         try
         {
-            using var response = await client.GetAsync(
-                signedCdnUrl, HttpCompletionOption.ResponseHeadersRead, cancellationToken);
-            if (response.IsSuccessStatusCode)
+            using var response = await client.GetAsync(url, HttpCompletionOption.ResponseHeadersRead,
+                cancellationToken);
+            if (!response.IsSuccessStatusCode)
             {
-                return await ReadAsync(response, format, cancellationToken);
+                if (logger is not null) DownloadRejected(logger, method, (int)response.StatusCode, fileName, null);
+                return null;
             }
 
-            if (logger is not null) SignedCdnDownloadRejected(logger, (int)response.StatusCode, fileName, null);
+            var content = await response.Content.ReadAsByteArrayAsync(cancellationToken);
+            if (content.Length == 0)
+            {
+                if (logger is not null) DownloadRejected(logger, method, (int)response.StatusCode, fileName, null);
+                return null;
+            }
+
+            var contentType = response.Content.Headers.ContentType?.MediaType ?? ContentTypeFromFormat(format);
+            return (content, contentType);
         }
         catch (HttpRequestException exception)
         {
-            if (logger is not null) SignedCdnDownloadFailed(logger, fileName, exception);
+            if (logger is not null) DownloadFailed(logger, method, fileName, exception);
+            return null;
         }
-
-        return null;
-    }
-
-    private static async Task<(byte[] Content, string ContentType)> ReadAsync(
-        HttpResponseMessage response,
-        string format,
-        CancellationToken cancellationToken)
-    {
-        var content = await response.Content.ReadAsByteArrayAsync(cancellationToken);
-        var contentType = response.Content.Headers.ContentType?.MediaType ?? ContentTypeFromFormat(format);
-        return (content, contentType);
+        catch (TaskCanceledException exception) when (!cancellationToken.IsCancellationRequested)
+        {
+            if (logger is not null) DownloadFailed(logger, method, fileName, exception);
+            return null;
+        }
     }
 
     private static string ContentTypeFromFormat(string format) => format.ToLowerInvariant() switch
