@@ -1,4 +1,5 @@
 using System.Threading.RateLimiting;
+using System.Security.Claims;
 using CloudinaryDotNet;
 using Microsoft.AspNetCore.DataProtection;
 using Microsoft.AspNetCore.HttpOverrides;
@@ -13,6 +14,9 @@ using TentacionSana.Domain.Catalog;
 using TentacionSana.Domain.Customers;
 using TentacionSana.Domain.Orders;
 using TentacionSana.Application.Deliveries;
+using TentacionSana.Application.Customers;
+using TentacionSana.Application.Finance;
+using TentacionSana.Application.Security;
 using TentacionSana.Web.Components;
 using TentacionSana.Web.Security;
 
@@ -428,6 +432,52 @@ app.MapStaticAssets();
 app.MapRazorComponents<App>()
     .AddInteractiveServerRenderMode();
 app.MapSecurityEndpoints();
+app.MapGet("/media/delivery-points/{pointId:guid}", GetDeliveryPointImageAsync)
+    .RequireAuthorization(AppPolicies.InternalAccess);
+app.MapGet("/media/delivery-evidence/{evidenceId:guid}", GetDeliveryEvidenceAsync)
+    .RequireAuthorization(AppPolicies.InternalAccess);
+app.MapGet("/media/payment-evidence/{evidenceId:guid}", GetPaymentEvidenceAsync)
+    .RequireAuthorization(AppPolicies.InternalAccess);
+app.MapGet("/media/cash-evidence/{movementId:guid}", GetCashEvidenceAsync)
+    .RequireAuthorization(AppPolicies.InternalAccess);
 app.MapGet("/health", () => Results.Ok()).AllowAnonymous();
 
 app.Run();
+
+static async Task<IResult> GetDeliveryPointImageAsync(Guid pointId, IDeliveryPointImageService images, CancellationToken cancellationToken)
+{
+    var image = await images.GetContentAsync(pointId, cancellationToken);
+    return image is null ? Results.NotFound() : Results.File(image.Content, image.ContentType, enableRangeProcessing: true);
+}
+
+static async Task<IResult> GetDeliveryEvidenceAsync(Guid evidenceId, ClaimsPrincipal user, IDeliveryEvidenceService evidenceService, CancellationToken cancellationToken)
+{
+    var userId = CurrentUserId(user);
+    if (userId is null) return Results.Unauthorized();
+    var evidence = await evidenceService.GetContentAsync(evidenceId, userId.Value, cancellationToken);
+    return EvidenceFile(evidence.Succeeded, evidence.Content, evidence.ContentType);
+}
+
+static async Task<IResult> GetPaymentEvidenceAsync(Guid evidenceId, ClaimsPrincipal user, IDeliveryService deliveryService, CancellationToken cancellationToken)
+{
+    var userId = CurrentUserId(user);
+    if (userId is null) return Results.Unauthorized();
+    var evidence = await deliveryService.GetPaymentEvidenceContentAsync(evidenceId, userId.Value, cancellationToken);
+    return EvidenceFile(evidence.Succeeded, evidence.Content, evidence.ContentType);
+}
+
+static async Task<IResult> GetCashEvidenceAsync(Guid movementId, ClaimsPrincipal user, ICashLedgerService cashLedger, CancellationToken cancellationToken)
+{
+    var userId = CurrentUserId(user);
+    if (userId is null) return Results.Unauthorized();
+    var evidence = await cashLedger.GetEvidenceContentAsync(movementId, userId.Value, cancellationToken);
+    return EvidenceFile(evidence.Succeeded, evidence.Content, evidence.ContentType);
+}
+
+static Guid? CurrentUserId(ClaimsPrincipal user) =>
+    Guid.TryParse(user.FindFirstValue(ClaimTypes.NameIdentifier), out var userId) ? userId : null;
+
+static IResult EvidenceFile(bool succeeded, byte[]? content, string? contentType) =>
+    succeeded && content is not null
+        ? Results.File(content, contentType ?? "application/octet-stream", enableRangeProcessing: true)
+        : Results.NotFound();

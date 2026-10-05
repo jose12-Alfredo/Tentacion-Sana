@@ -15,7 +15,7 @@ using TentacionSana.Infrastructure.Persistence;
 
 namespace TentacionSana.Infrastructure.Deliveries;
 
-public sealed class DeliveryService(ApplicationDbContext db, TimeProvider clock, IOptions<CloudinaryOptions> cloudinaryOptions, LocationCoordinateResolver coordinateResolver) : IDeliveryService
+public sealed class DeliveryService(ApplicationDbContext db, TimeProvider clock, IOptions<CloudinaryOptions> cloudinaryOptions, LocationCoordinateResolver coordinateResolver, IHttpClientFactory httpClientFactory) : IDeliveryService
 {
     public async Task<DeliveryResult> ScheduleAsync(ScheduleDeliveryCommand command, Guid userId, CancellationToken cancellationToken = default)
     {
@@ -834,11 +834,19 @@ public sealed class DeliveryService(ApplicationDbContext db, TimeProvider clock,
 
     public async Task<SignedEvidenceResult> GetPaymentEvidenceUrlAsync(Guid evidenceId,Guid userId,CancellationToken cancellationToken=default)
     {
+        var exists=await db.PaymentEvidence.AsNoTracking().AnyAsync(x=>x.Id==evidenceId,cancellationToken);
+        return exists?new(true,$"/media/payment-evidence/{evidenceId:N}",[]):new(false,null,["El respaldo no existe."]);
+    }
+
+    public async Task<EvidenceContentResult> GetPaymentEvidenceContentAsync(Guid evidenceId,Guid userId,CancellationToken cancellationToken=default)
+    {
         var evidence=await db.PaymentEvidence.AsNoTracking().SingleOrDefaultAsync(x=>x.Id==evidenceId,cancellationToken);
-        if(evidence is null)return new(false,null,["El respaldo no existe."]);
-        var settings=cloudinaryOptions.Value;var cloudinary=new Cloudinary(new Account(settings.CloudName,settings.ApiKey,settings.ApiSecret)){Api={Secure=true}};
-        var url=cloudinary.DownloadPrivate(evidence.PublicId,false,evidence.Format,"authenticated",clock.GetUtcNow().AddMinutes(5).ToUnixTimeSeconds(),"image",null,evidence.FileName);
-        Audit("PaymentEvidenceViewed",evidence.PaymentId,userId,clock.GetUtcNow());await db.SaveChangesAsync(cancellationToken);return new(true,url,[]);
+        if(evidence is null)return new(false,null,null,["El respaldo no existe."]);
+        var downloaded=await CloudinaryPrivateMedia.DownloadAsync(cloudinaryOptions.Value,httpClientFactory,evidence.PublicId,evidence.Format,evidence.FileName,clock.GetUtcNow().AddMinutes(5),cancellationToken);
+        if(downloaded is null)return new(false,null,null,["No se pudo recuperar el respaldo."]);
+        Audit("PaymentEvidenceViewed",evidence.PaymentId,userId,clock.GetUtcNow());
+        await db.SaveChangesAsync(cancellationToken);
+        return new(true,downloaded.Value.Content,downloaded.Value.ContentType,[]);
     }
 
     private Payment AddPayment(Guid orderId, Guid? deliveryId, Receivable receivable, decimal amount, string? methodText, string? reference, bool collectedByUser, Guid userId, DateTimeOffset now, bool allowAdvance = false,string? notes=null,DateTimeOffset? paymentDate=null)

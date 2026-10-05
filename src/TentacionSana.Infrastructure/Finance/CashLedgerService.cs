@@ -9,7 +9,7 @@ using TentacionSana.Infrastructure.Persistence;
 
 namespace TentacionSana.Infrastructure.Finance;
 
-public sealed class CashLedgerService(ApplicationDbContext db, IOptions<CloudinaryOptions> options, TimeProvider clock) : ICashLedgerService
+public sealed class CashLedgerService(ApplicationDbContext db, IOptions<CloudinaryOptions> options, TimeProvider clock, IHttpClientFactory httpClientFactory) : ICashLedgerService
 {
     private static readonly string[] AllowedTypes = ["image/jpeg", "image/png", "image/webp"];
     public async Task<CashDashboard> GetDashboardAsync(CancellationToken cancellationToken = default)
@@ -66,9 +66,16 @@ public sealed class CashLedgerService(ApplicationDbContext db, IOptions<Cloudina
 
     public async Task<CashEvidenceResult> GetEvidenceUrlAsync(Guid movementId,Guid userId,CancellationToken cancellationToken=default)
     {
+        var exists=await db.CashMovements.AsNoTracking().AnyAsync(x=>x.Id==movementId,cancellationToken);
+        return exists?new(true,$"/media/cash-evidence/{movementId:N}",[]):new(false,null,["El movimiento no existe."]);
+    }
+
+    public async Task<CashEvidenceContentResult> GetEvidenceContentAsync(Guid movementId,Guid userId,CancellationToken cancellationToken=default)
+    {
         var evidence=await db.CashMovements.AsNoTracking().Where(x=>x.Id==movementId).Select(x=>new{x.EvidencePublicId,x.EvidenceFormat,x.EvidenceFileName}).SingleOrDefaultAsync(cancellationToken);
-        if(evidence is null)return new(false,null,["El movimiento no existe."]);
-        var cloudinary=Client();var url=cloudinary.DownloadPrivate(evidence.EvidencePublicId,false,evidence.EvidenceFormat,"authenticated",clock.GetUtcNow().AddMinutes(5).ToUnixTimeSeconds(),"image",null,evidence.EvidenceFileName);return new(true,url,[]);
+        if(evidence is null)return new(false,null,null,["El movimiento no existe."]);
+        var downloaded=await CloudinaryPrivateMedia.DownloadAsync(options.Value,httpClientFactory,evidence.EvidencePublicId,evidence.EvidenceFormat,evidence.EvidenceFileName,clock.GetUtcNow().AddMinutes(5),cancellationToken);
+        return downloaded is null?new(false,null,null,["No se pudo recuperar el respaldo."]):new(true,downloaded.Value.Content,downloaded.Value.ContentType,[]);
     }
 
     private async Task<(bool Ok,string? PublicId,string? Format,long Bytes,string? Error)> Upload(Stream content,string name,string type,long length,string folder,CancellationToken cancellationToken)

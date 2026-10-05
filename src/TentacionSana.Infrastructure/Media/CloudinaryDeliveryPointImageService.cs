@@ -11,7 +11,11 @@ using TentacionSana.Infrastructure.Persistence;
 
 namespace TentacionSana.Infrastructure.Media;
 
-public sealed class CloudinaryDeliveryPointImageService(ApplicationDbContext db, IOptions<CloudinaryOptions> options, TimeProvider clock) : IDeliveryPointImageService
+public sealed class CloudinaryDeliveryPointImageService(
+    ApplicationDbContext db,
+    IOptions<CloudinaryOptions> options,
+    TimeProvider clock,
+    IHttpClientFactory httpClientFactory) : IDeliveryPointImageService
 {
     private const long MaximumBytes = 10 * 1024 * 1024;
     private static readonly HashSet<string> AllowedTypes = ["image/jpeg", "image/png", "image/webp"];
@@ -34,10 +38,21 @@ public sealed class CloudinaryDeliveryPointImageService(ApplicationDbContext db,
 
     public async Task<string?> GetUrlAsync(Guid pointId, CancellationToken ct = default)
     {
-        var image = await db.DeliveryPoints.AsNoTracking().Where(x => x.Id == pointId).Select(x => new { x.ImagePublicId, x.ImageFormat, x.ImageFileName }).SingleOrDefaultAsync(ct);
+        var exists = await db.DeliveryPoints.AsNoTracking()
+            .AnyAsync(x => x.Id == pointId && x.ImagePublicId != null, ct);
+        return exists ? $"/media/delivery-points/{pointId:N}" : null;
+    }
+
+    public async Task<DeliveryPointImageContent?> GetContentAsync(Guid pointId, CancellationToken ct = default)
+    {
+        var image = await db.DeliveryPoints.AsNoTracking().Where(x => x.Id == pointId)
+            .Select(x => new { x.ImagePublicId, x.ImageFormat, x.ImageFileName }).SingleOrDefaultAsync(ct);
         if (image?.ImagePublicId is null) return null;
-        var expires = clock.GetUtcNow().AddMinutes(10).ToUnixTimeSeconds();
-        return Client(options.Value).DownloadPrivate(image.ImagePublicId, false, image.ImageFormat, "authenticated", expires, "image", null, image.ImageFileName);
+
+        var downloaded = await CloudinaryPrivateMedia.DownloadAsync(options.Value, httpClientFactory,
+            image.ImagePublicId, image.ImageFormat ?? string.Empty, image.ImageFileName,
+            clock.GetUtcNow().AddMinutes(5), ct);
+        return downloaded is null ? null : new(downloaded.Value.Content, downloaded.Value.ContentType);
     }
 
     private static Cloudinary Client(CloudinaryOptions s) => new(new Account(s.CloudName, s.ApiKey, s.ApiSecret)) { Api = { Secure = true } };

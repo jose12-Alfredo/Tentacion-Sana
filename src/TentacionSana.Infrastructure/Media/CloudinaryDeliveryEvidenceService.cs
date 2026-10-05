@@ -13,7 +13,8 @@ namespace TentacionSana.Infrastructure.Media;
 public sealed class CloudinaryDeliveryEvidenceService(
     ApplicationDbContext db,
     IOptions<CloudinaryOptions> options,
-    TimeProvider clock) : IDeliveryEvidenceService
+    TimeProvider clock,
+    IHttpClientFactory httpClientFactory) : IDeliveryEvidenceService
 {
     private const long MaximumBytes = 10 * 1024 * 1024;
     private static readonly HashSet<string> AllowedTypes = ["image/jpeg", "image/png", "image/webp"];
@@ -48,15 +49,21 @@ public sealed class CloudinaryDeliveryEvidenceService(
 
     public async Task<SignedEvidenceResult> GetSignedUrlAsync(Guid evidenceId, Guid userId, CancellationToken cancellationToken = default)
     {
+        var exists = await db.DeliveryEvidence.AsNoTracking().AnyAsync(x => x.Id == evidenceId && x.IsActive, cancellationToken);
+        if (!exists) return new(false, null, ["La evidencia no existe."]);
+        return new(true, $"/media/delivery-evidence/{evidenceId:N}", []);
+    }
+
+    public async Task<EvidenceContentResult> GetContentAsync(Guid evidenceId, Guid userId, CancellationToken cancellationToken = default)
+    {
         var evidence = await db.DeliveryEvidence.AsNoTracking().SingleOrDefaultAsync(x => x.Id == evidenceId && x.IsActive, cancellationToken);
-        if (evidence is null) return new(false, null, ["La evidencia no existe."]);
-        var settings = options.Value;
-        var cloudinary = CreateClient(settings);
-        var expiresAt = clock.GetUtcNow().AddMinutes(5).ToUnixTimeSeconds();
-        var url = cloudinary.DownloadPrivate(evidence.PublicId, false, evidence.Format, "authenticated", expiresAt, "image", null, evidence.FileName);
+        if (evidence is null) return new(false, null, null, ["La evidencia no existe."]);
+        var downloaded = await CloudinaryPrivateMedia.DownloadAsync(options.Value, httpClientFactory,
+            evidence.PublicId, evidence.Format, evidence.FileName, clock.GetUtcNow().AddMinutes(5), cancellationToken);
+        if (downloaded is null) return new(false, null, null, ["No se pudo recuperar la evidencia."]);
         db.AuditEntries.Add(new AuditEntry { Id = Guid.NewGuid(), UserId = userId, Action = "DeliveryEvidenceViewed", EntityType = nameof(DeliveryEvidence), EntityId = evidence.Id.ToString(), OccurredAtUtc = clock.GetUtcNow() });
         await db.SaveChangesAsync(cancellationToken);
-        return new(true, url, []);
+        return new(true, downloaded.Value.Content, downloaded.Value.ContentType, []);
     }
 
     private static Cloudinary CreateClient(CloudinaryOptions settings) => new(new Account(settings.CloudName, settings.ApiKey, settings.ApiSecret)) { Api = { Secure = true } };

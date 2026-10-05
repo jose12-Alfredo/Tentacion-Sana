@@ -15,6 +15,7 @@ public interface IDeliveryPointImageService
 {
     Task<CustomerOperationResult> UploadAsync(Guid customerId, Guid pointId, Stream content, string fileName, string contentType, long length, Guid userId, CancellationToken cancellationToken = default);
     Task<string?> GetUrlAsync(Guid pointId, CancellationToken cancellationToken = default);
+    Task<DeliveryPointImageContent?> GetContentAsync(Guid pointId, CancellationToken cancellationToken = default);
 }
 
 public sealed record CustomerEditCommand(string Kind, string Category, string Name, string? Phone, string? Email, string? Notes, bool IsActive, Guid UserId, string? DefaultAddress = null, string? DefaultLocation = null);
@@ -22,6 +23,7 @@ public sealed record ContactEditCommand(string Name, string Phone, string? Email
 public sealed record PaymentResponsibleEditCommand(string Kind, string? Label, Guid? ContactId, string? Name = null, string? Phone = null, string? Email = null);
 public sealed record DeliveryPointEditCommand(string Kind, string Label, string Address, string? Reference, string? Location, string? Notes, Guid? ContactId, Guid? PaymentResponsiblePartyId, bool IsActive = true);
 public sealed record CustomerOperationResult(bool Succeeded, Guid? Id, IReadOnlyList<string> Errors);
+public sealed record DeliveryPointImageContent(byte[] Content, string ContentType);
 public sealed record CustomerDetail(Guid Id, string Kind, string Category, string Name, string? Phone, string? Email, string? Notes, bool IsActive, IReadOnlyList<ContactDetail> Contacts, IReadOnlyList<PaymentResponsibleDetail> PaymentResponsibles, IReadOnlyList<DeliveryPointDetail> DeliveryPoints);
 public sealed record ContactDetail(Guid Id, Guid? DeliveryPointId, string Name, string Phone, string? Email, string? Role, bool IsOrderContact, bool IsReceptionContact, bool IsPaymentContact, bool IsAdministrator, bool IsAccounting, bool IsOwner);
 public sealed record PaymentResponsibleDetail(Guid Id, string Kind, string? Label, Guid? ContactId, string Name, string Phone, string? Email, IReadOnlyList<Guid> DeliveryPointIds);

@@ -1,12 +1,18 @@
 window.tentacionSana = {
     prefersReducedMotion: () => window.matchMedia('(prefers-reduced-motion: reduce)').matches,
-    downloadBase64: (fileName, contentType, base64) => {
-        const link = document.createElement('a');
-        link.download = fileName;
-        link.href = `data:${contentType};base64,${base64}`;
-        document.body.appendChild(link);
-        link.click();
-        link.remove();
+    downloadStream: async (fileName, contentType, contentStreamReference) => {
+        const arrayBuffer = await contentStreamReference.arrayBuffer();
+        const url = URL.createObjectURL(new Blob([arrayBuffer], { type: contentType }));
+        try {
+            const link = document.createElement('a');
+            link.download = fileName;
+            link.href = url;
+            document.body.appendChild(link);
+            link.click();
+            link.remove();
+        } finally {
+            window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+        }
     }
 };
 

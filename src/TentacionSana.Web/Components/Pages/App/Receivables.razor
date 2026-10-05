@@ -279,7 +279,9 @@ else
         {
             var result = await AccountService.GenerateStatementAsync(new(_reportPayer.ResponsiblePartyId, _reportType, _includeDeliveryEvidence, _includePaymentEvidence, _includePartialPayments, _includePaidOrders, _reportPaymentId, selectedOrderIds), await CurrentUserIdAsync());
             if (!result.Succeeded || result.Content is null || result.FileName is null) { _reportSelectionError = string.Join(" ", result.Errors); return; }
-            await JS.InvokeVoidAsync("tentacionSana.downloadBase64", result.FileName, "application/pdf", Convert.ToBase64String(result.Content));
+            using var stream = new MemoryStream(result.Content, writable: false);
+            using var streamReference = new Microsoft.JSInterop.DotNetStreamReference(stream);
+            await JS.InvokeVoidAsync("tentacionSana.downloadStream", result.FileName, "application/pdf", streamReference);
             SetMessage($"Reporte {result.ReportNumber} generado correctamente.", false); _reportPayer = null;
         }
         finally { _saving = false; }
