@@ -109,6 +109,71 @@
         .delivery-search { grid-column: auto !important; }
         .mobile-facts { grid-template-columns: 1fr; }
     }
+
+    /* En móvil la lista se consulta durante una ruta: cada bloque debe caber en
+       pantalla, sin conservar columnas ni tarjetas con el ancho de escritorio. */
+    @@media (max-width: 720px) {
+        .deliveries-heading,
+        .delivery-summary,
+        .delivery-filters,
+        .deliveries-workspace,
+        .deliveries-list-card,
+        .route-map-card,
+        .route-panel { min-width: 0; max-width: 100%; }
+
+        .deliveries-heading { gap: .35rem; margin-bottom: .85rem; }
+        .deliveries-heading h1 { font-size: clamp(1.85rem, 10vw, 2.35rem); }
+        .deliveries-heading p { max-width: 100%; font-size: .9rem; overflow-wrap: anywhere; }
+
+        .delivery-summary {
+            display: grid !important;
+            grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+            gap: .55rem;
+            overflow: visible !important;
+            padding: 0 !important;
+        }
+
+        .delivery-summary article {
+            width: auto;
+            min-width: 0;
+            flex: none !important;
+            align-items: flex-start;
+            gap: .45rem;
+            padding: .72rem;
+        }
+
+        .delivery-summary .metric-icon { flex: 0 0 auto; }
+        .delivery-summary small { font-size: .57rem; }
+        .delivery-summary strong { font-size: 1.22rem; }
+        .delivery-summary span { min-height: 2.35em; white-space: normal; font-size: .64rem; }
+
+        .delivery-filters { grid-template-columns: minmax(0, 1fr) !important; padding: .7rem; }
+        .delivery-filters .custom-date,
+        .delivery-filters input,
+        .delivery-filters select { min-width: 0; max-width: 100%; }
+        .delivery-search { grid-column: auto !important; }
+
+        .deliveries-workspace { display: grid; width: 100%; gap: .8rem; }
+        .deliveries-list-card > header { gap: .45rem; padding: .9rem; }
+        .deliveries-list-card > header p { overflow-wrap: anywhere; }
+        .mobile-deliveries { padding: .1rem .85rem .65rem !important; }
+        .mobile-delivery { min-width: 0; padding: .85rem 0 !important; }
+        .mobile-order-body,
+        .mobile-facts,
+        .mobile-driver,
+        .mobile-actions { padding-left: 0 !important; }
+        .mobile-facts { grid-template-columns: repeat(2, minmax(0, 1fr)) !important; }
+        .mobile-fact { min-width: 0; padding: .62rem !important; }
+        .mobile-fact strong { overflow-wrap: anywhere; font-size: .95rem !important; }
+        .mobile-driver { flex-wrap: wrap; }
+        .mobile-actions .row-menu { margin-left: 0; }
+        .route-map-card > header { padding: .9rem; }
+    }
+
+    @@media (max-width: 360px) {
+        .delivery-summary,
+        .mobile-facts { grid-template-columns: minmax(0, 1fr) !important; }
+    }
 </style>
 
 <header class="deliveries-heading">
