@@ -18,3 +18,25 @@
 .list-create-action span{font-size:1.2rem;line-height:1}
 @media(max-width:480px){.list-create-action{padding:.55rem .75rem;font-size:.8rem}}
 .paid-money{color:#24752b}.balance-money{color:#a85d08}
+
+/* El listado se consulta a menudo desde teléfono: evita carruseles y texto fuera del viewport. */
+@media(max-width:760px){
+ .orders-heading{align-items:stretch;flex-direction:column;gap:.85rem}
+ .orders-heading .primary-action{align-self:flex-start}
+ .summary-grid{grid-template-columns:repeat(2,minmax(0,1fr));gap:.65rem;overflow:visible;padding-bottom:0;scroll-snap-type:none}
+ .summary-grid article{min-width:0;padding:.75rem;scroll-snap-align:none}
+ .summary-grid article:last-child{grid-column:1/-1}
+ .quick-filters{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));overflow:visible}
+ .quick-filters button{min-width:0;padding:.48rem .65rem;white-space:normal}
+ .orders-list-card>header{align-items:flex-start;flex-wrap:wrap;padding:1rem}
+ .list-create-action{width:100%}
+ .mobile-orders header{gap:.65rem}
+ .mobile-orders dl{grid-template-columns:repeat(2,minmax(0,1fr))}
+ .mobile-orders dl div{min-width:0}
+ .mobile-orders dd{overflow-wrap:anywhere}
+}
+@media(max-width:480px){
+ .summary-grid{grid-template-columns:1fr}
+ .summary-grid article:last-child{grid-column:auto}
+ .mobile-orders dl{grid-template-columns:1fr}
+}
