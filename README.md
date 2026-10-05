@@ -48,6 +48,22 @@ dotnet test TentacionSana.slnx --configuration Release --no-build
 
 Cada `push` o `pull request` hacia `main` ejecuta esas comprobaciones mediante GitHub Actions.
 
+## Despliegue de prueba en Render
+
+El repositorio incluye un `Dockerfile` para desplegar la aplicacion web en Render. Al crear un **Web Service**, selecciona la rama `main`, el entorno **Docker**, el `Dockerfile` de la raiz y el puerto `10000`. Configura `/health` como Health Check Path.
+
+En el plan gratuito, Render suspende el servicio tras un periodo de inactividad y su almacenamiento es temporal. La aplicacion volvera a funcionar al iniciarse, pero todos los usuarios deberan iniciar sesion de nuevo despues de un reinicio. Para conservar las sesiones en un plan con disco persistente, monta un disco en `/var/data` y configura `DataProtection__KeysPath=/var/data/data-protection-keys`.
+
+Agrega en Render estas variables protegidas sin versionarlas:
+
+```text
+ConnectionStrings__DefaultConnection
+Cloudinary__CloudName
+Cloudinary__ApiKey
+Cloudinary__ApiSecret
+Business__WhatsAppNumber
+```
+
 ## Estructura
 
 - `src/TentacionSana.Domain`: entidades y reglas del dominio.

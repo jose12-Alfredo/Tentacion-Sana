@@ -1,6 +1,7 @@
 using System.Threading.RateLimiting;
 using CloudinaryDotNet;
 using Microsoft.AspNetCore.DataProtection;
+using Microsoft.AspNetCore.HttpOverrides;
 using Microsoft.EntityFrameworkCore;
 using TentacionSana.Infrastructure;
 using TentacionSana.Infrastructure.Identity;
@@ -48,10 +49,15 @@ if (builder.Environment.IsDevelopment())
 // Add services to the container.
 builder.Services.AddRazorComponents()
     .AddInteractiveServerComponents();
+var dataProtectionKeysPath = builder.Configuration["DataProtection:KeysPath"];
+var dataProtectionKeysDirectory = new DirectoryInfo(
+    string.IsNullOrWhiteSpace(dataProtectionKeysPath)
+        ? Path.Combine(builder.Environment.ContentRootPath, ".data-protection-keys")
+        : dataProtectionKeysPath);
+dataProtectionKeysDirectory.Create();
 builder.Services.AddDataProtection()
     .SetApplicationName("TentacionSana")
-    .PersistKeysToFileSystem(new DirectoryInfo(
-        Path.Combine(builder.Environment.ContentRootPath, ".data-protection-keys")));
+    .PersistKeysToFileSystem(dataProtectionKeysDirectory);
 builder.Services.AddCascadingAuthenticationState();
 builder.Services.AddInfrastructure(builder.Configuration);
 builder.Services.AddRateLimiter(options =>
@@ -393,6 +399,17 @@ if (args.Contains("--seed-admin", StringComparer.OrdinalIgnoreCase))
 }
 
 // Configure the HTTP request pipeline.
+if (builder.Configuration.GetValue<bool>("ForwardedHeaders:Enabled"))
+{
+    var forwardedHeadersOptions = new ForwardedHeadersOptions
+    {
+        ForwardedHeaders = ForwardedHeaders.XForwardedFor | ForwardedHeaders.XForwardedProto
+    };
+    forwardedHeadersOptions.KnownIPNetworks.Clear();
+    forwardedHeadersOptions.KnownProxies.Clear();
+    app.UseForwardedHeaders(forwardedHeadersOptions);
+}
+
 if (!app.Environment.IsDevelopment())
 {
     app.UseExceptionHandler("/Error", createScopeForErrors: true);
@@ -411,5 +428,6 @@ app.MapStaticAssets();
 app.MapRazorComponents<App>()
     .AddInteractiveServerRenderMode();
 app.MapSecurityEndpoints();
+app.MapGet("/health", () => Results.Ok()).AllowAnonymous();
 
 app.Run();
