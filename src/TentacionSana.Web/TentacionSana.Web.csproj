@@ -10,11 +10,6 @@
       <PrivateAssets>all</PrivateAssets>
       <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
     </PackageReference>
-    <BlazorRuntimeSource Include="$(NuGetPackageRoot)microsoft.aspnetcore.app.internal.assets/*/_framework/blazor.web.js" />
-    <Content Include="$(IntermediateOutputPath)blazor-runtime/blazor.web.js"
-             Link="wwwroot/js/blazor.web.js"
-             CopyToOutputDirectory="PreserveNewest"
-             CopyToPublishDirectory="PreserveNewest" />
   </ItemGroup>
 
   <PropertyGroup>
@@ -24,10 +19,5 @@
     <BlazorDisableThrowNavigationException>true</BlazorDisableThrowNavigationException>
     <UserSecretsId>ab352788-7b79-4224-8592-fc3c2de4fbb5</UserSecretsId>
   </PropertyGroup>
-
-  <Target Name="PrepareBlazorWebScript" BeforeTargets="ResolveProjectStaticWebAssets">
-    <Copy SourceFiles="@(BlazorRuntimeSource)"
-          DestinationFolder="$(IntermediateOutputPath)blazor-runtime" />
-  </Target>
 
 </Project>

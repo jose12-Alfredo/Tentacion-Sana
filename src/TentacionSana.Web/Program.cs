@@ -430,6 +430,11 @@ app.UseRateLimiter();
 app.UseAntiforgery();
 
 app.MapStaticAssets();
+app.MapGet("/js/blazor.web.js", (IWebHostEnvironment environment) =>
+    Results.File(
+        Path.Combine(environment.WebRootPath, "_framework", "blazor.web.js"),
+        "text/javascript"))
+    .AllowAnonymous();
 app.MapRazorComponents<App>()
     .AddInteractiveServerRenderMode();
 app.MapSecurityEndpoints();
