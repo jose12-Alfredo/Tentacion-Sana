@@ -3,6 +3,9 @@
 <div class="admin-shell">
     <aside class="admin-sidebar">
         <a class="admin-brand" href="/app" aria-label="Panel de Tentación Sana"><img src="/images/brand/logo-oficial-tentacion-sana.png" alt="Tentación Sana" /></a>
+        <input class="admin-menu-checkbox" type="checkbox" id="admin-menu-toggle" />
+        <label class="admin-menu-toggle" for="admin-menu-toggle"><span aria-hidden="true">☰</span> Menú</label>
+        <div class="admin-navigation">
         <nav aria-label="Administración">
             <NavLink href="/app" Match="NavLinkMatch.All">Resumen</NavLink>
             <AuthorizeView Policy="@AppPolicies.ManageSales"><Authorized><NavLink href="/app/productos">Productos</NavLink><NavLink href="/app/solicitudes">Solicitudes</NavLink><NavLink href="/app/clientes">Clientes</NavLink><NavLink href="/app/pedidos">Pedidos</NavLink><NavLink href="/app/entregas">Entregas</NavLink></Authorized></AuthorizeView>
@@ -13,6 +16,7 @@
         </nav>
         <a class="public-link" href="/catalogo" target="_blank">Ver catálogo público ↗</a>
         <form method="post" action="/account/logout"><AntiforgeryToken /><button type="submit">Cerrar sesión</button></form>
+        </div>
     </aside>
     <main class="admin-content">@Body</main>
 </div>

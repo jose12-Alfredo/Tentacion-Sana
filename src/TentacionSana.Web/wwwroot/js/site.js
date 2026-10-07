@@ -27,6 +27,11 @@ document.addEventListener('components-reconnect-state-changed', event => {
 document.addEventListener('click', event => {
     if (!(event.target instanceof Element)) return;
 
+    if (event.target.closest('.admin-navigation nav a')) {
+        const menu = document.getElementById('admin-menu-toggle');
+        if (menu instanceof HTMLInputElement) menu.checked = false;
+    }
+
     const toggle = event.target.closest('[data-password-toggle]');
     if (!toggle) return;
 
@@ -39,6 +44,15 @@ document.addEventListener('click', event => {
     toggle.setAttribute('aria-pressed', shouldShow.toString());
     toggle.setAttribute('aria-label', shouldShow ? 'Ocultar contraseña' : 'Mostrar contraseña');
     input.focus({ preventScroll: true });
+});
+
+document.addEventListener('keydown', event => {
+    if (event.key !== 'Escape') return;
+    const menu = document.getElementById('admin-menu-toggle');
+    if (menu instanceof HTMLInputElement && menu.checked) {
+        menu.checked = false;
+        menu.focus();
+    }
 });
 
 document.addEventListener('submit', event => {
