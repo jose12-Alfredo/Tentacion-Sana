@@ -50,6 +50,8 @@
                 <div><dt>Clientes que compraron</dt><dd>@_report.BuyingCustomers.ToString("N0")</dd></div>
                 <div><dt>Clientes registrados</dt><dd>@_report.TotalCustomers.ToString("N0")</dd></div>
                 <div><dt>Unidades vendidas</dt><dd>@_report.UnitsSold.ToString("N0")</dd></div>
+                <div><dt>Unidades de reposición</dt><dd>@_report.ReplacementUnits.ToString("N0")</dd><small>@_report.ReplacementOrders pedido(s)</small></div>
+                <div><dt>Unidades de degustación</dt><dd>@_report.TastingUnits.ToString("N0")</dd><small>@_report.TastingOrders pedido(s)</small></div>
             </dl>
         </section>
 
@@ -92,6 +94,23 @@
                 else { <div class="data-list">@foreach (var customer in _report.Customers) { <div class="data-row"><a class="row-name" href="/app/clientes/@customer.Id">@customer.Name<small>@customer.Orders pedidos · @customer.Units unidades</small></a><strong>@Money(customer.Revenue)</strong></div> }</div> }
             </section>
         </div>
+
+        <section class="analysis-section branch-section">
+            <header><h2>Ventas por sucursal</h2><p>Ventas, reposiciones y degustaciones por punto de entrega</p></header>
+            @if (_report.Branches.Count == 0) { <p class="empty-state">Sin pedidos entregados en este período.</p> }
+            else
+            {
+                <div class="data-list">
+                    @foreach (var branch in _report.Branches)
+                    {
+                        <div class="data-row">
+                            <a class="row-name" href="/app/clientes/@branch.CustomerId">@branch.Branch<small>@branch.Customer · @branch.Orders pedidos · @branch.Units unidades vendidas · @branch.ReplacementUnits reposiciones · @branch.TastingUnits degustaciones</small></a>
+                            <strong>@Money(branch.Revenue)</strong>
+                        </div>
+                    }
+                </div>
+            }
+        </section>
 
         <section class="analysis-section recent-section">
             <header><h2>Últimas ventas entregadas</h2><p>Pedidos incluidos en el análisis</p></header>

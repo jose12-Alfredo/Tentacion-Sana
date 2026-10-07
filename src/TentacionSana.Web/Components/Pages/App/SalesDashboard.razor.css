@@ -21,6 +21,7 @@
 .overview-stats div { display:flex; flex-direction:column; justify-content:center; padding:1.25rem; background:#fff; }
 .overview-stats dt { color:#666458; font-size:.83rem; }
 .overview-stats dd { margin:.35rem 0 0; font-size:1.6rem; font-weight:800; font-variant-numeric:tabular-nums; }
+.overview-stats small { color:#666458; font-size:.76rem; }
 .analysis-grid { display:grid; grid-template-columns:minmax(0,2fr) minmax(16rem,1fr); gap:1.25rem; margin-bottom:1.25rem; }
 .detail-grid { grid-template-columns:repeat(2,minmax(0,1fr)); }
 .analysis-section { min-width:0; padding:1.4rem; border-radius:14px; background:#fff; box-shadow:0 6px 24px #25221b0b; }
@@ -38,6 +39,7 @@
 .best-product strong { margin:.75rem 0; font-size:clamp(1.5rem,2.4vw,2.5rem); font-variant-numeric:tabular-nums; }
 .best-product small { color:#375323; }
 .data-list { max-height:26rem; overflow:auto; }
+.branch-section { margin-bottom:1.25rem; }
 .data-row,.recent-list a { display:flex; justify-content:space-between; align-items:center; gap:1rem; padding:.9rem .2rem; border-top:1px solid #e7e5dc; }
 .data-row:first-child,.recent-list a:first-child { border-top:0; }
 .row-name,.recent-list a span { min-width:0; font-weight:700; color:#25221b; text-decoration:none; overflow-wrap:anywhere; }
