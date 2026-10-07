@@ -126,7 +126,15 @@ else
                                 @if (_line.SoldPrice < StandardPrice) { <label class="discount-reason"><small>Precio menor al estándar</small>Motivo del descuento <span class="required">*</span><input @bind="_line.DiscountReason" /></label> }
                             </div>
                         }
-                        <footer><button @onclick="AddAsync" disabled="@_saving">@(_saving ? "Guardando…" : "+ Añadir producto")</button></footer>
+                        @if (_lineErrors.Count > 0)
+                        {
+                            <div class="line-feedback line-feedback-error" role="alert">@foreach (var error in _lineErrors) { <p>@error</p> }</div>
+                        }
+                        else if (_lineMessage is not null)
+                        {
+                            <p class="line-feedback line-feedback-success" role="status">@_lineMessage</p>
+                        }
+                        <footer><button type="button" @onclick="AddAsync" disabled="@_saving">@(_saving ? "Guardando…" : "+ Añadir producto")</button></footer>
                     </section>
                 }
 
@@ -135,7 +143,11 @@ else
 
             @if (IsDraft)
             {
-                <section class="detail-card action-card"><div><small>Siguiente paso</small><h2>Guardar o confirmar el pedido</h2><p>Guardar mantiene el pedido pendiente y también añade el producto escrito arriba. Confirmar crea la reserva y calcula los insumos necesarios.</p></div><div class="action-buttons"><button class="secondary-action" @onclick="SaveAsync" disabled="@_saving">@(_saving ? "Guardando…" : "Guardar pedido")</button><button class="primary-action" @onclick="ConfirmAsync" disabled="@(!CanConfirm || _saving)">✓ Confirmar pedido</button></div></section>
+                <section class="detail-card action-card">
+                    <div><small>Siguiente paso</small><h2>Guardar o confirmar el pedido</h2><p>Al confirmar se añade el producto del formulario, se guarda la fecha prometida y se calcula la reserva.</p></div>
+                    @if (_actionErrors.Count > 0) { <div class="action-feedback" role="alert">@foreach (var error in _actionErrors) { <p>@error</p> }</div> }
+                    <div class="action-buttons"><button type="button" class="secondary-action" @onclick="SaveAsync" disabled="@_saving">@(_saving ? "Guardando…" : "Guardar pedido")</button><button type="button" class="primary-action" @onclick="ConfirmAsync" disabled="@_saving">@(_saving ? "Confirmando…" : "✓ Confirmar pedido")</button></div>
+                </section>
                 <AuthorizeView Policy="@AppPolicies.Administration"><Authorized>
                     <details class="detail-card historical-order">
                         <summary>Registrar pedido ya realizado</summary>
@@ -177,7 +189,9 @@ else
     private IReadOnlyList<ProductOption> _products = [];
     private IReadOnlyList<PaymentHistoryItem> _payments = [];
     private readonly List<string> _errors = [];
-    private string? _message;
+    private readonly List<string> _lineErrors = [];
+    private readonly List<string> _actionErrors = [];
+    private string? _message, _lineMessage;
     private bool _saving;
     private Form _form = new();
     private LineForm _line = new();
@@ -227,7 +241,12 @@ else
             var saved = await SaveDraftAsync(userId);
             if (!saved.Succeeded) { ShowErrors(saved); return; }
             _order = _order! with { Version = _order.Version + 1 };
-            if (HasPendingLine && !await AddPendingLineAsync(userId)) return;
+            if (HasPendingLine)
+            {
+                if (!ValidatePendingLine(_errors)) return;
+                var added = await AddPendingLineAsync(userId);
+                if (!added.Succeeded) { ShowErrors(added); return; }
+            }
             _message = "Pedido guardado correctamente.";
         }
         catch { _errors.Add("No se pudo guardar el pedido. Intenta nuevamente."); }
@@ -238,51 +257,60 @@ else
         BeginOperation();
         try
         {
-            if (!ValidatePendingLine()) return;
-            if (await AddPendingLineAsync(await UserId())) _message = "Producto añadido al pedido.";
+            if (!ValidatePendingLine(_lineErrors)) return;
+            var added = await AddPendingLineAsync(await UserId());
+            if (!added.Succeeded) { _lineErrors.AddRange(added.Errors); return; }
+            _lineMessage = "Producto añadido al pedido.";
         }
-        catch { _errors.Add("No se pudo añadir el producto. Intenta nuevamente."); }
+        catch { _lineErrors.Add("No se pudo añadir el producto. Intenta nuevamente."); }
         finally { _saving = false; }
     }
-    private bool HasPendingLine => _line.ProductId != Guid.Empty || LinePhysicalTotal > 0;
-    private bool ValidatePendingLine()
+    private bool HasPendingLine => _line.ProductId != Guid.Empty || _line.SaleQuantity != 1 || _line.ReplacementQuantity != 0 || _line.TastingQuantity != 0;
+    private bool ValidatePendingLine(ICollection<string> errors)
     {
-        if (_line.ProductId == Guid.Empty) { _errors.Add("Selecciona el producto que deseas añadir."); return false; }
-        if (LinePhysicalTotal <= 0) { _errors.Add("La cantidad total del producto debe ser mayor que cero."); return false; }
+        if (_line.ProductId == Guid.Empty) { errors.Add("Selecciona el producto que deseas añadir."); return false; }
+        if (LinePhysicalTotal <= 0) { errors.Add("La cantidad total del producto debe ser mayor que cero."); return false; }
         return true;
     }
-    private async Task<bool> AddPendingLineAsync(Guid userId)
+    private async Task<OrderOperationResult> AddPendingLineAsync(Guid userId)
     {
-        if (!ValidatePendingLine()) return false;
         var draft = _line;
         var standardPrice = StandardPrice;
         var result = await Service.AddLineAsync(OrderId, _order!.Version, new(draft.ProductId, draft.SaleQuantity, draft.ReplacementQuantity, draft.TastingQuantity, draft.SoldPrice, draft.DiscountReason, draft.ReplacementReason, draft.ReplacementNotes, draft.TastingReason, draft.TastingNotes), userId);
-        if (!result.Succeeded) { ShowErrors(result); return false; }
+        if (!result.Succeeded) return result;
         var productName = _products.First(x => x.Id == draft.ProductId).Name;
         var detail = new OrderLineDetail(result.Id!.Value, draft.ProductId, productName, draft.SaleQuantity, draft.ReplacementQuantity, draft.TastingQuantity, draft.SaleQuantity + draft.ReplacementQuantity + draft.TastingQuantity, standardPrice, draft.SoldPrice, Math.Max(0, standardPrice - draft.SoldPrice), draft.DiscountReason, draft.ReplacementReason, draft.ReplacementNotes, draft.TastingReason, draft.TastingNotes, 0, 0);
         _order = _order with { Version = _order.Version + 1, Lines = [.. _order.Lines, detail] };
         _line = new();
-        return true;
+        return result;
     }
-    private void BeginOperation() { _errors.Clear(); _message = null; _saving = true; }
+    private void BeginOperation() { _errors.Clear(); _lineErrors.Clear(); _actionErrors.Clear(); _message = null; _lineMessage = null; _saving = true; }
     private void ShowErrors(OrderOperationResult result) { _errors.Clear(); _errors.AddRange(result.Errors); }
     private async Task RemoveAsync(Guid lineId) => await Handle(await Service.RemoveLineAsync(OrderId, lineId, _order!.Version, await UserId()));
     private async Task ConfirmAsync()
     {
-        if (!CanConfirm) { _errors.Clear(); _errors.Add("Agrega al menos un producto y define la fecha prometida antes de confirmar."); return; }
         BeginOperation();
         try
         {
+            if (_form.PromisedLocal is null) _actionErrors.Add("Define la fecha prometida antes de confirmar.");
+            if (_order!.Lines.Count == 0 && !HasPendingLine) _actionErrors.Add("Selecciona un producto y añádelo al pedido.");
+            if (HasPendingLine) ValidatePendingLine(_actionErrors);
+            if (_actionErrors.Count > 0) return;
             var userId = await UserId();
             var saved = await SaveDraftAsync(userId);
-            if (!saved.Succeeded) { ShowErrors(saved); return; }
+            if (!saved.Succeeded) { _actionErrors.AddRange(saved.Errors); return; }
             _order = _order! with { Version = _order.Version + 1 };
+            if (HasPendingLine)
+            {
+                var added = await AddPendingLineAsync(userId);
+                if (!added.Succeeded) { _actionErrors.AddRange(added.Errors); return; }
+            }
             var confirmed = await Service.ConfirmAsync(OrderId, _order.Version, userId);
-            if (!confirmed.Succeeded) { ShowErrors(confirmed); return; }
-            _order = _order with { Status = "Confirmed", Version = _order.Version + 1 };
+            if (!confirmed.Succeeded) { _actionErrors.AddRange(confirmed.Errors); return; }
+            await LoadAsync();
             _message = "Pedido confirmado correctamente. La reserva y los insumos ya fueron calculados.";
         }
-        catch { _errors.Add("No se pudo confirmar el pedido. Intenta nuevamente."); }
+        catch { _actionErrors.Add("No se pudo confirmar el pedido. Intenta nuevamente."); }
         finally { _saving = false; }
     }
     private async Task RegisterCompletedOrderAsync() { if (!CanRegisterCompletedOrder) { _errors.Clear(); _errors.Add("Agrega un producto, define la fecha prometida y completa una fecha pasada o actual con la persona receptora."); return; } var userId = await UserId(); var completedAt = new DateTimeOffset(DateTime.SpecifyKind(_completedLocal, DateTimeKind.Local)).ToUniversalTime(); await Handle(await Service.RegisterCompletedOrderAsync(OrderId, _order!.Version, new(_form.CustomerId, _form.DeliveryPointId, _form.ContactId, _form.PayerId, UtcDate(_form.PromisedLocal), _form.Notes), completedAt, _historicalReceiver, userId), false); }

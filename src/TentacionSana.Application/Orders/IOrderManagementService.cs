@@ -10,6 +10,7 @@ public interface IOrderManagementService
     Task<OrderOperationResult> RegisterCompletedOrderAsync(Guid orderId, int expectedVersion, OrderConfiguration configuration, DateTimeOffset completedAtUtc, string receiverName, Guid userId, CancellationToken cancellationToken = default);
     Task<OrderOperationResult> CancelAsync(Guid orderId, int expectedVersion, string reason, Guid userId, CancellationToken cancellationToken = default);
     Task<OrderOperationResult> DeleteDraftAsync(Guid orderId, int expectedVersion, Guid userId, CancellationToken cancellationToken = default);
+    Task<OrderOperationResult> ArchiveAsync(Guid orderId, int expectedVersion, string reason, Guid userId, CancellationToken cancellationToken = default);
     Task<OrderOperationResult> ReviseConfigurationAsync(Guid orderId, int expectedVersion, OrderConfiguration command, string reason, Guid userId, CancellationToken cancellationToken = default);
     Task<OrderOperationResult> ReviseLineAsync(Guid orderId, Guid lineId, int expectedVersion, ConfirmedLineCommand command, Guid userId, CancellationToken cancellationToken = default);
     Task<OrderOperationResult> RemoveConfirmedLineAsync(Guid orderId, Guid lineId, int expectedVersion, string reason, Guid userId, CancellationToken cancellationToken = default);

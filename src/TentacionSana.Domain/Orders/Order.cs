@@ -14,6 +14,9 @@ public sealed class Order
     public Guid? PaymentResponsiblePartyId { get; private set; }
     public Guid? SourceRequestId { get; private set; }
     public OrderStatus Status { get; private set; }
+    public DateTimeOffset? ArchivedAtUtc { get; private set; }
+    public Guid? ArchivedByUserId { get; private set; }
+    public string? ArchiveReason { get; private set; }
     public OrderPaymentStatus PaymentStatus { get; private set; }
     public DateTimeOffset? PromisedAtUtc { get; private set; }
     public string? Notes { get; private set; }
@@ -89,6 +92,18 @@ public sealed class Order
         if (string.IsNullOrWhiteSpace(reason)) throw new ArgumentException("El motivo de cancelación es obligatorio.");
         var previous = Status; Status = OrderStatus.Cancelled; foreach (var reservation in Reservations) reservation.Release(now);
         StatusHistory.Add(OrderStatusHistory.Create(Id, previous, Status, userId, reason, now)); Touch(userId, now);
+    }
+
+    public void Archive(string reason, Guid userId, DateTimeOffset now)
+    {
+        if (ArchivedAtUtc is not null) throw new InvalidOperationException("El pedido ya fue eliminado de la vista.");
+        if (Status is not (OrderStatus.Delivered or OrderStatus.Cancelled)) throw new InvalidOperationException("Solo se pueden archivar pedidos entregados o cancelados.");
+        if (string.IsNullOrWhiteSpace(reason)) throw new ArgumentException("El motivo de eliminación es obligatorio.");
+        ArchivedAtUtc = now;
+        ArchivedByUserId = userId;
+        ArchiveReason = reason.Trim();
+        ChangeHistory.Add(OrderChangeHistory.Create(Id, "Archived", null, now.ToString("O"), userId, ArchiveReason, now));
+        Touch(userId, now);
     }
 
     public void ReviseConfiguration(Guid customerId, Guid? deliveryPointId, Guid? contactId, Guid? payerId, DateTimeOffset? promisedAtUtc, string? notes, string reason, Guid userId, DateTimeOffset now)

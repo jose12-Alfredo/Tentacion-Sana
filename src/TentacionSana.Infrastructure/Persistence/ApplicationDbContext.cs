@@ -230,6 +230,7 @@ public sealed class ApplicationDbContext(DbContextOptions<ApplicationDbContext> 
             entity.Property(x => x.Status).HasConversion<string>().HasMaxLength(30);
             entity.Property(x => x.PaymentStatus).HasConversion<string>().HasMaxLength(30);
             entity.Property(x => x.Notes).HasMaxLength(1500);
+            entity.Property(x => x.ArchiveReason).HasMaxLength(1000);
             entity.Property(x => x.Version).IsConcurrencyToken();
             entity.HasIndex(x => x.SourceRequestId).IsUnique();
             entity.HasOne<Customer>().WithMany().HasForeignKey(x => x.CustomerId).OnDelete(DeleteBehavior.Restrict);

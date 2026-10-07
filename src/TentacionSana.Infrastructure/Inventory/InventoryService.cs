@@ -143,7 +143,7 @@ public sealed class InventoryService(ApplicationDbContext db, TimeProvider clock
         var localToday = clock.GetLocalNow().Date;
         var start = new DateTimeOffset(localToday, clock.GetLocalNow().Offset).ToUniversalTime();
         var end = start.AddDays(1);
-        var producedToday = await db.ProductionBatches.AsNoTracking().Where(x => x.ProducedAtUtc >= start && x.ProducedAtUtc < end).SumAsync(x => x.GoodUnits, ct);
+        var producedToday = await db.ProductionBatches.AsNoTracking().Where(x => !x.IsVoided && x.ProducedAtUtc >= start && x.ProducedAtUtc < end).SumAsync(x => x.GoodUnits, ct);
         return new ProductionDashboard(needs, needs.Count(x => x.Shortage > 0), needs.Sum(x => x.Shortage), producedToday, balances.Values.Sum(x => Math.Max(0, x.AvailableQuantity)));
     }
 

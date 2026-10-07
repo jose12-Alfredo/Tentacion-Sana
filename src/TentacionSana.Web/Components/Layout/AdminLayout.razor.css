@@ -10,11 +10,11 @@ nav ::deep a:hover, nav ::deep a.active { background: #c8f59a; color: #18220f; }
 .public-link { margin-top: auto; padding: 1rem 0; color: #c8f59a; }
 form button { width: 100%; min-height: 2.7rem; border: 1px solid #666953; border-radius: .45rem; background: transparent; color: #fff; cursor: pointer; }
 .admin-content { width: 100%; max-width: 88rem; padding: clamp(1.25rem, 4vw, 3.5rem); }
-@media (max-width: 760px) {
+@media (max-width: 1200px) {
     .admin-shell { grid-template-columns: minmax(0, 1fr); }
     .admin-sidebar { position: static; height: auto; min-width: 0; overflow-x: hidden; padding: 1rem; }
     .admin-brand img { width: 8rem; }
-    nav { grid-template-columns: repeat(2, minmax(0, 1fr)); margin-top: 1rem; }
+    nav { grid-template-columns: repeat(auto-fit, minmax(9.5rem, 1fr)); margin-top: 1rem; }
     nav ::deep a { min-width: 0; overflow-wrap: anywhere; }
     .coming { display: none; }
     .public-link { margin-top: 1rem; }

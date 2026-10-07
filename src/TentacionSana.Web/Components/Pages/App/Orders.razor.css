@@ -42,3 +42,40 @@
  .summary-grid article:last-child{grid-column:1/-1}
  .mobile-orders dl{grid-template-columns:repeat(2,minmax(0,1fr))}
 }
+
+/* La barra lateral deja muy poco espacio en una tableta vertical. */
+.create-error{margin:1rem 0 0;padding:.75rem .85rem;border-left:4px solid #b82c34;border-radius:.55rem;background:#fde8e9;color:#99222a;line-height:1.4}
+.create-empty{margin:1rem 0 0;padding:.75rem .85rem;border-radius:.55rem;background:#eff7e9;color:#315d32;line-height:1.4}.create-empty a{color:#206f26;font-weight:800}
+@media(max-width:900px){
+ .orders-heading{align-items:stretch;flex-direction:column;gap:.85rem}
+ .orders-heading .primary-action{display:inline-flex;align-items:center;justify-content:center;align-self:stretch;font-size:.95rem}
+ .orders-heading .primary-action span{margin-right:.35rem;font-size:1.35rem}
+ .summary-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:.65rem;overflow:visible;padding-bottom:0;scroll-snap-type:none}
+ .summary-grid article{min-width:0;padding:.75rem;scroll-snap-align:none}
+ .summary-grid article:last-child{grid-column:1/-1}
+ .filters{grid-template-columns:repeat(2,minmax(0,1fr))}
+ .search-field{grid-column:1/-1;grid-row:auto}
+ .quick-filters{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));overflow:visible}
+ .quick-filters button{min-width:0;padding:.48rem .65rem;white-space:normal}
+ .orders-list-card>header{align-items:flex-start;padding:1rem}
+ .list-create-action{display:none}
+ .desktop-table{display:none}
+ .mobile-orders{display:grid;gap:.75rem;padding:.75rem}
+ .mobile-orders article{padding:1rem;border:1px solid #e5e5df;border-radius:.75rem;background:#fff}
+ .mobile-orders header{display:flex;justify-content:space-between;align-items:center;gap:.65rem}
+ .mobile-orders header>a{color:#253025;font-weight:800;text-decoration:none}
+ .mobile-orders h3{margin:.8rem 0 .15rem}
+ .mobile-orders .branch{margin:0;color:#697180}
+ .mobile-orders dl{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:.65rem;margin:1rem 0}
+ .mobile-orders dl div{display:grid;min-width:0;gap:.2rem}
+ .mobile-orders dt{font-size:.7rem;color:#7b828c;text-transform:uppercase}
+ .mobile-orders dd{margin:0;overflow-wrap:anywhere;font-weight:700}
+ .orders-insights{grid-template-columns:1fr}
+ .orders-insights .units-panel{order:0}
+ .modal-backdrop:not(.delete-backdrop){align-items:flex-end;justify-content:stretch;padding:.75rem}
+ .create-panel{box-sizing:border-box;width:100%;height:auto;max-height:calc(100vh - .75rem);max-height:calc(100dvh - .75rem);overflow-y:auto;border-radius:.9rem .9rem 0 0}
+}
+@media(max-width:600px){
+ .create-panel footer{flex-direction:column}
+ .create-panel footer button{width:100%}
+}

@@ -269,6 +269,21 @@ public sealed class OrderManagementService(ApplicationDbContext db, TimeProvider
         catch(DbUpdateConcurrencyException){return Conflict();}
     }
 
+    public async Task<OrderOperationResult> ArchiveAsync(Guid id,int version,string reason,Guid user,CancellationToken ct=default)
+    {
+        if(!await IsAdministrator(user))return Fail("Solo una persona administradora puede archivar pedidos entregados o cancelados.");
+        var order=await Load(id,ct);
+        if(order is null)return Fail("El pedido no existe.");
+        if(order.Version!=version)return Conflict();
+        try
+        {
+            order.Archive(reason,user,clock.GetUtcNow());
+            db.OrderChangeHistory.Add(order.ChangeHistory[^1]);
+            return await Save(order,"OrderArchived",user,ct,reason);
+        }
+        catch(Exception ex)when(ex is ArgumentException or InvalidOperationException){return Fail(ex.Message);}
+    }
+
     public async Task<OrderOperationResult> ReviseLineAsync(Guid id,Guid lineId,int version,ConfirmedLineCommand c,Guid user,CancellationToken ct=default)
     {
         await using var tx=await db.Database.BeginTransactionAsync(ct);var order=await Load(id,ct);if(order is null)return Fail("El pedido no existe.");if(order.Version!=version)return Conflict();if(!await CanModifyProgressed(order,user))return Fail("Este estado requiere autorización administrativa.");var line=order.Lines.SingleOrDefault(x=>x.Id==lineId);if(line is null)return Fail("La línea no existe.");if(c.SoldUnitPrice<line.StandardUnitPrice&&!await IsAdministrator(user))return Fail("El descuento requiere autorización de una persona administradora.");
@@ -306,7 +321,7 @@ public sealed class OrderManagementService(ApplicationDbContext db, TimeProvider
     }
     public async Task<IReadOnlyList<OrderListItem>> ListAsync(CancellationToken ct=default)
     {
-        var orders=await db.Orders.AsNoTracking().OrderByDescending(x=>x.CreatedAtUtc).Select(x=>new {x.Id,x.Number,x.CustomerId,x.DeliveryPointId,x.ContactId,Status=x.Status.ToString(),x.PromisedAtUtc,x.Notes,x.CreatedAtUtc,x.Version,Total=x.Lines.Where(l=>l.IsActive).Sum(l=>l.SoldUnitPrice*l.SaleQuantity),Sale=x.Lines.Where(l=>l.IsActive).Sum(l=>l.SaleQuantity),Replacement=x.Lines.Where(l=>l.IsActive).Sum(l=>l.ReplacementQuantity),Tasting=x.Lines.Where(l=>l.IsActive).Sum(l=>l.TastingQuantity),Quantity=x.Lines.Where(l=>l.IsActive).Sum(l=>l.Quantity),Products=x.Lines.Where(l=>l.IsActive).Select(l=>l.ProductName).ToList()}).ToListAsync(ct);
+        var orders=await db.Orders.AsNoTracking().Where(x=>x.ArchivedAtUtc==null).OrderByDescending(x=>x.CreatedAtUtc).Select(x=>new {x.Id,x.Number,x.CustomerId,x.DeliveryPointId,x.ContactId,Status=x.Status.ToString(),x.PromisedAtUtc,x.Notes,x.CreatedAtUtc,x.Version,Total=x.Lines.Where(l=>l.IsActive).Sum(l=>l.SoldUnitPrice*l.SaleQuantity),Sale=x.Lines.Where(l=>l.IsActive).Sum(l=>l.SaleQuantity),Replacement=x.Lines.Where(l=>l.IsActive).Sum(l=>l.ReplacementQuantity),Tasting=x.Lines.Where(l=>l.IsActive).Sum(l=>l.TastingQuantity),Quantity=x.Lines.Where(l=>l.IsActive).Sum(l=>l.Quantity),Products=x.Lines.Where(l=>l.IsActive).Select(l=>l.ProductName).ToList()}).ToListAsync(ct);
         var ids=orders.Select(x=>x.Id).ToList(); var customerIds=orders.Select(x=>x.CustomerId).Distinct().ToList(); var pointIds=orders.Where(x=>x.DeliveryPointId!=null).Select(x=>x.DeliveryPointId!.Value).Distinct().ToList();
         var customers=await db.Customers.AsNoTracking().Where(x=>customerIds.Contains(x.Id)).ToDictionaryAsync(x=>x.Id,x=>x.Name,ct);
         var points=await db.DeliveryPoints.AsNoTracking().Where(x=>pointIds.Contains(x.Id)).ToDictionaryAsync(x=>x.Id,x=>new{x.Label,x.Location,x.ContactId},ct);

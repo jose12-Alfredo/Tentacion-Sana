@@ -8,6 +8,39 @@ public sealed class OrderTests
     private static readonly DateTimeOffset Now = new(2026, 9, 28, 18, 0, 0, TimeSpan.Zero);
 
     [Fact]
+    public void DeliveredOrderCanBeArchivedWithoutChangingItsStatusOrLines()
+    {
+        var order = Order.CreateDraft(Guid.NewGuid(), null, UserId, Now);
+        order.Configure(order.CustomerId, null, null, null, Now.AddDays(1), null, UserId, Now);
+        var line = order.AddLine(Guid.NewGuid(), "Producto", 1, 20m, 20m, null, UserId, Now);
+        order.Confirm(OrderSnapshot.Create(order.Id, "Cliente", null, null, null, null, null, Now), UserId, Now);
+        order.AdvanceTo(OrderStatus.InPreparation, "Preparando", UserId, Now);
+        order.AdvanceTo(OrderStatus.Ready, "Listo", UserId, Now);
+        order.MarkOutForDelivery(UserId, Now);
+        order.MarkDelivered(UserId, Now);
+
+        order.Archive("Registro duplicado", UserId, Now.AddMinutes(1));
+
+        Assert.Equal(OrderStatus.Delivered, order.Status);
+        Assert.Equal(Now.AddMinutes(1), order.ArchivedAtUtc);
+        Assert.Equal(UserId, order.ArchivedByUserId);
+        Assert.Equal("Registro duplicado", order.ArchiveReason);
+        Assert.Contains(line, order.Lines);
+        Assert.Throws<InvalidOperationException>(() => order.Archive("Otra vez", UserId, Now));
+    }
+
+    [Fact]
+    public void ActiveOrderCannotBeArchived()
+    {
+        var order = Order.CreateDraft(Guid.NewGuid(), null, UserId, Now);
+        Assert.Throws<InvalidOperationException>(() => order.Archive("Registro duplicado", UserId, Now));
+        order.Cancel("Cliente desistió", UserId, Now);
+        Assert.Throws<ArgumentException>(() => order.Archive(" ", UserId, Now));
+        order.Archive("Registro duplicado", UserId, Now);
+        Assert.Equal(OrderStatus.Cancelled, order.Status);
+    }
+
+    [Fact]
     public void DiscountRequiresReasonAndFreezesBothPrices()
     {
         var order = Order.CreateDraft(Guid.NewGuid(), null, UserId, Now);
