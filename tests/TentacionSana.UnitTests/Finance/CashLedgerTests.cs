@@ -70,6 +70,51 @@ public sealed class CashLedgerTests
     }
 
     [Fact]
+    public void ManualCorrectionUpdatesBalanceInputsAndKeepsEvidence()
+    {
+        var now = DateTimeOffset.UtcNow;
+        var accountId = Guid.NewGuid();
+        var movement = CashMovement.Create(CashAccount.Cash, CashDirection.Expense, CashSource.Manual,
+            now, "Compra", 25, "foto-original", "recibo.jpg", "jpg", 100, Guid.NewGuid(), now,
+            category: "Gasto", accountingAccountId: accountId);
+
+        movement.CorrectManual(CashAccount.Bank, CashDirection.Income, now.AddDays(1), "Aporte corregido", 30.129m,
+            Guid.NewGuid(), "Patrimonio");
+
+        Assert.Equal(CashAccount.Bank, movement.Account);
+        Assert.Equal(CashDirection.Income, movement.Direction);
+        Assert.Equal(30.13m, movement.Amount);
+        Assert.Equal("foto-original", movement.EvidencePublicId);
+    }
+
+    [Fact]
+    public void AutomaticMovementCannotBeCorrectedAsManual()
+    {
+        var now = DateTimeOffset.UtcNow;
+        var movement = CashMovement.Create(CashAccount.Bank, CashDirection.Income, CashSource.CustomerPayment,
+            now, "Pago", 30, "foto", "pago.jpg", "jpg", 100, Guid.NewGuid(), now);
+
+        Assert.Throws<InvalidOperationException>(() => movement.CorrectManual(CashAccount.Cash,
+            CashDirection.Expense, now, "Cambio", 10, Guid.NewGuid(), "Gasto"));
+    }
+
+    [Fact]
+    public void TransferCorrectionPreservesItsLink()
+    {
+        var now = DateTimeOffset.UtcNow;
+        var transferId = Guid.NewGuid();
+        var movement = CashMovement.Create(CashAccount.Bank, CashDirection.Expense, CashSource.Transfer,
+            now, "Retiro", 80, "foto", "retiro.jpg", "jpg", 100, Guid.NewGuid(), now,
+            category: "Transferencia", transferId: transferId);
+
+        movement.CorrectTransfer(CashAccount.Cash, CashDirection.Expense, now.AddDays(1), "Retiro corregido", 90);
+
+        Assert.Equal(transferId, movement.TransferId);
+        Assert.Equal(CashAccount.Cash, movement.Account);
+        Assert.Equal(90, movement.Amount);
+    }
+
+    [Fact]
     public void CashCountRequiresEvidenceOnlyWhenThereIsDifference()
     {
         var now=DateTimeOffset.UtcNow;var user=Guid.NewGuid();

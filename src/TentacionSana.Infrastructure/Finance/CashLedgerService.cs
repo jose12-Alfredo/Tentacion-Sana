@@ -1,9 +1,12 @@
 ﻿using CloudinaryDotNet;
 using CloudinaryDotNet.Actions;
+using System.Data;
+using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
 using TentacionSana.Application.Finance;
 using TentacionSana.Domain.Finance;
+using TentacionSana.Infrastructure.Auditing;
 using TentacionSana.Infrastructure.Media;
 using TentacionSana.Infrastructure.Persistence;
 
@@ -28,7 +31,7 @@ public sealed class CashLedgerService(ApplicationDbContext db, IOptions<Cloudina
             .Select(x => new CashPayableItem(x.Id, x.PersonName, x.Amount, x.CreatedAtUtc, x.Status.ToString())).ToListAsync(cancellationToken);
         var income=business.Where(x=>x.Direction==CashDirection.Income).Sum(x=>x.Amount);var expense=business.Where(x=>x.Direction==CashDirection.Expense).Sum(x=>x.Amount);
         return new(Balance(CashAccount.Bank), Balance(CashAccount.Cash), income,expense,income-expense,
-            rows.Select(x => new CashMovementItem(x.Id,x.Account.ToString(),x.Direction.ToString(),x.Source.ToString(),x.Category,x.OccurredAtUtc,Detail(x),x.Amount,x.TransferId)).ToList(), payables);
+            rows.Select(x => new CashMovementItem(x.Id,x.Account.ToString(),x.Direction.ToString(),x.Source.ToString(),x.Category,x.OccurredAtUtc,Detail(x),x.Amount,x.TransferId,x.AccountingAccountId)).ToList(), payables);
     }
 
     public async Task<CashResult> RegisterManualAsync(ManualCashMovementCommand command, Guid userId, CancellationToken cancellationToken = default)
@@ -63,6 +66,92 @@ public sealed class CashLedgerService(ApplicationDbContext db, IOptions<Cloudina
         if(!upload.Ok)return Fail(upload.Error!);
         try{var count=CashCount.Create(command.CountedAtUtc,expected,command.CountedAmount,command.Observation,upload.PublicId,command.EvidenceFileName,upload.Format,upload.Bytes,userId);db.CashCounts.Add(count);if(difference!=0)db.CashMovements.Add(CashMovement.Create(CashAccount.Cash,difference>0?CashDirection.Income:CashDirection.Expense,CashSource.CashCountAdjustment,command.CountedAtUtc,$"Ajuste por arqueo: {command.Observation}",Math.Abs(difference),upload.PublicId!,command.EvidenceFileName!,upload.Format!,upload.Bytes,userId,clock.GetUtcNow(),category:"Ajuste de arqueo"));await db.SaveChangesAsync(cancellationToken);return new(true,count.Id,[]);}catch(ArgumentException ex){return Fail(ex.Message);}
     }
+
+    public async Task<CashResult> UpdateMovementAsync(UpdateCashMovementCommand command, Guid userId, CancellationToken cancellationToken = default)
+    {
+        if (string.IsNullOrWhiteSpace(command.Reason) || command.Reason.Trim().Length > 500) return Fail("Indica un motivo de corrección de hasta 500 caracteres.");
+        if (!Enum.TryParse<CashAccount>(command.Account, true, out var account) || !Enum.IsDefined(account)) return Fail("Selecciona una cuenta de dinero válida.");
+        if (command.Amount <= 0 || decimal.Round(command.Amount, 2) <= 0) return Fail("El monto debe ser mayor que cero.");
+        var strategy = db.Database.CreateExecutionStrategy();
+        try
+        {
+            return await strategy.ExecuteAsync(async () =>
+            {
+                db.ChangeTracker.Clear();
+                await using var transaction = await db.Database.BeginTransactionAsync(IsolationLevel.Serializable, cancellationToken);
+                var movement = await db.CashMovements.SingleOrDefaultAsync(x => x.Id == command.MovementId, cancellationToken);
+                if (movement is null) return Fail("El movimiento ya no existe.");
+                if (movement.Source is not (CashSource.Manual or CashSource.Transfer)) return Fail("Este movimiento se corrige desde su operación de origen.");
+                if (movement.Source == CashSource.Transfer && movement.TransferId is null) return Fail("La transferencia no tiene un vínculo válido.");
+                var related = movement.Source == CashSource.Transfer
+                    ? await db.CashMovements.Where(x => x.TransferId == movement.TransferId).ToListAsync(cancellationToken)
+                    : [movement];
+                var before = JsonSerializer.Serialize(related.Select(Snapshot).ToList());
+                if (movement.Source == CashSource.Manual)
+                {
+                    if (!Enum.TryParse<CashDirection>(command.Direction, true, out var direction) || !Enum.IsDefined(direction)) return Fail("Selecciona entrada o salida.");
+                    var accountingAccount = await db.AccountingAccounts.AsNoTracking().SingleOrDefaultAsync(x => x.Id == command.AccountingAccountId && x.IsActive, cancellationToken);
+                    if (accountingAccount is null) return Fail("Selecciona una cuenta contable activa.");
+                    var acceptsIncome = accountingAccount.Kind is AccountingAccountKind.Income or AccountingAccountKind.Liability or AccountingAccountKind.Equity;
+                    if ((direction == CashDirection.Income) != acceptsIncome) return Fail("La cuenta contable no corresponde al tipo de movimiento.");
+                    movement.CorrectManual(account, direction, command.OccurredAtUtc, command.Detail, command.Amount, accountingAccount.Id, accountingAccount.Name);
+                }
+                else
+                {
+                    if (!Enum.TryParse<CashAccount>(command.OtherAccount, true, out var other) || !Enum.IsDefined(other) || account == other)
+                        return Fail("Selecciona un origen y un destino diferentes.");
+                    if (related.Count != 2 || related.Count(x => x.Direction == CashDirection.Expense) != 1 || related.Count(x => x.Direction == CashDirection.Income) != 1)
+                        return Fail("La transferencia está incompleta y no puede modificarse.");
+                    related.Single(x => x.Direction == CashDirection.Expense).CorrectTransfer(account, CashDirection.Expense, command.OccurredAtUtc, command.Detail, command.Amount);
+                    related.Single(x => x.Direction == CashDirection.Income).CorrectTransfer(other, CashDirection.Income, command.OccurredAtUtc, command.Detail, command.Amount);
+                }
+                db.AuditEntries.Add(new AuditEntry { Id = Guid.NewGuid(), UserId = userId, Action = "CashMovementCorrected", EntityType = "CashMovement", EntityId = command.MovementId.ToString(), PreviousValuesJson = before, NewValuesJson = JsonSerializer.Serialize(related.Select(Snapshot).ToList()), Reason = command.Reason.Trim(), OccurredAtUtc = clock.GetUtcNow() });
+                await db.SaveChangesAsync(cancellationToken);
+                await transaction.CommitAsync(cancellationToken);
+                return new CashResult(true, command.MovementId, []);
+            });
+        }
+        catch (Exception ex) when (ex is ArgumentException or InvalidOperationException or DbUpdateException)
+        {
+            db.ChangeTracker.Clear();
+            return Fail(ex is DbUpdateException ? "No se pudo guardar la corrección. Intenta nuevamente." : ex.Message);
+        }
+    }
+
+    public async Task<CashResult> DeleteMovementAsync(DeleteCashMovementCommand command, Guid userId, CancellationToken cancellationToken = default)
+    {
+        if (string.IsNullOrWhiteSpace(command.Reason) || command.Reason.Trim().Length > 500) return Fail("Indica un motivo de eliminación de hasta 500 caracteres.");
+        var strategy = db.Database.CreateExecutionStrategy();
+        try
+        {
+            return await strategy.ExecuteAsync(async () =>
+            {
+                db.ChangeTracker.Clear();
+                await using var transaction = await db.Database.BeginTransactionAsync(IsolationLevel.Serializable, cancellationToken);
+                var movement = await db.CashMovements.SingleOrDefaultAsync(x => x.Id == command.MovementId, cancellationToken);
+                if (movement is null) return Fail("El movimiento ya no existe.");
+                if (movement.Source is not (CashSource.Manual or CashSource.Transfer)) return Fail("Este movimiento se elimina desde su operación de origen.");
+                if (movement.Source == CashSource.Transfer && movement.TransferId is null) return Fail("La transferencia no tiene un vínculo válido.");
+                var related = movement.Source == CashSource.Transfer
+                    ? await db.CashMovements.Where(x => x.TransferId == movement.TransferId).ToListAsync(cancellationToken)
+                    : [movement];
+                if (movement.Source == CashSource.Transfer && (related.Count != 2 || related.Count(x => x.Direction == CashDirection.Expense) != 1 || related.Count(x => x.Direction == CashDirection.Income) != 1))
+                    return Fail("La transferencia está incompleta y no puede eliminarse.");
+                db.AuditEntries.Add(new AuditEntry { Id = Guid.NewGuid(), UserId = userId, Action = "CashMovementDeleted", EntityType = "CashMovement", EntityId = command.MovementId.ToString(), PreviousValuesJson = JsonSerializer.Serialize(related.Select(Snapshot).ToList()), Reason = command.Reason.Trim(), OccurredAtUtc = clock.GetUtcNow() });
+                db.CashMovements.RemoveRange(related);
+                await db.SaveChangesAsync(cancellationToken);
+                await transaction.CommitAsync(cancellationToken);
+                return new CashResult(true, command.MovementId, []);
+            });
+        }
+        catch (DbUpdateException)
+        {
+            db.ChangeTracker.Clear();
+            return Fail("No se pudo eliminar el movimiento. Intenta nuevamente.");
+        }
+    }
+
+    private static object Snapshot(CashMovement x) => new { x.Id, x.Account, x.Direction, x.Source, x.OccurredAtUtc, x.Detail, x.Amount, x.Category, x.TransferId, x.AccountingAccountId, x.EvidencePublicId };
 
     public async Task<CashEvidenceResult> GetEvidenceUrlAsync(Guid movementId,Guid userId,CancellationToken cancellationToken=default)
     {

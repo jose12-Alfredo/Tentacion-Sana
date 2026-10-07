@@ -39,6 +39,40 @@ public sealed class CashMovement
             SupplyPurchaseId = supplyPurchaseId, EvidencePublicId = publicId, EvidenceFileName = Path.GetFileName(fileName),
             EvidenceFormat = format, EvidenceBytes = bytes, RegisteredByUserId = userId, RegisteredAtUtc = registeredAtUtc };
     }
+
+    public void CorrectManual(CashAccount account, CashDirection direction, DateTimeOffset occurredAtUtc,
+        string detail, decimal amount, Guid accountingAccountId, string category)
+    {
+        if (Source != CashSource.Manual) throw new InvalidOperationException("Solo se pueden corregir movimientos manuales desde caja.");
+        ValidateCorrection(detail, amount);
+        if (accountingAccountId == Guid.Empty || string.IsNullOrWhiteSpace(category)) throw new ArgumentException("Selecciona una cuenta contable.");
+        Account = account;
+        Direction = direction;
+        OccurredAtUtc = occurredAtUtc;
+        Detail = detail.Trim();
+        Amount = decimal.Round(amount, 2);
+        AccountingAccountId = accountingAccountId;
+        Category = category.Trim();
+    }
+
+    public void CorrectTransfer(CashAccount account, CashDirection direction, DateTimeOffset occurredAtUtc,
+        string detail, decimal amount)
+    {
+        if (Source != CashSource.Transfer || TransferId is null) throw new InvalidOperationException("El movimiento no pertenece a una transferencia.");
+        ValidateCorrection(detail, amount);
+        Account = account;
+        Direction = direction;
+        OccurredAtUtc = occurredAtUtc;
+        Detail = detail.Trim();
+        Amount = decimal.Round(amount, 2);
+    }
+
+    private static void ValidateCorrection(string detail, decimal amount)
+    {
+        if (string.IsNullOrWhiteSpace(detail)) throw new ArgumentException("El detalle es obligatorio.");
+        if (detail.Trim().Length > 500) throw new ArgumentException("El detalle no puede superar 500 caracteres.");
+        if (amount <= 0 || decimal.Round(amount, 2) <= 0) throw new ArgumentException("El monto debe ser mayor que cero.");
+    }
 }
 
 public sealed class CashCount
