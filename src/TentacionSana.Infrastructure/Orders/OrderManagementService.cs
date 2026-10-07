@@ -211,7 +211,7 @@ public sealed class OrderManagementService(ApplicationDbContext db, TimeProvider
 
     public async Task<OrderOperationResult> CancelAsync(Guid id,int version,string reason,Guid user,CancellationToken ct=default)
     {
-        await using var tx=await db.Database.BeginTransactionAsync(ct); var order=await Load(id,ct); if(order is null)return Fail("El pedido no existe."); if(order.Version!=version)return Conflict();
+        var order=await Load(id,ct); if(order is null)return Fail("El pedido no existe."); if(order.Version!=version)return Conflict();
         try
         {
             var now=clock.GetUtcNow();
@@ -235,7 +235,7 @@ public sealed class OrderManagementService(ApplicationDbContext db, TimeProvider
                 }
             }
 
-            var result=await Save(order,"OrderCancelled",user,ct,reason);if(result.Succeeded)await tx.CommitAsync(ct);return result;
+            return await Save(order,"OrderCancelled",user,ct,reason);
         }
         catch(Exception ex) when(ex is ArgumentException or InvalidOperationException){return Fail(ex.Message);}
     }
@@ -248,7 +248,6 @@ public sealed class OrderManagementService(ApplicationDbContext db, TimeProvider
 
     public async Task<OrderOperationResult> DeleteDraftAsync(Guid id,int version,Guid user,CancellationToken ct=default)
     {
-        await using var transaction=await db.Database.BeginTransactionAsync(ct);
         var order=await Load(id,ct);
         if(order is null)return Fail("El pedido no existe.");
         if(order.Version!=version)return Conflict();
@@ -266,7 +265,7 @@ public sealed class OrderManagementService(ApplicationDbContext db, TimeProvider
 
         db.Orders.Remove(order);
         Audit("OrderDeleted",order.Id,user,clock.GetUtcNow(),"Pedido pendiente eliminado.");
-        try{await db.SaveChangesAsync(ct);await transaction.CommitAsync(ct);return Ok(id);}
+        try{await db.SaveChangesAsync(ct);return Ok(id);}
         catch(DbUpdateConcurrencyException){return Conflict();}
     }
 
