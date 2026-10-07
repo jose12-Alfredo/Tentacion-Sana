@@ -18,7 +18,7 @@ else
     <a class="back-link" href="/app/pedidos">← Volver a pedidos</a>
     <header class="detail-heading">
         <div>
-            <p>@(_order.Status is "Delivered" or "Cancelled" ? "Gestión del pedido" : "Pedido pendiente")</p>
+            <p>@(IsDraft ? "Borrador sin reserva" : _order.Status is "Delivered" or "Cancelled" ? "Gestión del pedido" : "Pedido confirmado")</p>
             <h1>Pedido #@_order.Number</h1>
             <span><strong>@_order.Customer</strong>@if (_order.DeliveryPoint is not null) { <text> · @_order.DeliveryPoint</text> }</span>
         </div>
@@ -162,7 +162,7 @@ else
             }
             else
             {
-                <section class="detail-card reservation-card"><header><div><small>Inventario</small><h2>Reserva de stock</h2></div><span class="@(_order.ShortageQuantity > 0 ? "attention" : "complete")">@(_order.ShortageQuantity > 0 ? $"Faltan {_order.ShortageQuantity} unidades por reservar." : "Reserva completa")</span></header><p>La reserva considera venta, reposición y degustación. Los insumos se calculan con la receta y no bloquean el pedido.</p><AuthorizeView Policy="@AppPolicies.ManageProduction"><Authorized><a class="panel-link" href="/app/inventario">Revisar insumos y lista de compra →</a></Authorized></AuthorizeView></section>
+                <section class="detail-card reservation-card"><header><div><small>Inventario</small><h2>Reserva de stock</h2></div><span class="@(_order.ShortageQuantity > 0 ? "attention" : "complete")">@(_order.ShortageQuantity > 0 ? $"Faltan {_order.ShortageQuantity} unidades por reservar." : "Reserva completa")</span></header><p>Al confirmar el pedido se registra toda la cantidad solicitada. Solo se apartan las unidades disponibles; las faltantes quedan pendientes de producción y se reservan al ingresar stock. No se pueden entregar antes de tener reserva. La reserva considera venta, reposición y degustación.</p><AuthorizeView Policy="@AppPolicies.ManageProduction"><Authorized><a class="panel-link" href="/app/inventario">Revisar insumos y lista de compra →</a></Authorized></AuthorizeView></section>
             }
 
             @if (_order.Status is not "Cancelled" and not "Delivered" && !IsDraft)

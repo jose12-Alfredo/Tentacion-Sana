@@ -90,3 +90,4 @@
  .create-panel label{margin-top:1rem}
 }
 @media(max-width:600px){.create-panel footer a{width:100%}}
+.status-draft{background:#e9edf0;color:#50606a}
