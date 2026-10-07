@@ -58,6 +58,17 @@ h1:focus {
     border-color: #929292;
 }
 
+@media (pointer: coarse) {
+    :is(.admin-shell, .public-shell) :is(button, select, textarea, input:not([type="checkbox"]):not([type="radio"])) {
+        min-height: 44px;
+    }
+    :is(.admin-shell, .public-shell) :is(button, a, summary) { touch-action: manipulation; }
+}
+
+@media (max-width: 600px) {
+    :is(.admin-shell, .public-shell) :is(input, select, textarea) { font-size: 1rem !important; }
+}
+
 .form-floating > .form-control-plaintext::placeholder, .form-floating > .form-control::placeholder {
     color: var(--bs-secondary-color);
     text-align: end;

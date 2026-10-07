@@ -11,10 +11,10 @@ nav ::deep a:hover, nav ::deep a.active { background: #c8f59a; color: #18220f; }
 .coming small { font-size: .65rem; }
 .public-link { margin-top: auto; padding: 1rem 0; color: #c8f59a; }
 form button { width: 100%; min-height: 2.7rem; border: 1px solid #666953; border-radius: .45rem; background: transparent; color: #fff; cursor: pointer; }
-.admin-content { width: 100%; max-width: 88rem; padding: clamp(1.25rem, 4vw, 3.5rem); }
+.admin-content { width: 100%; min-width: 0; max-width: 88rem; padding: clamp(1.25rem, 4vw, 3.5rem); }
 @media (max-width: 1200px) {
     .admin-shell { grid-template-columns: minmax(0, 1fr); }
-    .admin-sidebar { position: sticky; top: 0; z-index: 100; align-self: start; height: auto; min-width: 0; overflow: visible; display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: .75rem; padding: .7rem 1rem; box-shadow: 0 2px 12px #0002; }
+    .admin-sidebar { position: sticky; top: 0; z-index: 100; align-self: start; height: auto; min-width: 0; overflow: visible; display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: .75rem; padding: .7rem max(1rem, env(safe-area-inset-right)) .7rem max(1rem, env(safe-area-inset-left)); box-shadow: 0 2px 12px #0002; }
     .admin-brand { width: fit-content; padding: 0; border: 0; }
     .admin-brand img { width: 7rem; }
     .admin-menu-checkbox { position: absolute; width: 1px; height: 1px; opacity: 0; }
@@ -27,11 +27,11 @@ form button { width: 100%; min-height: 2.7rem; border: 1px solid #666953; border
     nav ::deep a { min-width: 0; overflow-wrap: anywhere; }
     .coming { display: none; }
     .public-link { margin-top: .5rem; }
-    .admin-content { min-width: 0; padding: 1rem; }
+    .admin-content { min-width: 0; padding: 1rem max(1rem, env(safe-area-inset-right)) 1rem max(1rem, env(safe-area-inset-left)); }
 }
 @media (max-width: 600px) {
     nav { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-    .admin-content { padding: .85rem; }
+    .admin-content { padding: .85rem max(.85rem, env(safe-area-inset-right)) .85rem max(.85rem, env(safe-area-inset-left)); }
 }
 @media (max-width: 380px) {
     nav { grid-template-columns: minmax(0, 1fr); }

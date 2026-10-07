@@ -79,3 +79,10 @@
  .create-panel footer{flex-direction:column}
  .create-panel footer button{width:100%}
 }
+
+/* El formulario debe seguir siendo utilizable con teclado y tablet en horizontal. */
+.create-panel{box-sizing:border-box;max-height:100dvh;overflow-y:auto;overscroll-behavior:contain;padding-bottom:max(1.5rem, env(safe-area-inset-bottom))}
+@media(max-height:700px) and (min-width:901px){
+ .create-panel{padding-top:1rem}
+ .create-panel label{margin-top:1rem}
+}
