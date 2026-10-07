@@ -16,8 +16,9 @@ public sealed class DashboardService(ApplicationDbContext db) : IDashboardServic
         var shortage = await db.StockReservations.Where(x => x.IsActive).SumAsync(x => (int?)x.ShortageQuantity, cancellationToken) ?? 0;
         var sales = await db.Sales.SumAsync(x => (decimal?)x.Amount, cancellationToken) ?? 0;
         var collected = await db.Payments.Where(x => x.Status == Domain.Deliveries.PaymentStatus.Confirmed).SumAsync(x => (decimal?)x.Amount, cancellationToken) ?? 0;
-        var invoiced = await db.Receivables.SumAsync(x => (decimal?)x.InvoicedAmount, cancellationToken) ?? 0;
-        var paid = await db.Receivables.SumAsync(x => (decimal?)x.PaidAmount, cancellationToken) ?? 0;
+        var activeReceivables = db.Receivables.Where(x => db.Orders.Any(order => order.Id == x.OrderId && order.ArchivedAtUtc == null));
+        var invoiced = await activeReceivables.SumAsync(x => (decimal?)x.InvoicedAmount, cancellationToken) ?? 0;
+        var paid = await activeReceivables.SumAsync(x => (decimal?)x.PaidAmount, cancellationToken) ?? 0;
         var pendingRows = await db.SettlementObligations.Where(x => x.SettledAmount < x.Amount).GroupBy(x => x.HolderUserId).Select(x => new { Id = x.Key, Pending = x.Sum(y => y.Amount - y.SettledAmount) }).ToListAsync(cancellationToken);
         var ids = pendingRows.Select(x => x.Id).ToList();
         var names = await db.Users.AsNoTracking().Where(x => ids.Contains(x.Id)).ToDictionaryAsync(x => x.Id, x => x.DisplayName, cancellationToken);

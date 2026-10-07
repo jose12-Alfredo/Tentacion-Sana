@@ -303,6 +303,8 @@ public sealed class DeliveryService(ApplicationDbContext db, TimeProvider clock,
         var allowedTypes = new[] { "image/jpeg", "image/png", "image/webp" };
         if (string.IsNullOrWhiteSpace(command.EvidenceContentType) || !allowedTypes.Contains(command.EvidenceContentType.ToLowerInvariant()) || command.EvidenceLength > 10 * 1024 * 1024) return Fail("El respaldo debe ser una imagen JPG, PNG o WebP de hasta 10 MB.");
         if (await FindIdempotentAsync("RegisterPayment", command.IdempotencyKey, cancellationToken)) return Ok(command.OrderId);
+        if (!await db.Orders.AsNoTracking().AnyAsync(x => x.Id == command.OrderId && x.ArchivedAtUtc == null, cancellationToken))
+            return Fail("No se pueden registrar pagos en un pedido eliminado de la vista.");
         var settings=cloudinaryOptions.Value;
         if(string.IsNullOrWhiteSpace(settings.CloudName)||string.IsNullOrWhiteSpace(settings.ApiKey)||string.IsNullOrWhiteSpace(settings.ApiSecret))return Fail("Cloudinary no está configurado.");
         var cloudinary=new Cloudinary(new Account(settings.CloudName,settings.ApiKey,settings.ApiSecret)){Api={Secure=true}};
@@ -315,6 +317,8 @@ public sealed class DeliveryService(ApplicationDbContext db, TimeProvider clock,
             {
             db.ChangeTracker.Clear();
             await using var transaction = await db.Database.BeginTransactionAsync(cancellationToken);
+            if (!await db.Orders.AsNoTracking().AnyAsync(x => x.Id == command.OrderId && x.ArchivedAtUtc == null, cancellationToken))
+                return Fail("No se pueden registrar pagos en un pedido eliminado de la vista.");
             var receivable = await db.Receivables.SingleOrDefaultAsync(x => x.OrderId == command.OrderId, cancellationToken);
             if (receivable is null && command.IsAdvancePayment)
             {
@@ -825,7 +829,7 @@ public sealed class DeliveryService(ApplicationDbContext db, TimeProvider clock,
             .ToListAsync(cancellationToken);
 
     public async Task<IReadOnlyList<ReceivableItem>> ReceivablesAsync(CancellationToken cancellationToken = default) =>
-        await db.Receivables.AsNoTracking().OrderByDescending(x => x.InvoicedAmount - x.PaidAmount).Select(x => new ReceivableItem(x.OrderId, db.Orders.Where(o => o.Id == x.OrderId).Select(o => o.Number).First(), db.Customers.Where(c => c.Id == x.CustomerId).Select(c => c.Name).First(), x.PayerId == null ? "Cliente" : db.PaymentResponsibleParties.Where(p => p.Id == x.PayerId).Select(p => p.Name).First(), x.InvoicedAmount, x.PaidAmount, x.InvoicedAmount > x.PaidAmount ? x.InvoicedAmount - x.PaidAmount : 0, x.Version, db.Deliveries.Where(d => d.OrderId == x.OrderId && d.CompletedAtUtc != null).Max(d => (DateTimeOffset?)d.CompletedAtUtc))).ToListAsync(cancellationToken);
+        await db.Receivables.AsNoTracking().Where(x => db.Orders.Any(o => o.Id == x.OrderId && o.ArchivedAtUtc == null)).OrderByDescending(x => x.InvoicedAmount - x.PaidAmount).Select(x => new ReceivableItem(x.OrderId, db.Orders.Where(o => o.Id == x.OrderId).Select(o => o.Number).First(), db.Customers.Where(c => c.Id == x.CustomerId).Select(c => c.Name).First(), x.PayerId == null ? "Cliente" : db.PaymentResponsibleParties.Where(p => p.Id == x.PayerId).Select(p => p.Name).First(), x.InvoicedAmount, x.PaidAmount, x.InvoicedAmount > x.PaidAmount ? x.InvoicedAmount - x.PaidAmount : 0, x.Version, db.Deliveries.Where(d => d.OrderId == x.OrderId && d.CompletedAtUtc != null).Max(d => (DateTimeOffset?)d.CompletedAtUtc))).ToListAsync(cancellationToken);
 
     public async Task<IReadOnlyList<PaymentHistoryItem>> PaymentsAsync(Guid orderId,CancellationToken cancellationToken=default)=>
         await db.PaymentAllocations.AsNoTracking().Where(x=>x.OrderId==orderId)

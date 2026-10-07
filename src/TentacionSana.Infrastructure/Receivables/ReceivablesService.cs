@@ -157,7 +157,7 @@ public sealed class ReceivablesService(
         try
         {
             var orderIds = requested.Select(x => x.OrderId).ToList();
-            var receivables = await db.Receivables.Where(x => orderIds.Contains(x.OrderId)).ToListAsync(cancellationToken);
+            var receivables = await db.Receivables.Where(x => orderIds.Contains(x.OrderId) && db.Orders.Any(order => order.Id == x.OrderId && order.ArchivedAtUtc == null)).ToListAsync(cancellationToken);
             if (receivables.Count != orderIds.Count) throw new InvalidOperationException("Una cuenta seleccionada ya no existe.");
             foreach (var item in requested)
             {
@@ -272,7 +272,9 @@ public sealed class ReceivablesService(
 
     private async Task<List<AccountRow>> LoadAccountRowsAsync(CancellationToken cancellationToken)
     {
-        var raw = await db.Receivables.AsNoTracking().Select(receivable => new
+        var raw = await db.Receivables.AsNoTracking()
+            .Where(receivable => db.Orders.Any(order => order.Id == receivable.OrderId && order.ArchivedAtUtc == null))
+            .Select(receivable => new
         {
             receivable.OrderId,
             OrderNumber = db.Orders.Where(x => x.Id == receivable.OrderId).Select(x => x.Number).First(),

@@ -277,8 +277,13 @@ public sealed class OrderManagementService(ApplicationDbContext db, TimeProvider
         if(order.Version!=version)return Conflict();
         try
         {
-            order.Archive(reason,user,clock.GetUtcNow());
+            var now=clock.GetUtcNow();
+            order.Archive(reason,user,now);
             db.OrderChangeHistory.Add(order.ChangeHistory[^1]);
+            var receivable=await db.Receivables.AsNoTracking().Where(x=>x.OrderId==id)
+                .Select(x=>new{x.InvoicedAmount,x.PaidAmount}).SingleOrDefaultAsync(ct);
+            if(receivable is not null)
+                db.AuditEntries.Add(new AuditEntry{Id=Guid.NewGuid(),UserId=user,Action="ReceivableRemovedFromActiveAccounts",EntityType="Receivable",EntityId=id.ToString(),PreviousValuesJson=JsonSerializer.Serialize(new{receivable.InvoicedAmount,receivable.PaidAmount,Balance=Math.Max(0,receivable.InvoicedAmount-receivable.PaidAmount)}),NewValuesJson=JsonSerializer.Serialize(new{Active=false}),Reason=reason.Trim(),OccurredAtUtc=now});
             return await Save(order,"OrderArchived",user,ct,reason);
         }
         catch(Exception ex)when(ex is ArgumentException or InvalidOperationException){return Fail(ex.Message);}
