@@ -97,6 +97,19 @@ public sealed class ApplicationDbContextModelTests
         Assert.Contains(entity.GetIndexes(), index => index.IsUnique && index.Properties.Select(x => x.Name).SequenceEqual(["SupplyPurchaseId"]));
     }
 
+    [Fact]
+    public void CashLedgerQueryExcludesPaymentsFromArchivedOrders()
+    {
+        using var context = CreateContext();
+        var sql = context.CashMovements.Where(movement => movement.PaymentId == null ||
+            context.Payments.Any(payment => payment.Id == movement.PaymentId &&
+                context.Orders.Any(order => order.Id == payment.OrderId && order.ArchivedAtUtc == null)))
+            .ToQueryString();
+
+        Assert.Contains("ArchivedAtUtc", sql);
+        Assert.Contains("Payments", sql);
+    }
+
     private static ApplicationDbContext CreateContext()
     {
         var options = new DbContextOptionsBuilder<ApplicationDbContext>()

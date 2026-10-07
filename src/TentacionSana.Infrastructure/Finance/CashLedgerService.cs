@@ -15,10 +15,13 @@ namespace TentacionSana.Infrastructure.Finance;
 public sealed class CashLedgerService(ApplicationDbContext db, IOptions<CloudinaryOptions> options, TimeProvider clock, IHttpClientFactory httpClientFactory) : ICashLedgerService
 {
     private static readonly string[] AllowedTypes = ["image/jpeg", "image/png", "image/webp"];
+    private IQueryable<CashMovement> ActiveMovements => db.CashMovements.Where(movement =>
+        movement.PaymentId == null || db.Payments.Any(payment => payment.Id == movement.PaymentId &&
+            db.Orders.Any(order => order.Id == payment.OrderId && order.ArchivedAtUtc == null)));
     public async Task<CashDashboard> GetDashboardAsync(CancellationToken cancellationToken = default)
     {
-        var rows = await db.CashMovements.AsNoTracking().OrderByDescending(x => x.OccurredAtUtc).Take(200).ToListAsync(cancellationToken);
-        var all = await db.CashMovements.AsNoTracking().Select(x => new { x.Account, x.Direction, x.Source, x.OccurredAtUtc, x.Amount }).ToListAsync(cancellationToken);
+        var rows = await ActiveMovements.AsNoTracking().OrderByDescending(x => x.OccurredAtUtc).Take(200).ToListAsync(cancellationToken);
+        var all = await ActiveMovements.AsNoTracking().Select(x => new { x.Account, x.Direction, x.Source, x.OccurredAtUtc, x.Amount }).ToListAsync(cancellationToken);
         decimal Balance(CashAccount account) => all.Where(x => x.Account == account).Sum(x => x.Direction == CashDirection.Income ? x.Amount : -x.Amount);
         var localNow=clock.GetLocalNow();var periodStart=new DateTimeOffset(localNow.Year,localNow.Month,1,0,0,0,localNow.Offset).ToUniversalTime();
         var business=all.Where(x=>x.OccurredAtUtc>=periodStart&&x.Source is CashSource.CustomerPayment or CashSource.InventoryPurchase or CashSource.Manual).ToList();
@@ -60,7 +63,7 @@ public sealed class CashLedgerService(ApplicationDbContext db, IOptions<Cloudina
 
     public async Task<CashResult> RegisterCashCountAsync(CashCountCommand command,Guid userId,CancellationToken cancellationToken=default)
     {
-        var expected=await db.CashMovements.Where(x=>x.Account==CashAccount.Cash).SumAsync(x=>x.Direction==CashDirection.Income?x.Amount:-x.Amount,cancellationToken);var difference=decimal.Round(command.CountedAmount-expected,2);
+        var expected=await ActiveMovements.Where(x=>x.Account==CashAccount.Cash).SumAsync(x=>x.Direction==CashDirection.Income?x.Amount:-x.Amount,cancellationToken);var difference=decimal.Round(command.CountedAmount-expected,2);
         (bool Ok,string? PublicId,string? Format,long Bytes,string? Error) upload=(true,null,null,0,null);
         if(command.EvidenceContent is not null)upload=await Upload(command.EvidenceContent,command.EvidenceFileName!,command.EvidenceContentType!,command.EvidenceLength,"arqueos",cancellationToken);
         if(!upload.Ok)return Fail(upload.Error!);
