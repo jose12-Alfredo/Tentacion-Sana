@@ -54,6 +54,8 @@ El repositorio incluye un `Dockerfile` para desplegar la aplicacion web en Rende
 
 En el plan gratuito, Render suspende el servicio tras un periodo de inactividad y su almacenamiento es temporal. La aplicacion volvera a funcionar al iniciarse, pero todos los usuarios deberan iniciar sesion de nuevo despues de un reinicio. Para conservar las sesiones en un plan con disco persistente, monta un disco en `/var/data` y configura `DataProtection__KeysPath=/var/data/data-protection-keys`.
 
+Al arrancar el servicio web se aplican las migraciones pendientes de Entity Framework antes de aceptar solicitudes. El usuario de PostgreSQL configurado en `ConnectionStrings__DefaultConnection` debe tener permisos para modificar el esquema. Si una migracion falla, revisa el error en los registros del servicio de Render; no habilites `Development` en produccion.
+
 Agrega en Render estas variables protegidas sin versionarlas:
 
 ```text

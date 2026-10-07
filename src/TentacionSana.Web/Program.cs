@@ -402,6 +402,14 @@ if (args.Contains("--seed-admin", StringComparer.OrdinalIgnoreCase))
     return;
 }
 
+// The Docker deployment starts the web process directly, so apply pending
+// schema changes before any request can query newly added columns.
+await using (var migrationScope = app.Services.CreateAsyncScope())
+{
+    var dbContext = migrationScope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
+    await dbContext.Database.MigrateAsync();
+}
+
 // Configure the HTTP request pipeline.
 if (builder.Configuration.GetValue<bool>("ForwardedHeaders:Enabled"))
 {
