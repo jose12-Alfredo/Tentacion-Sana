@@ -154,6 +154,10 @@ public sealed class InventoryService(ApplicationDbContext db, TimeProvider clock
         try { goodUnits = ProductionQuantities.GoodUnits(command.ProducedUnits, command.WasteUnits); }
         catch (ArgumentException ex) { return Fail(ex.Message); }
         if (string.IsNullOrWhiteSpace(command.Reason)) return Fail("Indica el motivo de la corrección.");
+        var executionStrategy = db.Database.CreateExecutionStrategy();
+        return await executionStrategy.ExecuteAsync(async () =>
+        {
+        db.ChangeTracker.Clear();
         await using var transaction = await db.Database.BeginTransactionAsync(IsolationLevel.Serializable, ct);
         try
         {
@@ -176,13 +180,18 @@ public sealed class InventoryService(ApplicationDbContext db, TimeProvider clock
             db.AuditEntries.Add(new AuditEntry { Id = Guid.NewGuid(), UserId = userId, Action = "ProductionBatchCorrected", EntityType = "ProductionBatch", EntityId = batch.Id.ToString(), PreviousValuesJson = JsonSerializer.Serialize(previous), NewValuesJson = JsonSerializer.Serialize(new { command.ProducedUnits, GoodUnits = goodUnits, command.WasteUnits, batch.RemainingUnits }), Reason = command.Reason.Trim(), OccurredAtUtc = now });
             await db.SaveChangesAsync(ct); await transaction.CommitAsync(ct); return Ok(batch.Id);
         }
-        catch (Exception ex) when (ex is ArgumentException or InvalidOperationException or DbUpdateConcurrencyException) { await transaction.RollbackAsync(ct); return Fail(ex.Message); }
+        catch (Exception ex) when (ex is ArgumentException or InvalidOperationException or DbUpdateConcurrencyException) { await transaction.RollbackAsync(ct); db.ChangeTracker.Clear(); return Fail(ex.Message); }
+        });
     }
 
     public async Task<InventoryResult> DeleteProductionBatchAsync(DeleteProductionBatchCommand command, Guid userId, CancellationToken ct = default)
     {
         if (!await IsAdministrator(userId)) return Fail("Solo una persona administradora puede eliminar lotes.");
         if (string.IsNullOrWhiteSpace(command.Reason)) return Fail("Indica el motivo de eliminación.");
+        var executionStrategy = db.Database.CreateExecutionStrategy();
+        return await executionStrategy.ExecuteAsync(async () =>
+        {
+        db.ChangeTracker.Clear();
         await using var transaction = await db.Database.BeginTransactionAsync(IsolationLevel.Serializable, ct);
         try
         {
@@ -198,7 +207,8 @@ public sealed class InventoryService(ApplicationDbContext db, TimeProvider clock
             db.AuditEntries.Add(new AuditEntry { Id = Guid.NewGuid(), UserId = userId, Action = "ProductionBatchDeleted", EntityType = "ProductionBatch", EntityId = batch.Id.ToString(), PreviousValuesJson = JsonSerializer.Serialize(previous), NewValuesJson = JsonSerializer.Serialize(new { IsVoided = true, RemovedFromStock = removable }), Reason = command.Reason.Trim(), OccurredAtUtc = now });
             await db.SaveChangesAsync(ct); await transaction.CommitAsync(ct); return Ok(batch.Id);
         }
-        catch (Exception ex) when (ex is ArgumentException or InvalidOperationException or DbUpdateConcurrencyException) { await transaction.RollbackAsync(ct); return Fail(ex.Message); }
+        catch (Exception ex) when (ex is ArgumentException or InvalidOperationException or DbUpdateConcurrencyException) { await transaction.RollbackAsync(ct); db.ChangeTracker.Clear(); return Fail(ex.Message); }
+        });
     }
 
     public async Task<IReadOnlyList<ProductionOrderDemand>> GetProductionOrderDemandAsync(Guid productId, CancellationToken ct = default)
