@@ -1,0 +1,158 @@
+@page "/app/analisis-ventas"
+@layout AdminLayout
+@rendermode InteractiveServer
+@attribute [Authorize(Policy = AppPolicies.ManageSales)]
+@using TentacionSana.Application.Dashboard
+@inject ISalesAnalyticsService Analytics
+@inject TimeProvider Clock
+
+<PageTitle>Análisis de ventas | Tentación Sana</PageTitle>
+
+<div class="sales-dashboard">
+    <header class="sales-heading">
+        <div><h1>Análisis de ventas</h1><p>Conoce cuándo vendes, quién compra y qué productos impulsan tu negocio.</p></div>
+        <span class="sales-rule">Solo pedidos entregados · montos en Bs</span>
+    </header>
+
+    <section class="period-panel" aria-label="Período de análisis">
+        <div class="period-presets">
+            <label for="period">Analizar</label>
+            <select id="period" @bind="_period" @bind:after="ApplyPeriodAsync">
+                <option value="month">Este mes</option><option value="year">Este año</option>
+                <option value="all">Acumulado total</option><option value="custom">Entre fechas</option>
+            </select>
+        </div>
+        @if (_period == "month")
+        {
+            <label>Mes <input type="month" @bind="_month" @bind:after="ApplyPeriodAsync" /></label>
+        }
+        else if (_period == "year")
+        {
+            <label>Año <input type="number" min="1900" max="9998" @bind="_year" @bind:after="ApplyPeriodAsync" /></label>
+        }
+        else if (_period == "custom")
+        {
+            <label>Desde <input type="date" @bind="_from" /></label>
+            <label>Hasta <input type="date" @bind="_to" /></label>
+            <button class="apply-button" @onclick="LoadAsync" disabled="@_loading">Aplicar rango</button>
+        }
+        <span class="period-caption">@PeriodLabel</span>
+    </section>
+
+    @if (_error is not null) { <p class="dashboard-error" role="alert">@_error</p> }
+    @if (_report is null) { <p class="dashboard-wait" role="status">Cargando análisis de ventas…</p> }
+    else
+    {
+        <section class="overview" aria-label="Indicadores de ventas">
+            <div class="revenue-feature"><span>Ventas entregadas</span><strong>@Money(_report.Revenue)</strong><small>@PeriodLabel</small></div>
+            <dl class="overview-stats">
+                <div><dt>Pedidos entregados</dt><dd>@_report.DeliveredOrders.ToString("N0")</dd></div>
+                <div><dt>Clientes que compraron</dt><dd>@_report.BuyingCustomers.ToString("N0")</dd></div>
+                <div><dt>Clientes registrados</dt><dd>@_report.TotalCustomers.ToString("N0")</dd></div>
+                <div><dt>Unidades vendidas</dt><dd>@_report.UnitsSold.ToString("N0")</dd></div>
+            </dl>
+        </section>
+
+        <div class="analysis-grid">
+            <section class="analysis-section trend-section">
+                <header><h2>Cuándo vendes</h2><p>Ingresos por @(_period == "year" || _period == "all" ? "mes" : "día")</p></header>
+                @if (Trend.Count == 0) { <p class="empty-state">Todavía no hay pedidos entregados en este período.</p> }
+                else
+                {
+                    <div class="trend-bars" role="list" aria-label="Ventas por período">
+                        @foreach (var point in Trend)
+                        {
+                            <div class="trend-item" role="listitem" title="@($"{point.Label}: {Money(point.Revenue)}, {point.Orders} pedidos")">
+                                <strong>@Money(point.Revenue)</strong><div class="bar-track"><span style="height:@BarHeight(point.Revenue)%"></span></div><small>@point.Label</small>
+                            </div>
+                        }
+                    </div>
+                }
+            </section>
+            <section class="analysis-section best-section">
+                <header><h2>Producto líder</h2><p>El mayor ingreso del período</p></header>
+                @if (_report.Products.Count > 0)
+                {
+                    var best = _report.Products[0];
+                    <div class="best-product"><span>@best.Name</span><strong>@Money(best.Revenue)</strong><small>@best.Units unidades vendidas</small></div>
+                }
+                else { <p class="empty-state">No hay productos vendidos en este período.</p> }
+            </section>
+        </div>
+
+        <div class="analysis-grid detail-grid">
+            <section class="analysis-section">
+                <header><h2>Productos más vendidos</h2><p>Ordenados por ingresos · solo unidades vendidas</p></header>
+                @if (_report.Products.Count == 0) { <p class="empty-state">Sin productos vendidos.</p> }
+                else { <div class="data-list">@foreach (var product in _report.Products) { <div class="data-row"><span class="row-name">@product.Name<small>@product.Units unidades</small></span><strong>@Money(product.Revenue)</strong></div> }</div> }
+            </section>
+            <section class="analysis-section">
+                <header><h2>Ventas por cliente</h2><p>Quién compró y cuánto vendiste</p></header>
+                @if (_report.Customers.Count == 0) { <p class="empty-state">Sin clientes con pedidos entregados.</p> }
+                else { <div class="data-list">@foreach (var customer in _report.Customers) { <div class="data-row"><a class="row-name" href="/app/clientes/@customer.Id">@customer.Name<small>@customer.Orders pedidos · @customer.Units unidades</small></a><strong>@Money(customer.Revenue)</strong></div> }</div> }
+            </section>
+        </div>
+
+        <section class="analysis-section recent-section">
+            <header><h2>Últimas ventas entregadas</h2><p>Pedidos incluidos en el análisis</p></header>
+            @if (_report.RecentSales.Count == 0) { <p class="empty-state">No hay ventas para mostrar.</p> }
+            else { <div class="recent-list">@foreach (var sale in _report.RecentSales) { <a href="/app/pedidos/@sale.Id"><span>Pedido #@sale.Number<small>@sale.Date.ToString("dd/MM/yyyy") · @sale.Customer</small></span><strong>@Money(sale.Revenue)</strong></a> }</div> }
+        </section>
+    }
+</div>
+
+@code {
+    private SalesAnalyticsReport? _report;
+    private string? _error;
+    private bool _loading;
+    private string _period = "month";
+    private DateTime _month;
+    private int _year;
+    private DateOnly _from;
+    private DateOnly _to;
+    private sealed record TrendPoint(string Label, decimal Revenue, int Orders);
+    private IReadOnlyList<TrendPoint> Trend => _report?.DailySales
+        .GroupBy(x => _period is "year" or "all" ? x.Date.ToString("yyyy-MM") : x.Date.ToString("dd/MM"))
+        .Select(g => new TrendPoint(g.Key, g.Sum(x => x.Revenue), g.Sum(x => x.Orders))).ToList() ?? [];
+    private string PeriodLabel => _period switch
+    {
+        "month" => _month.ToString("MMMM yyyy", new System.Globalization.CultureInfo("es-BO")),
+        "year" => _year.ToString(),
+        "all" => "Todo el historial",
+        _ => $"{_from:dd/MM/yyyy} – {_to:dd/MM/yyyy}"
+    };
+    protected override async Task OnInitializedAsync()
+    {
+        var today = DateOnly.FromDateTime(Clock.GetLocalNow().DateTime);
+        _month = new DateTime(today.Year, today.Month, 1); _year = today.Year;
+        _from = new DateOnly(today.Year, today.Month, 1); _to = today;
+        await LoadAsync();
+    }
+    private Task ApplyPeriodAsync() => LoadAsync();
+    private async Task LoadAsync()
+    {
+        _error = null;
+        DateOnly? from = null, to = null;
+        if (_period == "month")
+        {
+            var start = new DateOnly(_month.Year, _month.Month, 1);
+            from = start; to = start.AddMonths(1).AddDays(-1);
+        }
+        else if (_period == "year")
+        {
+            if (_year is < 1900 or > 9998) { _error = "Selecciona un año válido."; return; }
+            from = new DateOnly(_year, 1, 1); to = new DateOnly(_year, 12, 31);
+        }
+        else if (_period == "custom")
+        {
+            if (_from > _to) { _error = "La fecha inicial debe ser anterior o igual a la fecha final."; return; }
+            from = _from; to = _to;
+        }
+        _loading = true;
+        try { _report = await Analytics.GetAsync(from, to); }
+        catch { _error = "No se pudo cargar el análisis. Intenta actualizar el período."; }
+        finally { _loading = false; }
+    }
+    private double BarHeight(decimal value) => Math.Max(3, (double)(value / Math.Max(1, Trend.Max(x => x.Revenue)) * 100));
+    private static string Money(decimal amount) => $"Bs {amount:N2}";
+}

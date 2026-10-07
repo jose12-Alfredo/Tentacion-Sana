@@ -19,6 +19,9 @@ public sealed record IncomeStatementReport(
     decimal Investments,
     int SalesWithoutCalculatedCost)
 {
+    public IReadOnlyList<IncomeStatementLine> IncomeAccounts { get; init; } = [];
+    public IReadOnlyList<IncomeStatementLine> DirectCostAccounts { get; init; } = [];
+    public IReadOnlyList<IncomeStatementLine> InvestmentAccounts { get; init; } = [];
     public decimal TotalRevenue => SalesRevenue + OtherIncome;
     public decimal TotalCosts => CostOfSales + OtherDirectCosts;
     public decimal GrossProfit => TotalRevenue - TotalCosts;

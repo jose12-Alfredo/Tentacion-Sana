@@ -153,6 +153,7 @@ public static class DependencyInjection
         services.AddScoped<IIncomeStatementService, IncomeStatementService>();
         services.AddScoped<ISettlementService, SettlementService>();
         services.AddScoped<IDashboardService, DashboardService>();
+        services.AddScoped<ISalesAnalyticsService, SalesAnalyticsService>();
 
         return services;
     }

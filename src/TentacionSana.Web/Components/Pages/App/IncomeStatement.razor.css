@@ -23,6 +23,7 @@
 .statement-group h2 { margin: 0 0 .55rem; color: var(--statement-green); font-size: .78rem; text-transform: uppercase; letter-spacing: .12em; }
 .statement-row { display: grid; grid-template-columns: 1fr auto; gap: 1rem; padding: .42rem 0; }
 .statement-row strong { font-variant-numeric: tabular-nums; }
+.statement-row.account-detail { padding-left: 1rem; color: #526052; font-size: .92rem; }
 .statement-row.subtotal { margin-top: .3rem; padding-top: .65rem; border-top: 1px solid var(--statement-line); }
 .statement-row.result { margin-top: .6rem; padding: .8rem 0; border-top: 2px solid var(--statement-ink); font-size: 1.12rem; }
 .statement-row.muted { color: #7b8178; }
@@ -34,6 +35,8 @@
 .outside-result small { display: block; color: #657060; text-transform: uppercase; letter-spacing: .07em; }
 .outside-result strong { display: block; margin: .35rem 0; font-size: 1.4rem; }
 .outside-result p, .accounting-note { margin: .3rem 0 0; color: #657060; line-height: 1.5; }
+.outside-result .outside-account { display: flex; justify-content: space-between; gap: 1rem; padding: .45rem 0; border: 0; border-top: 1px solid var(--statement-line); border-radius: 0; background: transparent; font-size: .9rem; }
+.outside-account strong { margin: 0; font-size: inherit; white-space: nowrap; }
 .accounting-note { padding: 1rem; border-left: 4px solid var(--statement-gold); background: #fff9e8; }
 .cost-warning, .statement-error { padding: 1rem; border-radius: 12px; background: #fff1dd; color: #704812; }
 .statement-error { background: #fff0ef; color: #98251f; }

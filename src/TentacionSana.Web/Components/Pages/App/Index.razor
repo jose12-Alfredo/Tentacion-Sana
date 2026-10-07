@@ -6,7 +6,7 @@
 <header class="dashboard-heading"><p>Administración</p><h1>Panel interno</h1><span>Catálogo, ventas, producción, entregas y cobros en un solo lugar.</span></header>
 
 <section class="dashboard-grid" aria-label="Módulos disponibles">
-    <AuthorizeView Policy="@AppPolicies.ManageSales"><Authorized><ModuleCard Href="/app/productos" Eyebrow="Catálogo" Title="Productos" Description="Productos, precios, publicación e imágenes." />
+    <AuthorizeView Policy="@AppPolicies.ManageSales"><Authorized><ModuleCard Href="/app/analisis-ventas" Eyebrow="Ventas" Title="Análisis de ventas" Description="Ingresos, clientes y productos por período, con pedidos entregados." /><ModuleCard Href="/app/productos" Eyebrow="Catálogo" Title="Productos" Description="Productos, precios, publicación e imágenes." />
         <ModuleCard Href="/app/solicitudes" Eyebrow="Ventas" Title="Solicitudes" Description="Prospectos web y WhatsApp, estados y conversión." />
         <ModuleCard Href="/app/clientes" Eyebrow="Ventas" Title="Clientes" Description="Personas, empresas, contactos, sucursales y pagadores." />
         <ModuleCard Href="/app/pedidos" Eyebrow="Operación" Title="Pedidos" Description="Borradores, precios, reservas, cambios e historial." />

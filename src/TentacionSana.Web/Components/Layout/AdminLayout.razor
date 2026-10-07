@@ -8,7 +8,7 @@
         <div class="admin-navigation">
         <nav aria-label="Administración">
             <NavLink href="/app" Match="NavLinkMatch.All">Resumen</NavLink>
-            <AuthorizeView Policy="@AppPolicies.ManageSales"><Authorized><NavLink href="/app/productos">Productos</NavLink><NavLink href="/app/solicitudes">Solicitudes</NavLink><NavLink href="/app/clientes">Clientes</NavLink><NavLink href="/app/pedidos">Pedidos</NavLink><NavLink href="/app/entregas">Entregas</NavLink></Authorized></AuthorizeView>
+            <AuthorizeView Policy="@AppPolicies.ManageSales"><Authorized><NavLink href="/app/analisis-ventas">Análisis de ventas</NavLink><NavLink href="/app/productos">Productos</NavLink><NavLink href="/app/solicitudes">Solicitudes</NavLink><NavLink href="/app/clientes">Clientes</NavLink><NavLink href="/app/pedidos">Pedidos</NavLink><NavLink href="/app/entregas">Entregas</NavLink></Authorized></AuthorizeView>
             <AuthorizeView Policy="@AppPolicies.ManageProduction"><Authorized><NavLink href="/app/inventario">Inventario</NavLink><NavLink href="/app/produccion">Producción</NavLink></Authorized></AuthorizeView>
             <AuthorizeView Policy="@AppPolicies.ManageDeliveries"><Authorized><NavLink href="/app/mis-entregas">Mis entregas</NavLink></Authorized></AuthorizeView>
             <AuthorizeView Policy="@AppPolicies.ManageFinance"><Authorized><NavLink href="/app/cuentas-por-cobrar">Cuentas por cobrar</NavLink><NavLink href="/app/arqueo">Caja y movimientos</NavLink><NavLink href="/app/cuentas-contables">Cuentas contables</NavLink><NavLink href="/app/estado-resultados">Estado de resultados</NavLink></Authorized></AuthorizeView>

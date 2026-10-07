@@ -52,6 +52,10 @@ else
             @if (_report.OtherIncome != 0)
             {
                 <div class="statement-row"><span>Otros ingresos operativos</span><strong>@Money(_report.OtherIncome)</strong></div>
+                @foreach (var line in _report.IncomeAccounts)
+                {
+                    <div class="statement-row account-detail"><span>@line.Category</span><strong>@Money(line.Amount)</strong></div>
+                }
             }
             <div class="statement-row subtotal"><span>Total ingresos</span><strong>@Money(_report.TotalRevenue)</strong></div>
         </div>
@@ -62,6 +66,10 @@ else
             @if (_report.OtherDirectCosts != 0)
             {
                 <div class="statement-row"><span>Otros costos directos</span><strong>(@Money(_report.OtherDirectCosts))</strong></div>
+                @foreach (var line in _report.DirectCostAccounts)
+                {
+                    <div class="statement-row account-detail"><span>@line.Category</span><strong>(@Money(line.Amount))</strong></div>
+                }
             }
             <div class="statement-row subtotal"><span>Total costos</span><strong>(@Money(_report.TotalCosts))</strong></div>
             <div class="statement-row result"><span>Utilidad bruta</span><strong>@Money(_report.GrossProfit)</strong></div>
@@ -77,7 +85,7 @@ else
             {
                 @foreach (var line in _report.OperatingExpenses)
                 {
-                    <div class="statement-row"><span>@line.Category</span><strong>(@Money(line.Amount))</strong></div>
+                    <div class="statement-row account-detail"><span>@line.Category</span><strong>(@Money(line.Amount))</strong></div>
                 }
             }
             <div class="statement-row subtotal"><span>Total gastos operativos</span><strong>(@Money(_report.TotalOperatingExpenses))</strong></div>
@@ -99,6 +107,10 @@ else
             <small>Inversión en equipos</small>
             <strong>@Money(_report.Investments)</strong>
             <p>Equipos y utensilios duraderos. Se muestran fuera del resultado del período.</p>
+            @foreach (var line in _report.InvestmentAccounts)
+            {
+                <div class="outside-account"><span>@line.Category</span><strong>@Money(line.Amount)</strong></div>
+            }
         </div>
     </section>
 

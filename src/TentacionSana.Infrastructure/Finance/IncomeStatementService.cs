@@ -27,8 +27,8 @@ public sealed class IncomeStatementService(ApplicationDbContext db, TimeProvider
 
         var accountIds = manualMovements.Where(x => x.AccountingAccountId != null)
             .Select(x => x.AccountingAccountId!.Value).Distinct().ToList();
-        var accountKinds = await db.AccountingAccounts.AsNoTracking().Where(x => accountIds.Contains(x.Id))
-            .ToDictionaryAsync(x => x.Id, x => x.Kind, cancellationToken);
+        var accounts = await db.AccountingAccounts.AsNoTracking().Where(x => accountIds.Contains(x.Id))
+            .ToDictionaryAsync(x => x.Id, x => new { x.Code, x.Name, x.Kind }, cancellationToken);
 
         var inventoryPurchases = await db.CashMovements.AsNoTracking()
             .Where(x => x.Source == CashSource.InventoryPurchase && x.OccurredAtUtc >= fromUtc && x.OccurredAtUtc < toUtc)
@@ -44,12 +44,7 @@ public sealed class IncomeStatementService(ApplicationDbContext db, TimeProvider
         var investments = expenses
             .Where(x => KindOf(x.AccountingAccountId, x.Category) == AccountingAccountKind.Asset)
             .Sum(x => x.Amount);
-        var operatingExpenses = expenses
-            .Where(x => KindOf(x.AccountingAccountId, x.Category) == AccountingAccountKind.OperatingExpense)
-            .GroupBy(x => x.Category)
-            .Select(x => new IncomeStatementLine(x.Key, x.Sum(y => y.Amount)))
-            .OrderByDescending(x => x.Amount)
-            .ToList();
+        var operatingExpenses = Lines(AccountingAccountKind.OperatingExpense, CashDirection.Expense);
 
         return new IncomeStatementReport(
             startDate,
@@ -61,11 +56,28 @@ public sealed class IncomeStatementService(ApplicationDbContext db, TimeProvider
             operatingExpenses,
             inventoryPurchases,
             investments,
-            sales.Count(x => x.HistoricalCost is null));
+            sales.Count(x => x.HistoricalCost is null))
+        {
+            IncomeAccounts = Lines(AccountingAccountKind.Income, CashDirection.Income),
+            DirectCostAccounts = Lines(AccountingAccountKind.DirectCost, CashDirection.Expense),
+            InvestmentAccounts = Lines(AccountingAccountKind.Asset, CashDirection.Expense)
+        };
+
+        List<IncomeStatementLine> Lines(AccountingAccountKind kind, CashDirection direction) => manualMovements
+            .Where(x => x.Direction == direction && KindOf(x.AccountingAccountId, x.Category) == kind)
+            .GroupBy(x => AccountLabel(x.AccountingAccountId, x.Category))
+            .Select(x => new IncomeStatementLine(x.Key, x.Sum(y => y.Amount)))
+            .OrderBy(x => x.Category)
+            .ToList();
+
+        string AccountLabel(Guid? accountId, string category) =>
+            accountId is Guid id && accounts.TryGetValue(id, out var account)
+                ? $"{account.Code} · {account.Name}"
+                : category;
 
         AccountingAccountKind KindOf(Guid? accountId, string category)
         {
-            if (accountId is not null && accountKinds.TryGetValue(accountId.Value, out var kind)) return kind;
+            if (accountId is not null && accounts.TryGetValue(accountId.Value, out var account)) return account.Kind;
             if (AccountingCategories.IsOtherIncome(category)) return AccountingAccountKind.Income;
             return AccountingCategories.ClassifyExpense(category) switch
             {
