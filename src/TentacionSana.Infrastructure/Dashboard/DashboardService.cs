@@ -11,10 +11,11 @@ public sealed class DashboardService(ApplicationDbContext db) : IDashboardServic
     {
         var now = DateTimeOffset.UtcNow;
         var closed = new[] { OrderStatus.Delivered, OrderStatus.Cancelled };
-        var open = await db.Orders.CountAsync(x => !closed.Contains(x.Status), cancellationToken);
-        var late = await db.Orders.CountAsync(x => !closed.Contains(x.Status) && x.PromisedAtUtc < now, cancellationToken);
+        var open = await db.Orders.CountAsync(x => x.ArchivedAtUtc == null && !closed.Contains(x.Status), cancellationToken);
+        var late = await db.Orders.CountAsync(x => x.ArchivedAtUtc == null && !closed.Contains(x.Status) && x.PromisedAtUtc < now, cancellationToken);
         var shortage = await db.StockReservations.Where(x => x.IsActive).SumAsync(x => (int?)x.ShortageQuantity, cancellationToken) ?? 0;
-        var sales = await db.Sales.SumAsync(x => (decimal?)x.Amount, cancellationToken) ?? 0;
+        var sales = await db.Sales.Where(x => db.Orders.Any(order => order.Id == x.OrderId && order.ArchivedAtUtc == null))
+            .SumAsync(x => (decimal?)x.Amount, cancellationToken) ?? 0;
         var collected = await db.Payments.Where(x => x.Status == Domain.Deliveries.PaymentStatus.Confirmed).SumAsync(x => (decimal?)x.Amount, cancellationToken) ?? 0;
         var activeReceivables = db.Receivables.Where(x => db.Orders.Any(order => order.Id == x.OrderId && order.ArchivedAtUtc == null));
         var invoiced = await activeReceivables.SumAsync(x => (decimal?)x.InvoicedAmount, cancellationToken) ?? 0;

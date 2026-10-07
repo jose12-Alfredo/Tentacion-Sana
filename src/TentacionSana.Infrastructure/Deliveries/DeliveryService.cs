@@ -572,12 +572,14 @@ public sealed class DeliveryService(ApplicationDbContext db, TimeProvider clock,
         var start = StartOfLocalDay(referenceDate);
         var end = start.AddDays(1);
         var deliveredToday = await db.Deliveries.AsNoTracking()
-            .CountAsync(x => x.Status == DeliveryStatus.Delivered && x.CompletedAtUtc >= start && x.CompletedAtUtc < end, cancellationToken);
+            .CountAsync(x => x.Status == DeliveryStatus.Delivered && x.CompletedAtUtc >= start && x.CompletedAtUtc < end
+                && db.Orders.Any(order => order.Id == x.OrderId && order.ArchivedAtUtc == null), cancellationToken);
         var collectedToday = await db.Payments.AsNoTracking()
-            .Where(x => x.DeliveryId != null && x.Status == PaymentStatus.Confirmed && x.ReceivedAtUtc >= start && x.ReceivedAtUtc < end)
+            .Where(x => x.DeliveryId != null && x.Status == PaymentStatus.Confirmed && x.ReceivedAtUtc >= start && x.ReceivedAtUtc < end
+                && db.Orders.Any(order => order.Id == x.OrderId && order.ArchivedAtUtc == null))
             .SumAsync(x => x.Amount, cancellationToken);
         var orders = await db.Orders.AsNoTracking().Include(x => x.Lines).Include(x => x.Reservations)
-            .Where(x => x.Status != OrderStatus.Cancelled && x.Status != OrderStatus.Delivered)
+            .Where(x => x.ArchivedAtUtc == null && x.Status != OrderStatus.Cancelled && x.Status != OrderStatus.Delivered)
             .OrderBy(x => x.PromisedAtUtc == null)
             .ThenBy(x => x.PromisedAtUtc)
             .ThenBy(x => x.Number)
@@ -663,7 +665,7 @@ public sealed class DeliveryService(ApplicationDbContext db, TimeProvider clock,
                     delivery.Id == stop.DeliveryId &&
                     activeStatuses.Contains(delivery.Status) &&
                     delivery.Lines.Any(line => line.AssignedQuantity > line.DeliveredQuantity) &&
-                    db.Orders.Any(order => order.Id == delivery.OrderId && order.Status != OrderStatus.Cancelled))))
+                    db.Orders.Any(order => order.Id == delivery.OrderId && order.ArchivedAtUtc == null && order.Status != OrderStatus.Cancelled))))
             .OrderByDescending(x => x.StartedAtUtc ?? x.CreatedAtUtc)
             .Select(x => (Guid?)x.Id)
             .FirstOrDefaultAsync(cancellationToken);
@@ -678,7 +680,7 @@ public sealed class DeliveryService(ApplicationDbContext db, TimeProvider clock,
         var activeStatuses = new[] { DeliveryStatus.Scheduled, DeliveryStatus.Assigned, DeliveryStatus.InRoute, DeliveryStatus.Partial, DeliveryStatus.Failed };
         var deliveries = await db.Deliveries.AsNoTracking()
             .Where(x => x.DriverUserId == driverUserId && activeStatuses.Contains(x.Status) &&
-                db.Orders.Any(order => order.Id == x.OrderId && order.Status != OrderStatus.Cancelled) &&
+                db.Orders.Any(order => order.Id == x.OrderId && order.ArchivedAtUtc == null && order.Status != OrderStatus.Cancelled) &&
                 x.Lines.Any(line => line.AssignedQuantity > line.DeliveredQuantity) &&
                 !db.DeliveryRouteStops.Any(stop => stop.DeliveryId == x.Id))
             .OrderBy(x => x.ScheduledAtUtc)
@@ -710,14 +712,17 @@ public sealed class DeliveryService(ApplicationDbContext db, TimeProvider clock,
         var end = start.AddDays(1);
         return await db.DeliveryRoutes.AsNoTracking()
             .Where(x => x.PromisedDateUtc >= start && x.PromisedDateUtc < end &&
-                (driverUserId == null || x.DriverUserId == driverUserId))
+                (driverUserId == null || x.DriverUserId == driverUserId) &&
+                x.Stops.Any(stop => db.Deliveries.Any(delivery => delivery.Id == stop.DeliveryId &&
+                    db.Orders.Any(order => order.Id == delivery.OrderId && order.ArchivedAtUtc == null))))
             .OrderByDescending(x => x.StartedAtUtc ?? x.CreatedAtUtc)
             .Select(x => new DeliveryRouteListItem(
                 x.Id,
                 x.DriverUserId,
                 db.Users.Where(user => user.Id == x.DriverUserId).Select(user => user.DisplayName).FirstOrDefault() ?? "Repartidor",
                 x.Status.ToString(),
-                x.Stops.Count,
+                x.Stops.Count(stop => db.Deliveries.Any(delivery => delivery.Id == stop.DeliveryId &&
+                    db.Orders.Any(order => order.Id == delivery.OrderId && order.ArchivedAtUtc == null))),
                 x.CreatedAtUtc,
                 x.StartedAtUtc))
             .ToListAsync(cancellationToken);
@@ -728,7 +733,7 @@ public sealed class DeliveryService(ApplicationDbContext db, TimeProvider clock,
         var items = await db.Deliveries.AsNoTracking().Where(x =>
                 (assignedUserId == null || x.DriverUserId == assignedUserId) &&
                 x.Status != DeliveryStatus.Cancelled &&
-                db.Orders.Any(order => order.Id == x.OrderId && order.Status != OrderStatus.Cancelled))
+                db.Orders.Any(order => order.Id == x.OrderId && order.ArchivedAtUtc == null && order.Status != OrderStatus.Cancelled))
             .OrderBy(x => db.DeliveryRouteStops.Where(stop => stop.DeliveryId == x.Id).Select(stop => (int?)stop.Position).FirstOrDefault() ?? int.MaxValue).ThenBy(x => x.ScheduledAtUtc)
             .Select(x => new
             {
@@ -761,7 +766,8 @@ public sealed class DeliveryService(ApplicationDbContext db, TimeProvider clock,
     public async Task<DeliveryDetail?> GetAsync(Guid deliveryId, Guid? assignedUserId = null, CancellationToken cancellationToken = default)
     {
         var header = await db.Deliveries.AsNoTracking()
-            .Where(delivery => delivery.Id == deliveryId && (assignedUserId == null || delivery.DriverUserId == assignedUserId))
+            .Where(delivery => delivery.Id == deliveryId && (assignedUserId == null || delivery.DriverUserId == assignedUserId)
+                && db.Orders.Any(order => order.Id == delivery.OrderId && order.ArchivedAtUtc == null))
             .Select(delivery => new
             {
                 delivery.Id,
@@ -812,7 +818,7 @@ public sealed class DeliveryService(ApplicationDbContext db, TimeProvider clock,
 
     public async Task<IReadOnlyList<DeliveryOrderOption>> SchedulableOrdersAsync(CancellationToken cancellationToken = default)
     {
-        var orders = await db.Orders.AsNoTracking().Include(x => x.Lines).Include(x => x.Reservations).Where(x => x.Status == OrderStatus.Confirmed || x.Status == OrderStatus.InPreparation || x.Status == OrderStatus.Ready || x.Status == OrderStatus.OutForDelivery).OrderBy(x => x.PromisedAtUtc).ToListAsync(cancellationToken);
+        var orders = await db.Orders.AsNoTracking().Include(x => x.Lines).Include(x => x.Reservations).Where(x => x.ArchivedAtUtc == null && (x.Status == OrderStatus.Confirmed || x.Status == OrderStatus.InPreparation || x.Status == OrderStatus.Ready || x.Status == OrderStatus.OutForDelivery)).OrderBy(x => x.PromisedAtUtc).ToListAsync(cancellationToken);
         var active = new[] { DeliveryStatus.Scheduled, DeliveryStatus.Assigned, DeliveryStatus.InRoute, DeliveryStatus.Partial };
         var scheduled = await db.DeliveryLines.AsNoTracking().Where(x => active.Contains(db.Deliveries.Where(d => d.Id == x.DeliveryId).Select(d => d.Status).First())).GroupBy(x => x.OrderLineId).Select(x => new { Id = x.Key, Sale = x.Sum(y => y.AssignedSaleQuantity - y.DeliveredSaleQuantity), Replacement = x.Sum(y => y.AssignedReplacementQuantity - y.DeliveredReplacementQuantity), Tasting=x.Sum(y=>y.AssignedTastingQuantity-y.DeliveredTastingQuantity) }).ToDictionaryAsync(x => x.Id, cancellationToken);
         var delivered = await db.DeliveryLines.AsNoTracking().GroupBy(x=>x.OrderLineId).Select(x=>new{Id=x.Key,Sale=x.Sum(y=>y.DeliveredSaleQuantity),Replacement=x.Sum(y=>y.DeliveredReplacementQuantity),Tasting=x.Sum(y=>y.DeliveredTastingQuantity)}).ToDictionaryAsync(x=>x.Id,cancellationToken);

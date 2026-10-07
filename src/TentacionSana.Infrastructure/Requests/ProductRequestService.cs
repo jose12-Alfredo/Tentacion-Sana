@@ -93,7 +93,7 @@ public sealed class ProductRequestService(ApplicationDbContext db, TimeProvider 
         {
             await transaction.RollbackAsync(cancellationToken);
             db.ChangeTracker.Clear();
-            var existingOrderId = await db.Orders.AsNoTracking().Where(x => x.SourceRequestId == requestId).Select(x => (Guid?)x.Id).SingleOrDefaultAsync(cancellationToken);
+            var existingOrderId = await db.Orders.AsNoTracking().Where(x => x.SourceRequestId == requestId && x.ArchivedAtUtc == null).Select(x => (Guid?)x.Id).SingleOrDefaultAsync(cancellationToken);
             return existingOrderId is not null
                 ? new(true, existingOrderId, [])
                 : new(false, null, ["La solicitud fue modificada por otro usuario. Actualiza la bandeja e inténtalo nuevamente."]);
@@ -150,7 +150,7 @@ public sealed class ProductRequestService(ApplicationDbContext db, TimeProvider 
         if (request is null) return new(false, null, ["La solicitud no existe o ya fue eliminada."]);
 
         if (request.ConvertedOrderId is not null ||
-            await db.Orders.AsNoTracking().AnyAsync(x => x.SourceRequestId == requestId, cancellationToken))
+            await db.Orders.AsNoTracking().AnyAsync(x => x.SourceRequestId == requestId && x.ArchivedAtUtc == null, cancellationToken))
         {
             return new(false, null, ["No se puede eliminar una solicitud vinculada a un pedido. Elimina primero el pedido borrador."]);
         }

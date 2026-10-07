@@ -81,8 +81,12 @@
 }
 
 /* El formulario debe seguir siendo utilizable con teclado y tablet en horizontal. */
+.orders-heading .primary-action,.create-panel footer a{display:inline-flex;align-items:center;justify-content:center;text-decoration:none}
+.list-create-action{text-decoration:none}
+.close-button{display:grid;place-items:center;min-width:2.75rem;min-height:2.75rem;color:#27313e;text-decoration:none}
 .create-panel{box-sizing:border-box;max-height:100dvh;overflow-y:auto;overscroll-behavior:contain;padding-bottom:max(1.5rem, env(safe-area-inset-bottom))}
 @media(max-height:700px) and (min-width:901px){
  .create-panel{padding-top:1rem}
  .create-panel label{margin-top:1rem}
 }
+@media(max-width:600px){.create-panel footer a{width:100%}}

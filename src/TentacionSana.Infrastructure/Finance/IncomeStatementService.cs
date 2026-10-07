@@ -15,7 +15,8 @@ public sealed class IncomeStatementService(ApplicationDbContext db, TimeProvider
         var toUtc = new DateTimeOffset(endDate.AddDays(1).ToDateTime(TimeOnly.MinValue), offset).ToUniversalTime();
 
         var sales = await db.Sales.AsNoTracking()
-            .Where(x => x.OccurredAtUtc >= fromUtc && x.OccurredAtUtc < toUtc)
+            .Where(x => x.OccurredAtUtc >= fromUtc && x.OccurredAtUtc < toUtc
+                && db.Orders.Any(order => order.Id == x.OrderId && order.ArchivedAtUtc == null))
             .Select(x => new { x.Amount, x.HistoricalCost })
             .ToListAsync(cancellationToken);
 

@@ -12,7 +12,7 @@ nav ::deep a:hover, nav ::deep a.active { background: #c8f59a; color: #18220f; }
 .public-link { margin-top: auto; padding: 1rem 0; color: #c8f59a; }
 form button { width: 100%; min-height: 2.7rem; border: 1px solid #666953; border-radius: .45rem; background: transparent; color: #fff; cursor: pointer; }
 .admin-content { width: 100%; min-width: 0; max-width: 88rem; padding: clamp(1.25rem, 4vw, 3.5rem); }
-@media (max-width: 1200px) {
+@media (max-width: 1400px) {
     .admin-shell { grid-template-columns: minmax(0, 1fr); }
     .admin-sidebar { position: sticky; top: 0; z-index: 100; align-self: start; height: auto; min-width: 0; overflow: visible; display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: .75rem; padding: .7rem max(1rem, env(safe-area-inset-right)) .7rem max(1rem, env(safe-area-inset-left)); box-shadow: 0 2px 12px #0002; }
     .admin-brand { width: fit-content; padding: 0; border: 0; }

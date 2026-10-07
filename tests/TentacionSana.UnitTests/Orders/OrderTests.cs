@@ -41,6 +41,22 @@ public sealed class OrderTests
     }
 
     [Fact]
+    public void DeletedDraftKeepsHistoryAndReleasesItsSourceRequest()
+    {
+        var requestId = Guid.NewGuid();
+        var order = Order.CreateDraft(Guid.NewGuid(), requestId, UserId, Now);
+
+        order.Cancel("Pedido pendiente eliminado.", UserId, Now);
+        order.DetachSourceRequest(UserId, Now);
+        order.Archive("Pedido pendiente eliminado.", UserId, Now);
+
+        Assert.Equal(OrderStatus.Cancelled, order.Status);
+        Assert.Null(order.SourceRequestId);
+        Assert.Equal(Now, order.ArchivedAtUtc);
+        Assert.Contains(order.ChangeHistory, change => change.Field == "SourceRequestDetached");
+    }
+
+    [Fact]
     public void DiscountRequiresReasonAndFreezesBothPrices()
     {
         var order = Order.CreateDraft(Guid.NewGuid(), null, UserId, Now);

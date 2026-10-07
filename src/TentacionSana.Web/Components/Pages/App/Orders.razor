@@ -1,4 +1,5 @@
 @page "/app/pedidos"
+@page "/app/pedidos/nuevo"
 @layout AdminLayout
 @rendermode InteractiveServer
 @attribute [Authorize(Policy = AppPolicies.ManageSales)]
@@ -9,7 +10,7 @@
 @implements IAsyncDisposable
 
 <PageTitle>Pedidos | Tentación Sana</PageTitle>
-<header class="orders-heading"><div><h1>Pedidos</h1><p>Controla ventas, entregas y pagos de forma práctica.</p></div><button type="button" class="primary-action" @onclick="OpenCreateDialog"><span>+</span> Nuevo pedido</button></header>
+<header class="orders-heading"><div><h1>Pedidos</h1><p>Controla ventas, entregas y pagos de forma práctica.</p></div><a href="/app/pedidos/nuevo" data-enhance-nav="false" class="primary-action"><span>+</span> Nuevo pedido</a></header>
 @if (_error is not null) { <div class="orders-error">@_error</div> }
 @if (_items is null) { <div class="orders-loading">Cargando control de pedidos…</div> }
 else
@@ -35,7 +36,7 @@ else
  </section>
  <div class="orders-workspace">
    <section class="orders-list-card">
-    <header><div><h2>Lista de pedidos</h2><p>Mostrando @Filtered.Count de @ListCount pedidos.</p></div><button type="button" class="list-create-action" @onclick="OpenCreateDialog"><span>+</span> Nuevo pedido</button></header>
+    <header><div><h2>Lista de pedidos</h2><p>Mostrando @Filtered.Count de @ListCount pedidos.</p></div><a href="/app/pedidos/nuevo" data-enhance-nav="false" class="list-create-action"><span>+</span> Nuevo pedido</a></header>
    @if (Filtered.Count == 0) { <div class="empty-state"><strong>No encontramos pedidos.</strong><span>Prueba con otros filtros o crea un pedido nuevo.</span></div> }
    else
    {
@@ -71,12 +72,12 @@ else
 {
  <div class="modal-backdrop" @onclick="CloseCreateDialog">
   <section class="create-panel" role="dialog" aria-modal="true" aria-labelledby="create-title" @onclick:stopPropagation>
-   <header><div><small>Nueva venta</small><h2 id="create-title">Crear pedido</h2></div><button type="button" class="close-button" @onclick="CloseCreateDialog" disabled="@_creating" aria-label="Cerrar">×</button></header>
+   <header><div><small>Nueva venta</small><h2 id="create-title">Crear pedido</h2></div><a href="/app/pedidos" data-enhance-nav="false" class="close-button" aria-label="Cerrar">×</a></header>
    <p>Selecciona el cliente. El pedido se registrará pendiente para completar productos, entrega y responsables.</p>
    @if (_error is not null) { <p class="create-error" role="alert">@_error</p> }
    @if (_customers.Count == 0) { <p class="create-empty">Aún no hay clientes activos. <a href="/app/clientes">Registra un cliente</a> para crear el pedido.</p> }
    <label>Cliente<select @bind="_customerId" disabled="@(_creating || _customers.Count == 0)"><option value="">Selecciona un cliente</option>@foreach(var c in _customers){<option value="@c.Id">@c.Name</option>}</select></label>
-   <footer><button type="button" class="secondary-action" @onclick="CloseCreateDialog" disabled="@_creating">Cancelar</button><button type="button" class="primary-action" @onclick="CreateAsync" disabled="@(_customerId is null || _creating)">@(_creating ? "Creando…" : "Crear pedido")</button></footer>
+   <footer><a href="/app/pedidos" data-enhance-nav="false" class="secondary-action">Cancelar</a><button type="button" class="primary-action" @onclick="CreateAsync" disabled="@_creating">@(_creating ? "Creando…" : "Crear pedido")</button></footer>
   </section>
  </div>
 }
@@ -91,17 +92,44 @@ else
  private OrderListItem? ArchiveCandidate=>_items?.SingleOrDefault(x=>x.Id==_archiveOrderId);
  private bool StatusMatches(OrderListItem x)=>_statusFilter switch{"All"=>x.Status!="Cancelled","Pending"=>x.Status is not "Delivered" and not "Cancelled","Delivered"=>x.Status=="Delivered",_=>false};
  private int ListCount=>_items?.Count(x=>x.Status!="Cancelled")??0; private int PendingCount=>_items?.Count(x=>x.Status is not "Delivered" and not "Cancelled")??0; private int DeliveredCount=>_items?.Count(x=>x.Status=="Delivered")??0; private int UnpaidCount=>_items?.Count(x=>x.PaymentStatus=="Pending"&&x.Status!="Cancelled")??0; private int PaidCount=>_items?.Count(x=>x.PaymentStatus=="Paid")??0; private decimal OutstandingTotal=>_items?.Where(x=>x.Status!="Cancelled").Sum(x=>x.Balance)??0; private int PendingSaleUnits=>_items?.Sum(x=>x.PendingSaleQuantity)??0; private int PendingReplacementUnits=>_items?.Sum(x=>x.PendingReplacementQuantity)??0; private int PendingTastingUnits=>_items?.Sum(x=>x.PendingTastingQuantity)??0; private int PendingUnits=>PendingSaleUnits+PendingReplacementUnits+PendingTastingUnits; private double BarWidth(int value)=>PendingUnits==0?0:Math.Max(3,value*100d/PendingUnits); private int TodayQrCount=>_items?.Sum(x=>x.TodayQrPayments)??0; private decimal TodayQrAmount=>_items?.Sum(x=>x.TodayQrAmount)??0; private int TodayCashCount=>_items?.Sum(x=>x.TodayCashPayments)??0; private decimal TodayCashAmount=>_items?.Sum(x=>x.TodayCashAmount)??0; private int TodayNoPaymentCount=>UnpaidCount;
+ protected override void OnParametersSet(){_showCreate=new Uri(Navigation.Uri).AbsolutePath.TrimEnd('/').Equals("/app/pedidos/nuevo",StringComparison.OrdinalIgnoreCase);}
  protected override async Task OnInitializedAsync(){_items=await Service.ListAsync();_customers=await Service.CustomerOptionsAsync();}
- private void OpenCreateDialog(){_error=null;_customerId=null;_showCreate=true;}
- private void CloseCreateDialog(){if(!_creating)_showCreate=false;}
- private async Task CreateAsync(){if(_customerId is null)return;_creating=true;_error=null;try{var r=await Service.CreateDraftAsync(_customerId.Value,await UserIdAsync());if(r.Succeeded)Navigation.NavigateTo($"/app/pedidos/{r.Id}");else _error=string.Join(" ",r.Errors);}catch{_error="No se pudo crear el pedido. Intenta nuevamente.";}finally{_creating=false;}}
+ private void CloseCreateDialog(){if(!_creating)Navigation.NavigateTo("/app/pedidos");}
+ private async Task CreateAsync(){if(_customerId is null){_error="Selecciona un cliente antes de crear el pedido.";return;}_creating=true;_error=null;try{var r=await Service.CreateDraftAsync(_customerId.Value,await UserIdAsync());if(r.Succeeded)Navigation.NavigateTo($"/app/pedidos/{r.Id}");else _error=string.Join(" ",r.Errors);}catch{_error="No se pudo crear el pedido. Intenta nuevamente.";}finally{_creating=false;}}
  private void OpenDeleteDialog(Guid orderId){_error=null;_deleteOrderId=orderId;_showDelete=true;}
  private void OpenRemoveDialog(OrderListItem item){if(item.Status=="Draft")OpenDeleteDialog(item.Id);else OpenCancelDialog(item.Id);}
  private void CloseDeleteDialog(){if(!_deleting)_showDelete=false;}
  private async Task DeleteAsync(){var item=_items?.SingleOrDefault(x=>x.Id==_deleteOrderId);if(item is null)return;_deleting=true;_error=null;try{var result=await Service.DeleteDraftAsync(item.Id,item.Version,await UserIdAsync());if(result.Succeeded){_items=_items?.Where(x=>x.Id!=item.Id).ToList();_showDelete=false;_deleteOrderId=null;_menuVersion++;}else _error=string.Join(" ",result.Errors);}catch{_error="No se pudo eliminar el pedido. Intenta nuevamente.";}finally{_deleting=false;}}
  private void OpenCancelDialog(Guid orderId){_error=null;_cancelReason="";_cancelOrderId=orderId;_showCancel=true;_menuVersion++;}
  private void CloseCancelDialog(){if(!_cancelling)_showCancel=false;}
- private async Task CancelOrderAsync(){var item=_items?.SingleOrDefault(x=>x.Id==_cancelOrderId);if(item is null)return;_cancelling=true;_error=null;try{var result=await Service.CancelAsync(item.Id,item.Version,_cancelReason,await UserIdAsync());if(result.Succeeded){_items=await Service.ListAsync();_showCancel=false;_cancelOrderId=null;_cancelReason="";_menuVersion++;}else _error=string.Join(" ",result.Errors);}catch{_error="No se pudo retirar el pedido. Intenta nuevamente.";}finally{_cancelling=false;}}
+ private async Task CancelOrderAsync()
+ {
+     var item=_items?.SingleOrDefault(x=>x.Id==_cancelOrderId);
+     if(item is null)return;
+     _cancelling=true;
+     _error=null;
+     try
+     {
+         var userId=await UserIdAsync();
+         var updated=await Service.GetAsync(item.Id);
+         if(updated?.Status!="Cancelled")
+         {
+             var cancelled=await Service.CancelAsync(item.Id,updated?.Version??item.Version,_cancelReason,userId);
+             if(!cancelled.Succeeded){_error=string.Join(" ",cancelled.Errors);return;}
+             updated=await Service.GetAsync(item.Id);
+         }
+         if(updated is null){_error="El pedido se canceló, pero no se pudo completar su eliminación de la vista.";return;}
+         var archived=await Service.ArchiveAsync(item.Id,updated.Version,_cancelReason,userId);
+         if(!archived.Succeeded){_error=string.Join(" ",archived.Errors);return;}
+         _items=await Service.ListAsync();
+         _showCancel=false;
+         _cancelOrderId=null;
+         _cancelReason="";
+         _menuVersion++;
+     }
+     catch{_error="No se pudo retirar el pedido. Intenta nuevamente.";}
+     finally{_cancelling=false;}
+ }
  private void OpenArchiveDialog(OrderListItem item){_error=null;_archiveReason="";_archiveOrderId=item.Id;_showArchive=true;_menuVersion++;}
  private void CloseArchiveDialog(){if(!_archiving){_showArchive=false;_archiveOrderId=null;}}
  private async Task ArchiveOrderAsync(){var item=ArchiveCandidate;if(item is null)return;_archiving=true;_error=null;try{var result=await Service.ArchiveAsync(item.Id,item.Version,_archiveReason,await UserIdAsync());if(result.Succeeded){_items=await Service.ListAsync();_showArchive=false;_archiveOrderId=null;_archiveReason="";_menuVersion++;}else _error=string.Join(" ",result.Errors);}catch{_error="No se pudo eliminar el pedido de la vista. Intenta nuevamente.";}finally{_archiving=false;}}

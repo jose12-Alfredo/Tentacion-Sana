@@ -263,18 +263,25 @@ public sealed class OrderManagementService(ApplicationDbContext db, TimeProvider
             }
         }
 
-        db.Orders.Remove(order);
-        Audit("OrderDeleted",order.Id,user,clock.GetUtcNow(),"Pedido pendiente eliminado.");
+        var now=clock.GetUtcNow();
+        const string reason="Pedido pendiente eliminado.";
+        var previousChangeCount=order.ChangeHistory.Count;
+        order.Cancel(reason,user,now);
+        db.OrderStatusHistory.Add(order.StatusHistory[^1]);
+        order.DetachSourceRequest(user,now);
+        order.Archive(reason,user,now);
+        db.OrderChangeHistory.AddRange(order.ChangeHistory.Skip(previousChangeCount));
+        Audit("OrderDeleted",order.Id,user,now,reason);
         try{await db.SaveChangesAsync(ct);return Ok(id);}
         catch(DbUpdateConcurrencyException){return Conflict();}
     }
 
     public async Task<OrderOperationResult> ArchiveAsync(Guid id,int version,string reason,Guid user,CancellationToken ct=default)
     {
-        if(!await IsAdministrator(user))return Fail("Solo una persona administradora puede archivar pedidos entregados o cancelados.");
         var order=await Load(id,ct);
         if(order is null)return Fail("El pedido no existe.");
         if(order.Version!=version)return Conflict();
+        if(order.Status!=OrderStatus.Cancelled&&!await IsAdministrator(user))return Fail("Solo una persona administradora puede archivar pedidos entregados.");
         try
         {
             var now=clock.GetUtcNow();
@@ -307,7 +314,7 @@ public sealed class OrderManagementService(ApplicationDbContext db, TimeProvider
 
     public async Task<OrderDetail?> GetAsync(Guid id,CancellationToken ct=default)
     {
-        var o=await db.Orders.AsNoTracking().AsSplitQuery().Include(x=>x.Lines).Include(x=>x.StatusHistory).Include(x=>x.ChangeHistory).Include(x=>x.PromisedDateHistory).Include(x=>x.Reservations).SingleOrDefaultAsync(x=>x.Id==id,ct); if(o is null)return null;
+        var o=await db.Orders.AsNoTracking().AsSplitQuery().Include(x=>x.Lines).Include(x=>x.StatusHistory).Include(x=>x.ChangeHistory).Include(x=>x.PromisedDateHistory).Include(x=>x.Reservations).SingleOrDefaultAsync(x=>x.Id==id&&x.ArchivedAtUtc==null,ct); if(o is null)return null;
         var customer=await db.Customers.Where(x=>x.Id==o.CustomerId).Select(x=>x.Name).SingleAsync(ct);
         var point=o.DeliveryPointId is null?null:await db.DeliveryPoints.Where(x=>x.Id==o.DeliveryPointId).Select(x=>x.Label).SingleOrDefaultAsync(ct);
         var contact=o.ContactId is null?null:await db.CustomerContacts.Where(x=>x.Id==o.ContactId).Select(x=>x.Name).SingleOrDefaultAsync(ct);

@@ -106,6 +106,14 @@ public sealed class Order
         Touch(userId, now);
     }
 
+    public void DetachSourceRequest(Guid userId, DateTimeOffset now)
+    {
+        if (SourceRequestId is not { } requestId) return;
+        SourceRequestId = null;
+        ChangeHistory.Add(OrderChangeHistory.Create(Id, "SourceRequestDetached", requestId.ToString(), null, userId, "La solicitud se reabrió tras eliminar el pedido pendiente.", now));
+        Touch(userId, now);
+    }
+
     public void ReviseConfiguration(Guid customerId, Guid? deliveryPointId, Guid? contactId, Guid? payerId, DateTimeOffset? promisedAtUtc, string? notes, string reason, Guid userId, DateTimeOffset now)
     {
         EnsureModifiable(reason);
