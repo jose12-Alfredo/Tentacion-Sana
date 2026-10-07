@@ -204,6 +204,22 @@ public sealed class InventoryService(ApplicationDbContext db, TimeProvider clock
             if (removable > 0) { await FreeReservedStockAsync(batch.ProductId, removable, balance, ct); balance.Remove(removable); }
             var now = clock.GetUtcNow(); batch.Void(userId, now, command.Reason);
             if (removable > 0) db.InventoryMovements.Add(InventoryMovement.Create(batch.ProductId, batch.Id, InventoryMovementKind.NegativeAdjustment, -removable, null, $"Lote eliminado por administración: {command.Reason}", userId, now));
+            var consumption = await db.SupplyMovements.AsNoTracking()
+                .Where(x => x.ProductionBatchId == batch.Id &&
+                    (x.Kind == SupplyMovementKind.ProductionConsumption || x.Kind == SupplyMovementKind.ProductionCorrection))
+                .GroupBy(x => x.SupplyId)
+                .Select(group => new { SupplyId = group.Key, Quantity = group.Sum(x => x.Quantity) })
+                .ToListAsync(ct);
+            foreach (var item in consumption)
+            {
+                if (item.Quantity == 0) continue;
+                var supplyBalance = await SupplyBalance(item.SupplyId, ct);
+                if (item.Quantity < 0) supplyBalance.Add(-item.Quantity);
+                else supplyBalance.Consume(item.Quantity);
+                db.SupplyMovements.Add(SupplyMovement.Create(item.SupplyId, batch.Id, null,
+                    SupplyMovementKind.ProductionCorrection, -item.Quantity, null,
+                    $"Reversión del consumo del lote {batch.Number}: {command.Reason}", userId, now));
+            }
             db.AuditEntries.Add(new AuditEntry { Id = Guid.NewGuid(), UserId = userId, Action = "ProductionBatchDeleted", EntityType = "ProductionBatch", EntityId = batch.Id.ToString(), PreviousValuesJson = JsonSerializer.Serialize(previous), NewValuesJson = JsonSerializer.Serialize(new { IsVoided = true, RemovedFromStock = removable }), Reason = command.Reason.Trim(), OccurredAtUtc = now });
             await db.SaveChangesAsync(ct); await transaction.CommitAsync(ct); return Ok(batch.Id);
         }
