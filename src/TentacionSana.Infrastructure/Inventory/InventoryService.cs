@@ -327,10 +327,7 @@ public sealed class InventoryService(ApplicationDbContext db, TimeProvider clock
             return new SupplyPurchaseItem(x.Id, supply.Name, x.PurchasedAtUtc, x.PackageQuantity, x.PurchasePresentation,
                 x.TotalBaseQuantity, UnitText(supply.BaseUnit), x.UnitPrice, x.TotalPrice, userNames.GetValueOrDefault(x.RegisteredByUserId) ?? "—");
         }).ToList();
-        var movementRows = await db.SupplyMovements.AsNoTracking()
-            .Where(x => x.ProductionBatchId == null ||
-                !db.ProductionBatches.Any(batch => batch.Id == x.ProductionBatchId && batch.IsVoided))
-            .OrderByDescending(x => x.OccurredAtUtc).Take(30).ToListAsync(ct);
+        var movementRows = await db.SupplyMovements.AsNoTracking().OrderByDescending(x => x.OccurredAtUtc).Take(30).ToListAsync(ct);
         var movements = movementRows.Where(x => supplyMap.ContainsKey(x.SupplyId)).Select(x =>
         {
             var supply = supplyMap[x.SupplyId];
@@ -514,11 +511,7 @@ public sealed class InventoryService(ApplicationDbContext db, TimeProvider clock
         .Select(x => new StockItem(x.Id, x.Name, db.ProductStockBalances.Where(s => s.ProductId == x.Id).Select(s => s.PhysicalQuantity).FirstOrDefault(), db.ProductStockBalances.Where(s => s.ProductId == x.Id).Select(s => s.ReservedQuantity).FirstOrDefault(), db.ProductStockBalances.Where(s => s.ProductId == x.Id).Select(s => s.PhysicalQuantity - s.ReservedQuantity).FirstOrDefault(), db.StockReservations.Where(r => r.ProductId == x.Id && r.IsActive).Sum(r => r.ShortageQuantity), db.ProductStockBalances.Where(s => s.ProductId == x.Id).Select(s => s.Version).FirstOrDefault())).ToListAsync(ct);
     public async Task<IReadOnlyList<BatchItem>> GetBatchesAsync(CancellationToken ct = default) => await BatchQuery().ToListAsync(ct);
     public async Task<IReadOnlyList<BatchItem>> GetRecentBatchesAsync(int count, CancellationToken ct = default) => await BatchQuery().Take(Math.Clamp(count, 1, 100)).ToListAsync(ct);
-    public async Task<IReadOnlyList<MovementItem>> GetMovementsAsync(CancellationToken ct = default) => await db.InventoryMovements.AsNoTracking()
-        .Where(x => x.ProductionBatchId == null ||
-            !db.ProductionBatches.Any(batch => batch.Id == x.ProductionBatchId && batch.IsVoided))
-        .OrderByDescending(x => x.OccurredAtUtc)
-        .Select(x => new MovementItem(x.Id, db.Products.Where(p => p.Id == x.ProductId).Select(p => p.Name).First(), x.Kind.ToString(), x.Quantity, x.HistoricalTotalCost, x.Reason, x.OccurredAtUtc)).ToListAsync(ct);
+    public async Task<IReadOnlyList<MovementItem>> GetMovementsAsync(CancellationToken ct = default) => await db.InventoryMovements.AsNoTracking().OrderByDescending(x => x.OccurredAtUtc).Select(x => new MovementItem(x.Id, db.Products.Where(p => p.Id == x.ProductId).Select(p => p.Name).First(), x.Kind.ToString(), x.Quantity, x.HistoricalTotalCost, x.Reason, x.OccurredAtUtc)).ToListAsync(ct);
     private IQueryable<BatchItem> BatchQuery() => db.ProductionBatches.AsNoTracking().Where(x => !x.IsVoided).OrderByDescending(x => x.ProducedAtUtc).Select(x => new BatchItem(x.Id, x.Number, db.Products.Where(p => p.Id == x.ProductId).Select(p => p.Name).First(), x.ProducedAtUtc, x.GoodUnits, x.WasteUnits, x.RemainingUnits, x.EstimatedUnitCost, db.Users.Where(u => u.Id == x.CreatedByUserId).Select(u => u.DisplayName).FirstOrDefault() ?? "—", x.Version));
     private async Task AssignShortagesAsync(Guid productId, ProductStockBalance balance, CancellationToken ct)
     {
