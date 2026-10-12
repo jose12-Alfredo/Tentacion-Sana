@@ -9,7 +9,7 @@
 <PageTitle>Producción | Tentación Sana</PageTitle>
 
 <header class="production-heading">
-    <div><p>Producción</p><h1>¿Qué falta producir?</h1><span>Prioriza pedidos confirmados, registra lotes y completa sus reservas automáticamente.</span></div>
+    <div><p>Producción</p><h1>¿Qué falta producir?</h1><span>El stock disponible es lo producido que aún no se entregó. Las reservas no lo descuentan.</span></div>
     <div class="today-pill">Hoy · @DateTime.Today.ToString("dd/MM/yyyy")</div>
 </header>
 
@@ -20,12 +20,12 @@
     <article class="summary-card"><span class="summary-icon amber">◇</span><div><small>Productos con faltantes</small><strong>@_dashboard.ProductsWithShortage</strong><span>requieren producción</span></div></article>
     <article class="summary-card"><span class="summary-icon coral">!</span><div><small>Unidades por producir</small><strong>@_dashboard.UnitsToProduce</strong><span>según pedidos confirmados</span></div></article>
     <article class="summary-card"><span class="summary-icon green">↗</span><div><small>Producido hoy</small><strong>@_dashboard.ProducedToday</strong><span>unidades aprovechables</span></div></article>
-    <article class="summary-card"><span class="summary-icon blue">≋</span><div><small>Stock disponible total</small><strong>@_dashboard.TotalAvailable</strong><span>unidades libres</span></div></article>
+    <article class="summary-card"><span class="summary-icon blue">≋</span><div><small>Stock disponible total</small><strong>@_dashboard.TotalAvailable</strong><span>producidas aún no entregadas</span></div></article>
 </section>
 
 <div class="production-layout">
     <section class="card needs-card">
-        <div class="section-heading"><div><h2>Necesidad de producción</h2><p>La sugerencia usa el faltante real de reservas confirmadas.</p></div>
+        <div class="section-heading"><div><h2>Necesidad de producción</h2><p>El faltante compara lo pendiente de pedidos confirmados con el stock físico.</p></div>
             <div class="filters" role="group" aria-label="Filtrar por fecha">
                 @foreach (var filter in new[] { "Todos", "Hoy", "Mañana", "Próximos días" })
                 { <button class="@(_filter == filter ? "active" : null)" @onclick="() => _filter = filter">@filter</button> }
@@ -34,7 +34,7 @@
         @if (!FilteredNeeds.Any()) { <div class="empty-state">No hay demanda para este período.</div> }
         else
         {
-            <div class="table-shell needs-table"><table><thead><tr><th>Producto</th><th>Requerido</th><th>Stock físico</th><th>Reservado</th><th>Disponible</th><th>Faltante</th><th>Sugerir</th><th>Acciones</th></tr></thead>
+            <div class="table-shell needs-table"><table><thead><tr><th>Producto</th><th>Requerido</th><th>Stock físico</th><th>Reservado para pedidos</th><th>Disponible para entregar</th><th>Faltante</th><th>Sugerir</th><th>Acciones</th></tr></thead>
                 <tbody>@foreach (var item in FilteredNeeds) { <tr>
                     <td data-label="Producto"><strong>@item.Product</strong>@if (item.PendingDemand > 0) { <span class="future-demand">+@item.PendingDemand pendiente</span> }</td>
                     <td data-label="Requerido">@item.Required</td><td data-label="Stock">@item.Physical</td><td data-label="Reservado">@item.Reserved</td><td data-label="Disponible">@item.Available</td>
@@ -55,7 +55,7 @@
         <div class="usable"><div><small>Unidades aprovechables</small><strong>@GoodUnits</strong><span>unidades</span></div><p>Solo esta cantidad aumenta el stock.</p></div>
         @if (SelectedNeed is not null)
         {
-            <div class="projection"><h3>Proyección después de producir</h3><div class="projection-grid"><dl><b>Antes</b><div><dt>Stock físico</dt><dd>@SelectedNeed.Physical</dd></div><div><dt>Reservado</dt><dd>@SelectedNeed.Reserved</dd></div><div><dt>Disponible</dt><dd>@SelectedNeed.Available</dd></div><div><dt>Faltante</dt><dd>@SelectedNeed.Shortage</dd></div></dl><span class="arrow">→</span><dl class="after"><b>Después (estimado)</b><div><dt>Stock físico</dt><dd>@(SelectedNeed.Physical + GoodUnits)</dd></div><div><dt>Nuevo stock asignado</dt><dd>@ProjectedAssignment</dd></div><div><dt>Disponible libre</dt><dd>@ProjectedAvailable</dd></div><div><dt>Faltante</dt><dd>@ProjectedShortage</dd></div></dl></div></div>
+            <div class="projection"><h3>Proyección después de producir</h3><div class="projection-grid"><dl><b>Antes</b><div><dt>Stock físico</dt><dd>@SelectedNeed.Physical</dd></div><div><dt>Reservado</dt><dd>@SelectedNeed.Reserved</dd></div><div><dt>Disponible</dt><dd>@SelectedNeed.Available</dd></div><div><dt>Faltante</dt><dd>@SelectedNeed.Shortage</dd></div></dl><span class="arrow">→</span><dl class="after"><b>Después (estimado)</b><div><dt>Stock físico</dt><dd>@(SelectedNeed.Physical + GoodUnits)</dd></div><div><dt>Nueva reserva</dt><dd>@ProjectedAssignment</dd></div><div><dt>Disponible para entrega</dt><dd>@ProjectedAvailable</dd></div><div><dt>Faltante</dt><dd>@ProjectedShortage</dd></div></dl></div></div>
         }
         <button class="primary register-button" @onclick="RegisterProductionAsync" disabled="@(_saving || _productId == Guid.Empty)">@(_saving ? "Registrando…" : "Registrar producción")</button>
     </section>
@@ -107,9 +107,9 @@
     private bool _batchSaving;
     private ProductionNeed? SelectedNeed => _dashboard.Products.FirstOrDefault(x => x.ProductId == _productId);
     private int GoodUnits => Math.Max(0, _quantity - _waste);
-    private int ProjectedAssignment => SelectedNeed is null ? 0 : Math.Min(SelectedNeed.Shortage, Math.Max(0, SelectedNeed.Available + GoodUnits));
+    private int ProjectedAssignment => SelectedNeed is null ? 0 : Math.Min(SelectedNeed.Shortage, GoodUnits);
     private int ProjectedShortage => Math.Max(0, (SelectedNeed?.Shortage ?? 0) - ProjectedAssignment);
-    private int ProjectedAvailable => SelectedNeed is null ? GoodUnits : Math.Max(0, SelectedNeed.Available + GoodUnits - ProjectedAssignment);
+    private int ProjectedAvailable => SelectedNeed is null ? GoodUnits : SelectedNeed.Physical + GoodUnits;
     private IEnumerable<ProductionNeed> FilteredNeeds => _dashboard.Products.Where(MatchesFilter);
 
     protected override async Task OnInitializedAsync() { _products = await Orders.ProductOptionsAsync(); await ReloadAsync(); }

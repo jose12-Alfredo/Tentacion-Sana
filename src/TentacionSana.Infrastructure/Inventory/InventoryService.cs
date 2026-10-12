@@ -134,8 +134,10 @@ public sealed class InventoryService(ApplicationDbContext db, TimeProvider clock
         {
             var productDemand = demand.Where(x => x.ProductId == product.Id).ToList();
             balances.TryGetValue(product.Id, out var balance);
-            return new ProductionNeed(product.Id, product.Name, productDemand.Sum(x => x.Quantity), balance?.PhysicalQuantity ?? 0,
-                balance?.ReservedQuantity ?? 0, balance?.AvailableQuantity ?? 0, productDemand.Sum(x => x.ShortageQuantity),
+            var required = productDemand.Sum(x => x.Quantity);
+            var physical = balance?.PhysicalQuantity ?? 0;
+            return new ProductionNeed(product.Id, product.Name, required, physical,
+                balance?.ReservedQuantity ?? 0, physical, Math.Max(0, required - physical),
                 pending.Where(x => x.ProductId == product.Id).Sum(x => x.Quantity),
                 productDemand.Where(x => x.ShortageQuantity > 0).Select(x => x.PromisedAtUtc).OrderBy(x => x).FirstOrDefault());
         }).Where(x => x.Required > 0 || x.PendingDemand > 0)
@@ -144,7 +146,7 @@ public sealed class InventoryService(ApplicationDbContext db, TimeProvider clock
         var start = new DateTimeOffset(localToday, clock.GetLocalNow().Offset).ToUniversalTime();
         var end = start.AddDays(1);
         var producedToday = await db.ProductionBatches.AsNoTracking().Where(x => !x.IsVoided && x.ProducedAtUtc >= start && x.ProducedAtUtc < end).SumAsync(x => x.GoodUnits, ct);
-        return new ProductionDashboard(needs, needs.Count(x => x.Shortage > 0), needs.Sum(x => x.Shortage), producedToday, balances.Values.Sum(x => Math.Max(0, x.AvailableQuantity)));
+        return new ProductionDashboard(needs, needs.Count(x => x.Shortage > 0), needs.Sum(x => x.Shortage), producedToday, balances.Values.Sum(x => x.PhysicalQuantity));
     }
 
     public async Task<InventoryResult> UpdateProductionBatchAsync(UpdateProductionBatchCommand command, Guid userId, CancellationToken ct = default)
@@ -248,7 +250,7 @@ public sealed class InventoryService(ApplicationDbContext db, TimeProvider clock
         if (!Enum.TryParse<InventoryMovementKind>(command.Kind, true, out var kind) || kind is InventoryMovementKind.Production or InventoryMovementKind.PositiveAdjustment) return Fail("Tipo de salida inválido.");
         await using var transaction = await db.Database.BeginTransactionAsync(ct);
         var balance = await Balance(command.ProductId, ct);
-        if (balance.AvailableQuantity < command.Quantity) return Fail("Stock disponible insuficiente.");
+        if (balance.PhysicalQuantity < command.Quantity) return Fail("Stock físico insuficiente.");
         var batches = await db.ProductionBatches.Where(x => x.ProductId == command.ProductId && x.RemainingUnits > 0).OrderBy(x => x.ProducedAtUtc).ThenBy(x => x.Number).ToListAsync(ct);
         var remaining = command.Quantity; var allocations = new List<(ProductionBatch Batch, int Quantity)>();
         foreach (var batch in batches) { var take = Math.Min(remaining, batch.RemainingUnits); if (take > 0) { batch.Consume(take); allocations.Add((batch, take)); remaining -= take; } if (remaining == 0) break; }
@@ -257,6 +259,7 @@ public sealed class InventoryService(ApplicationDbContext db, TimeProvider clock
         var now = clock.GetUtcNow(); var movement = InventoryMovement.Create(command.ProductId, null, kind, -command.Quantity, weightedCost, command.Reason, userId, now);
         db.InventoryMovements.Add(movement);
         foreach (var allocation in allocations) db.InventoryMovementAllocations.Add(InventoryMovementAllocation.Create(movement.Id, allocation.Batch.Id, allocation.Quantity, allocation.Batch.EstimatedUnitCost));
+        await FreeReservedStockAsync(command.ProductId, command.Quantity, balance, ct);
         balance.Remove(command.Quantity); Audit("InventoryOutput", movement.Id, userId, now); await db.SaveChangesAsync(ct); await transaction.CommitAsync(ct); return Ok(movement.Id);
     }
 
@@ -264,7 +267,7 @@ public sealed class InventoryService(ApplicationDbContext db, TimeProvider clock
     {
         await using var transaction = await db.Database.BeginTransactionAsync(ct); var balance = await Balance(command.ProductId, ct);
         var count = StockCount.Create(command.ProductId, balance.PhysicalQuantity, command.CountedQuantity, command.Reason, userId, clock.GetUtcNow());
-        if (count.Difference < 0 && command.CountedQuantity < balance.ReservedQuantity) return Fail("El conteo no puede dejar stock por debajo de lo reservado.");
+        if (count.Difference < 0) await FreeReservedStockAsync(command.ProductId, -count.Difference, balance, ct);
         balance.Adjust(count.Difference); db.StockCounts.Add(count); db.InventoryMovements.Add(InventoryMovement.Create(command.ProductId, null, count.Difference >= 0 ? InventoryMovementKind.PositiveAdjustment : InventoryMovementKind.NegativeAdjustment, count.Difference, 0, command.Reason, userId, clock.GetUtcNow()));
         await db.SaveChangesAsync(ct); await transaction.CommitAsync(ct); return Ok(count.Id);
     }
@@ -508,7 +511,7 @@ public sealed class InventoryService(ApplicationDbContext db, TimeProvider clock
     }
 
     public async Task<IReadOnlyList<StockItem>> GetStockAsync(CancellationToken ct = default) => await db.Products.AsNoTracking().Where(x => x.IsActive)
-        .Select(x => new StockItem(x.Id, x.Name, db.ProductStockBalances.Where(s => s.ProductId == x.Id).Select(s => s.PhysicalQuantity).FirstOrDefault(), db.ProductStockBalances.Where(s => s.ProductId == x.Id).Select(s => s.ReservedQuantity).FirstOrDefault(), db.ProductStockBalances.Where(s => s.ProductId == x.Id).Select(s => s.PhysicalQuantity - s.ReservedQuantity).FirstOrDefault(), db.StockReservations.Where(r => r.ProductId == x.Id && r.IsActive).Sum(r => r.ShortageQuantity), db.ProductStockBalances.Where(s => s.ProductId == x.Id).Select(s => s.Version).FirstOrDefault())).ToListAsync(ct);
+        .Select(x => new StockItem(x.Id, x.Name, db.ProductStockBalances.Where(s => s.ProductId == x.Id).Select(s => s.PhysicalQuantity).FirstOrDefault(), db.ProductStockBalances.Where(s => s.ProductId == x.Id).Select(s => s.ReservedQuantity).FirstOrDefault(), db.ProductStockBalances.Where(s => s.ProductId == x.Id).Select(s => s.PhysicalQuantity).FirstOrDefault(), db.StockReservations.Where(r => r.ProductId == x.Id && r.IsActive).Sum(r => r.ShortageQuantity), db.ProductStockBalances.Where(s => s.ProductId == x.Id).Select(s => s.Version).FirstOrDefault())).ToListAsync(ct);
     public async Task<IReadOnlyList<BatchItem>> GetBatchesAsync(CancellationToken ct = default) => await BatchQuery().ToListAsync(ct);
     public async Task<IReadOnlyList<BatchItem>> GetRecentBatchesAsync(int count, CancellationToken ct = default) => await BatchQuery().Take(Math.Clamp(count, 1, 100)).ToListAsync(ct);
     public async Task<IReadOnlyList<MovementItem>> GetMovementsAsync(CancellationToken ct = default) => await db.InventoryMovements.AsNoTracking().OrderByDescending(x => x.OccurredAtUtc).Select(x => new MovementItem(x.Id, db.Products.Where(p => p.Id == x.ProductId).Select(p => p.Name).First(), x.Kind.ToString(), x.Quantity, x.HistoricalTotalCost, x.Reason, x.OccurredAtUtc)).ToListAsync(ct);
