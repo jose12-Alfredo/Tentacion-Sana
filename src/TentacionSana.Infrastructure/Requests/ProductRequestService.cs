@@ -70,7 +70,7 @@ public sealed class ProductRequestService(ApplicationDbContext db, TimeProvider 
         if (request is null) return new(false, null, ["La solicitud no existe."]);
         if (request.ConvertedOrderId is not null) return new(true, request.ConvertedOrderId, []);
         var now = timeProvider.GetUtcNow();
-        var customer = await db.Customers.FirstOrDefaultAsync(x => x.Phone == request.Phone, cancellationToken) ?? Customer.Create(request.ContactName, request.Phone, request.Email, now);
+        var customer = await db.Customers.FirstOrDefaultAsync(x => x.Phone == request.Phone && x.ArchivedAtUtc == null, cancellationToken) ?? Customer.Create(request.ContactName, request.Phone, request.Email, now);
         if (db.Entry(customer).State == EntityState.Detached) db.Customers.Add(customer);
         var order = Order.CreateDraft(customer.Id, request.Id, userId, now);
         foreach (var line in request.Lines)

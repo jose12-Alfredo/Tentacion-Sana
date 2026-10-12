@@ -5,6 +5,19 @@ namespace TentacionSana.UnitTests.Customers;
 public sealed class CustomerTests
 {
     [Fact]
+    public void ArchiveKeepsCustomerForHistoricalReferencesButMakesItInactive()
+    {
+        var now = DateTimeOffset.UtcNow;
+        var customer = Customer.Create("Cliente histórico", "70000000", null, now);
+
+        customer.Archive(now.AddMinutes(1));
+
+        Assert.Equal(now.AddMinutes(1), customer.ArchivedAtUtc);
+        Assert.False(customer.IsActive);
+        Assert.Equal("Cliente histórico", customer.Name);
+    }
+
+    [Fact]
     public void CompanySeparatesContactPaymentResponsibleAndDeliveryPoint()
     {
         var now = DateTimeOffset.UtcNow;

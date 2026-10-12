@@ -19,6 +19,7 @@ public sealed class Customer
     public string? Email { get; private set; }
     public string? Notes { get; private set; }
     public bool IsActive { get; private set; }
+    public DateTimeOffset? ArchivedAtUtc { get; private set; }
     public DateTimeOffset CreatedAtUtc { get; private set; }
     public DateTimeOffset UpdatedAtUtc { get; private set; }
     public List<CustomerContact> Contacts { get; private set; } = [];
@@ -35,6 +36,14 @@ public sealed class Customer
     {
         Validate(name, email);
         Kind = kind; Category = category; Name = name.Trim(); Phone = NormalizeOptionalPhone(phone); Email = Clean(email); Notes = Clean(notes); IsActive = isActive; UpdatedAtUtc = now;
+    }
+
+    public void Archive(DateTimeOffset now)
+    {
+        if (ArchivedAtUtc is not null) throw new InvalidOperationException("El cliente ya fue eliminado de la vista.");
+        ArchivedAtUtc = now;
+        IsActive = false;
+        UpdatedAtUtc = now;
     }
 
     public CustomerContact AddContact(string name, string phone, string? email, string? role, Guid? pointId, bool orders, bool reception, bool payment, bool administration, bool accounting, bool owner, DateTimeOffset now)

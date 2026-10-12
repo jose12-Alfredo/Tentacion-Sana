@@ -36,7 +36,7 @@ public sealed class CustomerManagementService(ApplicationDbContext db, TimeProvi
 
     public async Task<CustomerOperationResult> UpdateCustomerAsync(Guid id, CustomerEditCommand command, CancellationToken ct = default)
     {
-        var customer = await db.Customers.SingleOrDefaultAsync(x => x.Id == id, ct);
+        var customer = await db.Customers.SingleOrDefaultAsync(x => x.Id == id && x.ArchivedAtUtc == null, ct);
         if (customer is null) return Failure("El cliente no existe.");
         try
         {
@@ -62,6 +62,10 @@ public sealed class CustomerManagementService(ApplicationDbContext db, TimeProvi
         if (customer is null) return Failure("El cliente no existe.");
         var payerIds = customer.PaymentResponsibleParties.Select(p => p.Id).ToArray();
         var orderNumbers = await db.Orders.Where(x => x.CustomerId == id).OrderBy(x => x.Number).Select(x => x.Number).ToListAsync(ct);
+        var visibleOrderNumbers = await db.Orders.Where(x => x.CustomerId == id && x.ArchivedAtUtc == null)
+            .OrderBy(x => x.Number).Select(x => x.Number).ToListAsync(ct);
+        if (visibleOrderNumbers.Count > 0)
+            return Failure($"Este cliente tiene pedidos visibles ({visibleOrderNumbers.Count}): {string.Join(", ", visibleOrderNumbers.Take(5).Select(number => $"#{number}"))}{(visibleOrderNumbers.Count > 5 ? ", …" : "")}. Archiva esos pedidos antes de quitar al cliente de la lista.");
         var receivables = await db.Receivables.CountAsync(x => x.CustomerId == id, ct);
         var requests = await db.ProductRequests.Where(x => x.ConvertedCustomerId == id)
             .OrderBy(x => x.CreatedAtUtc).Select(x => new { x.ContactName, x.CreatedAtUtc }).ToListAsync(ct);
@@ -74,7 +78,14 @@ public sealed class CustomerManagementService(ApplicationDbContext db, TimeProvi
         if (receivables > 0) links.Add($"Cuentas por cobrar: {receivables}.");
         if (payments > 0) links.Add($"Pagos registrados: {payments}.");
         if (reports.Count > 0) links.Add($"Estados de cuenta ({reports.Count}): {string.Join(", ", reports.Take(5))}{(reports.Count > 5 ? ", …" : "")}.");
-        if (links.Count > 0) return new(false, null, [.. links, "Desactiva el cliente para conservar su historial."]);
+        if (links.Count > 0)
+        {
+            var now = timeProvider.GetUtcNow();
+            customer.Archive(now);
+            AddAudit(userId, "ArchiveCustomer", id, new { customer.Name, Links = links }, new { customer.ArchivedAtUtc }, now);
+            await db.SaveChangesAsync(ct);
+            return Success(id);
+        }
 
         db.Customers.Remove(customer);
         AddAudit(userId, "DeleteCustomer", id, new { customer.Name, customer.Kind, customer.Category }, null, timeProvider.GetUtcNow());
@@ -150,14 +161,14 @@ public sealed class CustomerManagementService(ApplicationDbContext db, TimeProvi
 
     public async Task<CustomerDetail?> GetCustomerAsync(Guid id, CancellationToken ct = default)
     {
-        var c = await db.Customers.AsNoTracking().AsSplitQuery().Include(x => x.Contacts).Include(x => x.PaymentResponsibleParties).Include(x => x.DeliveryPoints).SingleOrDefaultAsync(x => x.Id == id, ct);
+        var c = await db.Customers.AsNoTracking().AsSplitQuery().Include(x => x.Contacts).Include(x => x.PaymentResponsibleParties).Include(x => x.DeliveryPoints).SingleOrDefaultAsync(x => x.Id == id && x.ArchivedAtUtc == null, ct);
         return c is null ? null : new(c.Id, c.Kind.ToString(), c.Category.ToString(), c.Name, c.Phone, c.Email, c.Notes, c.IsActive,
             c.Contacts.Where(x => x.IsActive).OrderBy(x => x.Name).Select(x => new ContactDetail(x.Id, x.DeliveryPointId, x.Name, x.Phone, x.Email, x.Role, x.IsOrderContact, x.IsReceptionContact, x.IsPaymentContact, x.IsAdministrator, x.IsAccounting, x.IsOwner)).ToList(),
             c.PaymentResponsibleParties.Where(x => x.IsActive).OrderBy(x => x.Name).Select(x => new PaymentResponsibleDetail(x.Id, x.Kind.ToString(), x.Label, x.ContactId, x.Name, x.Phone, x.Email, c.DeliveryPoints.Where(p => p.PaymentResponsiblePartyId == x.Id).Select(p => p.Id).ToList())).ToList(),
             c.DeliveryPoints.OrderBy(x => x.Label).Select(x => new DeliveryPointDetail(x.Id, x.Kind.ToString(), x.Label, x.Address, x.Reference, x.Location, x.Notes, x.ContactId, x.PaymentResponsiblePartyId, x.IsActive, x.ImagePublicId != null)).ToList());
     }
 
-    private Task<Customer?> Load(Guid id, CancellationToken ct) => db.Customers.AsSplitQuery().Include(x => x.Contacts).Include(x => x.PaymentResponsibleParties).Include(x => x.DeliveryPoints).SingleOrDefaultAsync(x => x.Id == id, ct);
+    private Task<Customer?> Load(Guid id, CancellationToken ct) => db.Customers.AsSplitQuery().Include(x => x.Contacts).Include(x => x.PaymentResponsibleParties).Include(x => x.DeliveryPoints).SingleOrDefaultAsync(x => x.Id == id && x.ArchivedAtUtc == null, ct);
     private static void ValidateRelations(Customer c, DeliveryPointEditCommand command) { if (command.ContactId is not null && c.Contacts.All(x => x.Id != command.ContactId)) throw new ArgumentException("El contacto no pertenece al cliente."); if (command.PaymentResponsiblePartyId is not null && c.PaymentResponsibleParties.All(x => x.Id != command.PaymentResponsiblePartyId)) throw new ArgumentException("El responsable de pago no pertenece al cliente."); }
     private static T Parse<T>(string value) where T : struct, Enum => Enum.TryParse<T>(value, true, out var parsed) ? parsed : throw new ArgumentException("El tipo seleccionado no es válido.");
     private static CustomerOperationResult Success(Guid id) => new(true, id, []);
