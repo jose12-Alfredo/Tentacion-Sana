@@ -209,6 +209,12 @@ public sealed class DeliveryService(ApplicationDbContext db, TimeProvider clock,
             var balances = await db.ProductStockBalances
                 .Where(x => productIds.Contains(x.ProductId))
                 .ToDictionaryAsync(x => x.ProductId, cancellationToken);
+            var reservationsByProduct = (await db.StockReservations
+                    .Where(x => productIds.Contains(x.ProductId) && x.IsActive && x.ReservedQuantity > 0)
+                    .OrderByDescending(x => x.CreatedAtUtc)
+                    .ToListAsync(cancellationToken))
+                .GroupBy(x => x.ProductId)
+                .ToDictionary(x => x.Key, x => x.ToList());
             var batchesByProduct = (await db.ProductionBatches
                     .Where(x => productIds.Contains(x.ProductId) && x.RemainingUnits > 0)
                     .OrderBy(x => x.ProducedAtUtc)
@@ -228,15 +234,8 @@ public sealed class DeliveryService(ApplicationDbContext db, TimeProvider clock,
                 var reservation = order.Reservations.Single(x => x.OrderLineId == orderLine.Id && x.IsActive);
                 if (!balances.TryGetValue(orderLine.ProductId, out var balance))
                     throw new InvalidOperationException("El producto no tiene un saldo de inventario.");
-                if (reservation.ReservedQuantity < quantity)
-                {
-                    var added = balance.Reserve(quantity - reservation.ReservedQuantity);
-                    if (added < quantity - reservation.ReservedQuantity)
-                        throw new InvalidOperationException($"No hay existencias físicas suficientes de {orderLine.ProductName} para confirmar la entrega.");
-                    reservation.Allocate(reservation.ReservedQuantity + added);
-                }
-                balance.DeliverReserved(quantity);
-                reservation.Consume(quantity);
+                DeliveryStockAllocator.Consume(balance, reservation,
+                    reservationsByProduct.GetValueOrDefault(orderLine.ProductId) ?? [], quantity);
                 var batches = batchesByProduct.GetValueOrDefault(orderLine.ProductId) ?? [];
                 var components = new[]
                 {
