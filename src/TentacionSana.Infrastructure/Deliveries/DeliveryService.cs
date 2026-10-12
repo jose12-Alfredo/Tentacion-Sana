@@ -266,7 +266,7 @@ public sealed class DeliveryService(ApplicationDbContext db, TimeProvider clock,
                 receivable.AddSale(saleAmount);
             }
             if (command.PaymentAmount > 0) throw new InvalidOperationException("Registra el pago por separado para adjuntar su respaldo obligatorio.");
-            if (order.Reservations.All(x => !x.IsActive) && order.Status == OrderStatus.OutForDelivery) { order.MarkDelivered(userId, now); db.OrderStatusHistory.Add(order.StatusHistory[^1]); }
+            if (order.Reservations.All(x => !x.IsActive) && order.Status is (OrderStatus.Ready or OrderStatus.OutForDelivery)) { order.MarkDelivered(userId, now); db.OrderStatusHistory.Add(order.StatusHistory[^1]); }
             await CompleteRouteIfNeededAsync(delivery.Id, delivery.Status == DeliveryStatus.Delivered, userId, now, cancellationToken);
             db.IdempotencyRecords.Add(Idempotency("CompleteDelivery", command.IdempotencyKey, now));
             Audit("DeliveryCompleted", delivery.Id, userId, now);

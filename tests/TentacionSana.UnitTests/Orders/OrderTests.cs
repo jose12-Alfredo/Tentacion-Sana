@@ -4,6 +4,22 @@ namespace TentacionSana.UnitTests.Orders;
 
 public sealed class OrderTests
 {
+    [Fact]
+    public void ReadyOrderCanBecomeDeliveredWhenAssignedDeliveryIsCompleted()
+    {
+        var order = Order.CreateDraft(Guid.NewGuid(), null, UserId, Now);
+        order.Configure(order.CustomerId, null, null, null, Now.AddDays(1), null, UserId, Now);
+        order.AddLine(Guid.NewGuid(), "Producto", 1, 20m, 20m, null, UserId, Now);
+        order.Confirm(OrderSnapshot.Create(order.Id, "Cliente", null, null, null, null, null, Now), UserId, Now);
+        order.AdvanceTo(OrderStatus.InPreparation, "Preparando", UserId, Now);
+        order.AdvanceTo(OrderStatus.Ready, "Listo", UserId, Now);
+
+        order.MarkDelivered(UserId, Now.AddMinutes(1));
+
+        Assert.Equal(OrderStatus.Delivered, order.Status);
+        Assert.Equal(OrderStatus.Ready, order.StatusHistory[^1].PreviousStatus);
+    }
+
     private static readonly Guid UserId = Guid.NewGuid();
     private static readonly DateTimeOffset Now = new(2026, 9, 28, 18, 0, 0, TimeSpan.Zero);
 

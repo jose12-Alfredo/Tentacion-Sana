@@ -152,7 +152,15 @@ public sealed class Order
 
     public void MarkOutForDelivery(Guid userId,DateTimeOffset now)=>TransitionFromDelivery(OrderStatus.Ready,OrderStatus.OutForDelivery,"Entrega iniciada.",userId,now);
     public void ReturnToReady(Guid userId,DateTimeOffset now)=>TransitionFromDelivery(OrderStatus.OutForDelivery,OrderStatus.Ready,"Salida de ruta revertida.",userId,now);
-    public void MarkDelivered(Guid userId,DateTimeOffset now)=>TransitionFromDelivery(OrderStatus.OutForDelivery,OrderStatus.Delivered,"Todas las unidades fueron entregadas.",userId,now);
+    public void MarkDelivered(Guid userId,DateTimeOffset now)
+    {
+        if (Status is not (OrderStatus.Ready or OrderStatus.OutForDelivery))
+            throw new InvalidOperationException("El estado del pedido no permite esta operación de entrega.");
+        var previous = Status;
+        Status = OrderStatus.Delivered;
+        StatusHistory.Add(OrderStatusHistory.Create(Id, previous, Status, userId, "Todas las unidades fueron entregadas.", now));
+        Touch(userId, now);
+    }
     private void TransitionFromDelivery(OrderStatus expected,OrderStatus next,string reason,Guid userId,DateTimeOffset now){if(Status!=expected)throw new InvalidOperationException("El estado del pedido no permite esta operación de entrega.");var previous=Status;Status=next;StatusHistory.Add(OrderStatusHistory.Create(Id,previous,next,userId,reason,now));Touch(userId,now);}
 
     private void EnsureModifiable(string reason){if(Status is OrderStatus.Draft or OrderStatus.Delivered or OrderStatus.Cancelled)throw new InvalidOperationException("El pedido no admite esta modificación en su estado actual.");if(string.IsNullOrWhiteSpace(reason))throw new ArgumentException("El motivo de la modificación es obligatorio.");}
