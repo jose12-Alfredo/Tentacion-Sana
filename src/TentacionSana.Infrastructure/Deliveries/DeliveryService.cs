@@ -19,12 +19,13 @@ public sealed class DeliveryService(ApplicationDbContext db, TimeProvider clock,
 {
     public async Task<DeliveryResult> ScheduleAsync(ScheduleDeliveryCommand command, Guid userId, CancellationToken cancellationToken = default)
     {
-        var order = await db.Orders.Include(x => x.Lines).Include(x => x.Reservations).SingleOrDefaultAsync(x => x.Id == command.OrderId, cancellationToken);
+        var order = await db.Orders.Include(x => x.Lines).SingleOrDefaultAsync(x => x.Id == command.OrderId, cancellationToken);
         if (order is null || order.Status is not (OrderStatus.Confirmed or OrderStatus.InPreparation or OrderStatus.Ready or OrderStatus.OutForDelivery)) return Fail("Solo un pedido pendiente admite entregas.");
         if (command.DriverUserId is { } driver && !await CanBeAssignedAsync(driver, userId, cancellationToken)) return Fail("Selecciona un repartidor habilitado o asígnate la entrega a ti mismo.");
 
         var activeStatuses = new[] { DeliveryStatus.Scheduled, DeliveryStatus.Assigned, DeliveryStatus.InRoute, DeliveryStatus.Partial };
         var requestedLineIds = command.Lines.Select(x => x.OrderLineId).Distinct().ToList();
+        if (requestedLineIds.Count != command.Lines.Count) return Fail("No repitas productos en la misma entrega.");
         var scheduledByLine = await (from deliveryLine in db.DeliveryLines.AsNoTracking()
                                      join delivery in db.Deliveries.AsNoTracking() on deliveryLine.DeliveryId equals delivery.Id
                                      where requestedLineIds.Contains(deliveryLine.OrderLineId)
@@ -32,23 +33,26 @@ public sealed class DeliveryService(ApplicationDbContext db, TimeProvider clock,
                                      select new
                                      {
                                          LineId = grouped.Key,
-                                         AlreadyScheduled = grouped.Sum(x => activeStatuses.Contains(x.delivery.Status) ? x.deliveryLine.AssignedQuantity - x.deliveryLine.DeliveredQuantity : 0),
                                          DeliveredSale = grouped.Sum(x => x.deliveryLine.DeliveredSaleQuantity),
                                          PendingSale = grouped.Sum(x => activeStatuses.Contains(x.delivery.Status) ? x.deliveryLine.AssignedSaleQuantity - x.deliveryLine.DeliveredSaleQuantity : 0),
                                          DeliveredReplacement = grouped.Sum(x => x.deliveryLine.DeliveredReplacementQuantity),
-                                         PendingReplacement = grouped.Sum(x => activeStatuses.Contains(x.delivery.Status) ? x.deliveryLine.AssignedReplacementQuantity - x.deliveryLine.DeliveredReplacementQuantity : 0)
+                                         PendingReplacement = grouped.Sum(x => activeStatuses.Contains(x.delivery.Status) ? x.deliveryLine.AssignedReplacementQuantity - x.deliveryLine.DeliveredReplacementQuantity : 0),
+                                         DeliveredTasting = grouped.Sum(x => x.deliveryLine.DeliveredTastingQuantity),
+                                         PendingTasting = grouped.Sum(x => activeStatuses.Contains(x.delivery.Status) ? x.deliveryLine.AssignedTastingQuantity - x.deliveryLine.DeliveredTastingQuantity : 0)
                                      })
             .ToDictionaryAsync(x => x.LineId, cancellationToken);
         var splitLines = new List<(Guid lineId, int saleQuantity, int replacementQuantity, int tastingQuantity)>();
         foreach (var requested in command.Lines)
         {
             var line = order.Lines.SingleOrDefault(x => x.Id == requested.OrderLineId && x.IsActive);
-            var reservation = order.Reservations.SingleOrDefault(x => x.OrderLineId == requested.OrderLineId && x.IsActive);
-            if (line is null || reservation is null || requested.Quantity < 1) return Fail("La línea o cantidad programada no es válida.");
+            if (line is null || requested.Quantity < 1) return Fail("La línea o cantidad programada no es válida.");
             scheduledByLine.TryGetValue(requested.OrderLineId, out var scheduled);
-            if (requested.Quantity > reservation.ReservedQuantity - (scheduled?.AlreadyScheduled ?? 0)) return Fail($"La cantidad de {line.ProductName} supera las unidades reservadas disponibles para programar.");
-            var saleQuantity = Math.Min(requested.Quantity, Math.Max(0, line.SaleQuantity - (scheduled?.DeliveredSale ?? 0) - (scheduled?.PendingSale ?? 0)));
-            var replacementQuantity=Math.Min(requested.Quantity-saleQuantity,Math.Max(0,line.ReplacementQuantity-(scheduled?.DeliveredReplacement ?? 0)-(scheduled?.PendingReplacement ?? 0)));
+            var availableSale = Math.Max(0, line.SaleQuantity - (scheduled?.DeliveredSale ?? 0) - (scheduled?.PendingSale ?? 0));
+            var availableReplacement = Math.Max(0, line.ReplacementQuantity - (scheduled?.DeliveredReplacement ?? 0) - (scheduled?.PendingReplacement ?? 0));
+            var availableTasting = Math.Max(0, line.TastingQuantity - (scheduled?.DeliveredTasting ?? 0) - (scheduled?.PendingTasting ?? 0));
+            if (requested.Quantity > availableSale + availableReplacement + availableTasting) return Fail($"La cantidad de {line.ProductName} supera las unidades pendientes de programar.");
+            var saleQuantity = Math.Min(requested.Quantity, availableSale);
+            var replacementQuantity = Math.Min(requested.Quantity - saleQuantity, availableReplacement);
             splitLines.Add((line.Id,saleQuantity,replacementQuantity,requested.Quantity-saleQuantity-replacementQuantity));
         }
 
@@ -224,6 +228,13 @@ public sealed class DeliveryService(ApplicationDbContext db, TimeProvider clock,
                 var reservation = order.Reservations.Single(x => x.OrderLineId == orderLine.Id && x.IsActive);
                 if (!balances.TryGetValue(orderLine.ProductId, out var balance))
                     throw new InvalidOperationException("El producto no tiene un saldo de inventario.");
+                if (reservation.ReservedQuantity < quantity)
+                {
+                    var added = balance.Reserve(quantity - reservation.ReservedQuantity);
+                    if (added < quantity - reservation.ReservedQuantity)
+                        throw new InvalidOperationException($"No hay existencias físicas suficientes de {orderLine.ProductName} para confirmar la entrega.");
+                    reservation.Allocate(reservation.ReservedQuantity + added);
+                }
                 balance.DeliverReserved(quantity);
                 reservation.Consume(quantity);
                 var batches = batchesByProduct.GetValueOrDefault(orderLine.ProductId) ?? [];
@@ -376,7 +387,7 @@ public sealed class DeliveryService(ApplicationDbContext db, TimeProvider clock,
         var options = (await SchedulableOrdersAsync(cancellationToken))
             .Where(x => ordersNeedingDelivery.Contains(x.Id))
             .ToDictionary(x => x.Id);
-        if (options.Count != ordersNeedingDelivery.Count) return Fail("Uno de los pedidos no tiene unidades reservadas en inventario para incluirse en la ruta.");
+        if (options.Count != ordersNeedingDelivery.Count) return Fail("Uno de los pedidos ya no tiene unidades pendientes para incluirse en una ruta.");
 
         var points = await db.Orders.AsNoTracking()
             .Where(x => orderIds.Contains(x.Id))
@@ -818,11 +829,11 @@ public sealed class DeliveryService(ApplicationDbContext db, TimeProvider clock,
 
     public async Task<IReadOnlyList<DeliveryOrderOption>> SchedulableOrdersAsync(CancellationToken cancellationToken = default)
     {
-        var orders = await db.Orders.AsNoTracking().Include(x => x.Lines).Include(x => x.Reservations).Where(x => x.ArchivedAtUtc == null && (x.Status == OrderStatus.Confirmed || x.Status == OrderStatus.InPreparation || x.Status == OrderStatus.Ready || x.Status == OrderStatus.OutForDelivery)).OrderBy(x => x.PromisedAtUtc).ToListAsync(cancellationToken);
+        var orders = await db.Orders.AsNoTracking().Include(x => x.Lines).Where(x => x.ArchivedAtUtc == null && (x.Status == OrderStatus.Confirmed || x.Status == OrderStatus.InPreparation || x.Status == OrderStatus.Ready || x.Status == OrderStatus.OutForDelivery)).OrderBy(x => x.PromisedAtUtc).ToListAsync(cancellationToken);
         var active = new[] { DeliveryStatus.Scheduled, DeliveryStatus.Assigned, DeliveryStatus.InRoute, DeliveryStatus.Partial };
         var scheduled = await db.DeliveryLines.AsNoTracking().Where(x => active.Contains(db.Deliveries.Where(d => d.Id == x.DeliveryId).Select(d => d.Status).First())).GroupBy(x => x.OrderLineId).Select(x => new { Id = x.Key, Sale = x.Sum(y => y.AssignedSaleQuantity - y.DeliveredSaleQuantity), Replacement = x.Sum(y => y.AssignedReplacementQuantity - y.DeliveredReplacementQuantity), Tasting=x.Sum(y=>y.AssignedTastingQuantity-y.DeliveredTastingQuantity) }).ToDictionaryAsync(x => x.Id, cancellationToken);
         var delivered = await db.DeliveryLines.AsNoTracking().GroupBy(x=>x.OrderLineId).Select(x=>new{Id=x.Key,Sale=x.Sum(y=>y.DeliveredSaleQuantity),Replacement=x.Sum(y=>y.DeliveredReplacementQuantity),Tasting=x.Sum(y=>y.DeliveredTastingQuantity)}).ToDictionaryAsync(x=>x.Id,cancellationToken);
-        return orders.Select(order => new DeliveryOrderOption(order.Id, order.Number, db.Customers.Where(x => x.Id == order.CustomerId).Select(x => x.Name).First(), order.PromisedAtUtc, order.Lines.Where(x => x.IsActive).Select(line => { scheduled.TryGetValue(line.Id,out var s); delivered.TryGetValue(line.Id,out var d); var reservation=order.Reservations.FirstOrDefault(x=>x.OrderLineId==line.Id&&x.IsActive); var available=Math.Max(0,(reservation?.ReservedQuantity??0)-(s?.Sale??0)-(s?.Replacement??0)-(s?.Tasting??0)); var sale=Math.Min(available,Math.Max(0,line.SaleQuantity-(s?.Sale??0)-(d?.Sale??0))); available-=sale; var replacement=Math.Min(available,Math.Max(0,line.ReplacementQuantity-(s?.Replacement??0)-(d?.Replacement??0))); available-=replacement; var tasting=Math.Min(available,Math.Max(0,line.TastingQuantity-(s?.Tasting??0)-(d?.Tasting??0))); return new DeliveryOrderLineOption(line.Id,line.ProductName,sale,replacement,tasting,sale+replacement+tasting); }).Where(x => x.AvailableToSchedule > 0).ToList())).Where(x => x.Lines.Count > 0).ToList();
+        return orders.Select(order => new DeliveryOrderOption(order.Id, order.Number, db.Customers.Where(x => x.Id == order.CustomerId).Select(x => x.Name).First(), order.PromisedAtUtc, order.Lines.Where(x => x.IsActive).Select(line => { scheduled.TryGetValue(line.Id,out var s); delivered.TryGetValue(line.Id,out var d); var sale=Math.Max(0,line.SaleQuantity-(s?.Sale??0)-(d?.Sale??0)); var replacement=Math.Max(0,line.ReplacementQuantity-(s?.Replacement??0)-(d?.Replacement??0)); var tasting=Math.Max(0,line.TastingQuantity-(s?.Tasting??0)-(d?.Tasting??0)); return new DeliveryOrderLineOption(line.Id,line.ProductName,sale,replacement,tasting,sale+replacement+tasting); }).Where(x => x.AvailableToSchedule > 0).ToList())).Where(x => x.Lines.Count > 0).ToList();
     }
 
     public async Task<IReadOnlyList<DriverOption>> DriverOptionsAsync(Guid? includeCurrentUserId = null, CancellationToken cancellationToken = default) =>
