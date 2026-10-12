@@ -61,12 +61,20 @@ public sealed class CustomerManagementService(ApplicationDbContext db, TimeProvi
         var customer = await Load(id, ct);
         if (customer is null) return Failure("El cliente no existe.");
         var payerIds = customer.PaymentResponsibleParties.Select(p => p.Id).ToArray();
-        if (await db.Orders.AnyAsync(x => x.CustomerId == id, ct) ||
-            await db.Receivables.AnyAsync(x => x.CustomerId == id, ct) ||
-            await db.ProductRequests.AnyAsync(x => x.ConvertedCustomerId == id, ct) ||
-            await db.Payments.AnyAsync(x => payerIds.Contains(x.ResponsiblePartyId), ct) ||
-            await db.AccountStatementReports.AnyAsync(x => payerIds.Contains(x.ResponsiblePartyId), ct))
-            return Failure("Este cliente tiene pedidos, cobros o solicitudes vinculadas. Desactívalo para conservar su historial.");
+        var orderNumbers = await db.Orders.Where(x => x.CustomerId == id).OrderBy(x => x.Number).Select(x => x.Number).ToListAsync(ct);
+        var receivables = await db.Receivables.CountAsync(x => x.CustomerId == id, ct);
+        var requests = await db.ProductRequests.Where(x => x.ConvertedCustomerId == id)
+            .OrderBy(x => x.CreatedAtUtc).Select(x => new { x.ContactName, x.CreatedAtUtc }).ToListAsync(ct);
+        var payments = await db.Payments.CountAsync(x => payerIds.Contains(x.ResponsiblePartyId), ct);
+        var reports = await db.AccountStatementReports.Where(x => payerIds.Contains(x.ResponsiblePartyId))
+            .OrderBy(x => x.ReportNumber).Select(x => x.ReportNumber).ToListAsync(ct);
+        var links = new List<string>();
+        if (orderNumbers.Count > 0) links.Add($"Pedidos ({orderNumbers.Count}): {string.Join(", ", orderNumbers.Take(5).Select(number => $"#{number}"))}{(orderNumbers.Count > 5 ? ", …" : "")}.");
+        if (requests.Count > 0) links.Add($"Solicitudes convertidas ({requests.Count}): {string.Join(", ", requests.Take(5).Select(request => $"{request.ContactName} ({request.CreatedAtUtc:dd/MM/yyyy})"))}{(requests.Count > 5 ? ", …" : "")}.");
+        if (receivables > 0) links.Add($"Cuentas por cobrar: {receivables}.");
+        if (payments > 0) links.Add($"Pagos registrados: {payments}.");
+        if (reports.Count > 0) links.Add($"Estados de cuenta ({reports.Count}): {string.Join(", ", reports.Take(5))}{(reports.Count > 5 ? ", …" : "")}.");
+        if (links.Count > 0) return new(false, null, [.. links, "Desactiva el cliente para conservar su historial."]);
 
         db.Customers.Remove(customer);
         AddAudit(userId, "DeleteCustomer", id, new { customer.Name, customer.Kind, customer.Category }, null, timeProvider.GetUtcNow());
