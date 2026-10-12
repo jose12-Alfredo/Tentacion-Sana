@@ -684,7 +684,7 @@ else
                 var order = schedulable.FirstOrDefault(x => x.Id == item.OrderId);
                 var lines = order?.Lines.Where(x => x.AvailableToSchedule > 0).Select(x => new ScheduleLine(x.Id, x.AvailableToSchedule)).ToList() ?? [];
                 result = lines.Count == 0
-                    ? new DeliveryResult(false, null, ["El pedido ya no tiene unidades disponibles para asignar."])
+                    ? new DeliveryResult(false, null, ["El pedido tiene unidades pendientes, pero ninguna está reservada en inventario para asignar. Registra existencias y vuelve a intentarlo."])
                     : await Service.ScheduleAsync(new ScheduleDeliveryCommand(item.OrderId, driverId, ScheduledAt(item), lines), userId);
             }
             if (result.Succeeded) assigned++;
