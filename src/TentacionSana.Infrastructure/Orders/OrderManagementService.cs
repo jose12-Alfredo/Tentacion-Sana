@@ -242,7 +242,7 @@ public sealed class OrderManagementService(ApplicationDbContext db, TimeProvider
 
     public async Task<OrderOperationResult> ReviseConfigurationAsync(Guid id,int version,OrderConfiguration c,string reason,Guid user,CancellationToken ct=default)
     {
-        await using var tx=await db.Database.BeginTransactionAsync(ct);var order=await Load(id,ct);if(order is null)return Fail("El pedido no existe.");if(order.Version!=version)return Conflict();if(!await CanModifyProgressed(order,user))return Fail("Este estado requiere autorización administrativa.");
+        var order=await Load(id,ct);if(order is null)return Fail("El pedido no existe.");if(order.Version!=version)return Conflict();if(!await CanModifyProgressed(order,user))return Fail("Este estado requiere autorización administrativa.");
         if (c.CustomerId != order.CustomerId)
         {
             if (!await IsAdministrator(user)) return Fail("Solo un administrador puede cambiar el cliente de un pedido confirmado.");
@@ -250,7 +250,7 @@ public sealed class OrderManagementService(ApplicationDbContext db, TimeProvider
                 return Fail("El pedido ya tiene entregas o cobros. No se puede cambiar el cliente sin afectar ese historial.");
         }
         if(!await ValidateRelations(c,ct))return Fail("Las relaciones comerciales no pertenecen al cliente.");
-        var changes=order.ChangeHistory.Count;var dates=order.PromisedDateHistory.Count;var now=clock.GetUtcNow();try{order.ReviseConfiguration(c.CustomerId,c.DeliveryPointId,c.ContactId,c.PaymentResponsiblePartyId,c.PromisedAtUtc,c.Notes,reason,user,now);foreach(var x in order.ChangeHistory.Skip(changes))db.OrderChangeHistory.Add(x);foreach(var x in order.PromisedDateHistory.Skip(dates))db.PromisedDateHistory.Add(x);var snapshot=await Snapshot(order,now,ct);order.Snapshots.Add(snapshot);db.OrderSnapshots.Add(snapshot);var result=await Save(order,"ConfirmedOrderConfigured",user,ct,reason);if(result.Succeeded)await tx.CommitAsync(ct);return result;}catch(Exception ex)when(ex is ArgumentException or InvalidOperationException){return Fail(ex.Message);}
+        var changes=order.ChangeHistory.Count;var dates=order.PromisedDateHistory.Count;var now=clock.GetUtcNow();try{order.ReviseConfiguration(c.CustomerId,c.DeliveryPointId,c.ContactId,c.PaymentResponsiblePartyId,c.PromisedAtUtc,c.Notes,reason,user,now);foreach(var x in order.ChangeHistory.Skip(changes))db.OrderChangeHistory.Add(x);foreach(var x in order.PromisedDateHistory.Skip(dates))db.PromisedDateHistory.Add(x);var snapshot=await Snapshot(order,now,ct);order.Snapshots.Add(snapshot);db.OrderSnapshots.Add(snapshot);return await Save(order,"ConfirmedOrderConfigured",user,ct,reason);}catch(Exception ex)when(ex is ArgumentException or InvalidOperationException){return Fail(ex.Message);}
     }
 
     public async Task<OrderOperationResult> DeleteDraftAsync(Guid id,int version,Guid user,CancellationToken ct=default)

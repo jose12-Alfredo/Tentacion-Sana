@@ -6,6 +6,7 @@
 @inject IDeliveryService DeliveryService
 @inject IDeliveryPointImageService PointImageService
 @inject AuthenticationStateProvider AuthenticationStateProvider
+@inject ILoggerFactory LoggerFactory
 
 <PageTitle>Pedido | Tentación Sana</PageTitle>
 
@@ -230,7 +231,7 @@ else
     private decimal LineSubtotal => _line.SaleQuantity * _line.SoldPrice;
 
     protected override async Task OnParametersSetAsync() { _customers = await Service.CustomerOptionsAsync(); _products = await Service.ProductOptionsAsync(); await LoadAsync(); }
-    private async Task LoadAsync() { _order = await Service.GetAsync(OrderId); _payments = await DeliveryService.PaymentsAsync(OrderId); if (_order is null) return; _form = new() { CustomerId = _order.CustomerId, DeliveryPointId = _order.DeliveryPointId, ContactId = _order.ContactId, PayerId = _order.PaymentResponsiblePartyId, PromisedLocal = _order.PromisedAtUtc?.ToLocalTime().DateTime, Notes = _order.Notes }; _pointImageUrl = _order.DeliveryPointId is null ? null : await PointImageService.GetUrlAsync(_order.DeliveryPointId.Value); if (_paymentAmount <= 0) _paymentAmount = _order.Balance; }
+    private async Task LoadAsync(CancellationToken ct = default) { _order = await Service.GetAsync(OrderId, ct); _payments = await DeliveryService.PaymentsAsync(OrderId, ct); if (_order is null) return; _form = new() { CustomerId = _order.CustomerId, DeliveryPointId = _order.DeliveryPointId, ContactId = _order.ContactId, PayerId = _order.PaymentResponsiblePartyId, PromisedLocal = _order.PromisedAtUtc?.ToLocalTime().DateTime, Notes = _order.Notes }; _pointImageUrl = _order.DeliveryPointId is null ? null : await PointImageService.GetUrlAsync(_order.DeliveryPointId.Value, ct); if (_paymentAmount <= 0) _paymentAmount = _order.Balance; }
     private Task CustomerChanged() { _form.DeliveryPointId = null; _form.ContactId = null; _form.PayerId = null; _pointImageUrl = null; return Task.CompletedTask; }
     private async Task PointChanged() { _form.ContactId = SelectedPoint?.ContactId; _form.PayerId = SelectedPoint?.PayerId; _pointImageUrl = _form.DeliveryPointId is null ? null : await PointImageService.GetUrlAsync(_form.DeliveryPointId.Value); }
     private Task ProductChanged() { _line.SoldPrice = _products.FirstOrDefault(x => x.Id == _line.ProductId)?.CurrentPrice ?? 0; return Task.CompletedTask; }
@@ -331,15 +332,25 @@ else
         _saving = true;
         try
         {
-            var result = await Service.ReviseConfigurationAsync(OrderId, _order!.Version, new(_form.CustomerId, _form.DeliveryPointId, _form.ContactId, _form.PayerId, UtcDate(_form.PromisedLocal), _form.Notes), _revisionReason, await UserId());
+            using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+            var result = await Service.ReviseConfigurationAsync(OrderId, _order!.Version, new(_form.CustomerId, _form.DeliveryPointId, _form.ContactId, _form.PayerId, UtcDate(_form.PromisedLocal), _form.Notes), _revisionReason, await UserId(), timeout.Token);
             if (!result.Succeeded)
             {
                 _revisionErrors.AddRange(result.Errors);
                 return;
             }
-            await LoadAsync();
+            await LoadAsync(timeout.Token);
             _revisionReason = "";
             _revisionMessage = "Cambios guardados correctamente.";
+        }
+        catch (OperationCanceledException)
+        {
+            _revisionErrors.Add("La operación tardó demasiado. Recarga el pedido para comprobar si se guardó antes de intentar nuevamente.");
+        }
+        catch (Exception ex)
+        {
+            LoggerFactory.CreateLogger("OrderDetail").LogError(ex, "No se pudo revisar el pedido {OrderId}", OrderId);
+            _revisionErrors.Add("No se pudo guardar el cambio. Recarga el pedido y vuelve a intentarlo.");
         }
         finally { _saving = false; }
     }
