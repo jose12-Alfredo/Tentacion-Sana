@@ -616,7 +616,7 @@ public sealed class DeliveryService(ApplicationDbContext db, TimeProvider clock,
             var deliveredByLine = orderDeliveries.SelectMany(x => x.Lines).GroupBy(x => x.OrderLineId).ToDictionary(x => x.Key, x => (Sale: x.Sum(y => y.DeliveredSaleQuantity), Replacement: x.Sum(y => y.DeliveredReplacementQuantity), Tasting: x.Sum(y => y.DeliveredTastingQuantity)));
             // La visibilidad del tablero depende de lo que falta entregar en el pedido completo,
             // incluso si una entrega activa contiene solo una parte de sus unidades.
-            var pending = PendingFromReservations(order, deliveredByLine);
+            var pending = PendingFromOrderLines(order, deliveredByLine);
             var point = order.DeliveryPointId is { } pointId ? points.GetValueOrDefault(pointId) : null;
             var coordinate = point is null ? null : await coordinateTasks[point.Id];
             var contactId = order.ContactId ?? point?.ContactId;
@@ -871,25 +871,17 @@ public sealed class DeliveryService(ApplicationDbContext db, TimeProvider clock,
         return payment;
     }
 
-    private static (int Sale, int Replacement, int Tasting) PendingFromReservations(Order order, Dictionary<Guid, (int Sale, int Replacement, int Tasting)> delivered)
+    private static (int Sale, int Replacement, int Tasting) PendingFromOrderLines(Order order, Dictionary<Guid, (int Sale, int Replacement, int Tasting)> delivered)
     {
         var sale = 0;
         var replacement = 0;
         var tasting = 0;
         foreach (var line in order.Lines.Where(x => x.IsActive))
         {
-            var reservation = order.Reservations.FirstOrDefault(x => x.OrderLineId == line.Id && x.IsActive);
-            if (reservation is null || reservation.ReservedQuantity == 0) continue;
             delivered.TryGetValue(line.Id, out var done);
-            var available = reservation.ReservedQuantity;
-            var lineSale = Math.Min(available, Math.Max(0, line.SaleQuantity - done.Sale));
-            available -= lineSale;
-            var lineReplacement = Math.Min(available, Math.Max(0, line.ReplacementQuantity - done.Replacement));
-            available -= lineReplacement;
-            var lineTasting = Math.Min(available, Math.Max(0, line.TastingQuantity - done.Tasting));
-            sale += lineSale;
-            replacement += lineReplacement;
-            tasting += lineTasting;
+            sale += Math.Max(0, line.SaleQuantity - done.Sale);
+            replacement += Math.Max(0, line.ReplacementQuantity - done.Replacement);
+            tasting += Math.Max(0, line.TastingQuantity - done.Tasting);
         }
         return (sale, replacement, tasting);
     }
