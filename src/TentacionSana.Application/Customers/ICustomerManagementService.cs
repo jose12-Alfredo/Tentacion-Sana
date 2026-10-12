@@ -4,6 +4,7 @@ public interface ICustomerManagementService
 {
     Task<CustomerOperationResult> CreateCustomerAsync(CustomerEditCommand command, CancellationToken cancellationToken = default);
     Task<CustomerOperationResult> UpdateCustomerAsync(Guid customerId, CustomerEditCommand command, CancellationToken cancellationToken = default);
+    Task<CustomerOperationResult> DeleteCustomerAsync(Guid customerId, Guid userId, CancellationToken cancellationToken = default);
     Task<CustomerOperationResult> AddContactAsync(Guid customerId, ContactEditCommand command, Guid userId, CancellationToken cancellationToken = default);
     Task<CustomerOperationResult> AddPaymentResponsibleAsync(Guid customerId, PaymentResponsibleEditCommand command, Guid userId, CancellationToken cancellationToken = default);
     Task<CustomerOperationResult> AddDeliveryPointAsync(Guid customerId, DeliveryPointEditCommand command, Guid userId, CancellationToken cancellationToken = default);

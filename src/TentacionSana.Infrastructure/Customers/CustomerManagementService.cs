@@ -4,6 +4,8 @@ using TentacionSana.Application.Customers;
 using TentacionSana.Domain.Customers;
 using TentacionSana.Infrastructure.Auditing;
 using TentacionSana.Infrastructure.Persistence;
+using TentacionSana.Application.Security;
+using TentacionSana.Infrastructure.Identity;
 
 #pragma warning disable CA1725
 
@@ -45,6 +47,38 @@ public sealed class CustomerManagementService(ApplicationDbContext db, TimeProvi
             await db.SaveChangesAsync(ct); return Success(id);
         }
         catch (Exception ex) when (ex is ArgumentException or InvalidOperationException) { return Failure(ex.Message); }
+    }
+
+    public async Task<CustomerOperationResult> DeleteCustomerAsync(Guid id, Guid userId, CancellationToken ct = default)
+    {
+        var isAdministrator = await db.Users.AnyAsync(user => user.Id == userId && user.IsEnabled, ct) &&
+            await db.UserRoles.AnyAsync(userRole => userRole.UserId == userId &&
+            db.Roles.Any(role => role.Id == userRole.RoleId &&
+                (role.Name == AppRoles.Administrator || db.RoleClaims.Any(claim => claim.RoleId == role.Id &&
+                    claim.ClaimType == AppPermissions.ClaimType && claim.ClaimValue == AppPermissions.Administration))), ct);
+        if (!isAdministrator) return Failure("Solo un administrador puede eliminar clientes.");
+
+        var customer = await Load(id, ct);
+        if (customer is null) return Failure("El cliente no existe.");
+        var payerIds = customer.PaymentResponsibleParties.Select(p => p.Id).ToArray();
+        if (await db.Orders.AnyAsync(x => x.CustomerId == id, ct) ||
+            await db.Receivables.AnyAsync(x => x.CustomerId == id, ct) ||
+            await db.ProductRequests.AnyAsync(x => x.ConvertedCustomerId == id, ct) ||
+            await db.Payments.AnyAsync(x => payerIds.Contains(x.ResponsiblePartyId), ct) ||
+            await db.AccountStatementReports.AnyAsync(x => payerIds.Contains(x.ResponsiblePartyId), ct))
+            return Failure("Este cliente tiene pedidos, cobros o solicitudes vinculadas. Desactívalo para conservar su historial.");
+
+        db.Customers.Remove(customer);
+        AddAudit(userId, "DeleteCustomer", id, new { customer.Name, customer.Kind, customer.Category }, null, timeProvider.GetUtcNow());
+        try
+        {
+            await db.SaveChangesAsync(ct);
+            return Success(id);
+        }
+        catch (DbUpdateException)
+        {
+            return Failure("No se pudo eliminar porque existen registros vinculados. Desactiva el cliente para conservar su historial.");
+        }
     }
 
     public async Task<CustomerOperationResult> AddContactAsync(Guid id, ContactEditCommand command, Guid userId, CancellationToken ct = default)

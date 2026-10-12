@@ -5,6 +5,7 @@
 @inject ICustomerManagementService Service
 @inject IDeliveryPointImageService ImageService
 @inject AuthenticationStateProvider AuthenticationStateProvider
+@inject NavigationManager Navigation
 
 <PageTitle>Ficha del cliente | Tentación Sana</PageTitle>
 @if (_customer is null) { <div class="loading">Cargando cliente…</div> }
@@ -13,7 +14,7 @@ else
  <nav class="breadcrumbs"><a href="/app/clientes">Clientes</a><span>›</span><strong>@_customer.Name</strong></nav>
  <header class="customer-hero">
   <div class="identity"><div class="monogram">@Initials(_customer.Name)</div><div><div class="title-line"><h1>@_customer.Name</h1><span class="active-pill">@(_customer.IsActive ? "● Activo" : "Inactivo")</span></div><p>@KindText(_customer.Kind) · @CategoryText(_customer.Category)</p><div class="quick-data">@if(!string.IsNullOrWhiteSpace(_customer.Phone)){<a href="@WhatsApp(_customer.Phone)" target="_blank">◉ @_customer.Phone</a>}@if(!string.IsNullOrWhiteSpace(_customer.Email)){<a href="mailto:@_customer.Email">✉ @_customer.Email</a>}</div></div></div>
-  <button class="secondary" @onclick="OpenCustomerEditor">Editar cliente</button>
+  <div class="customer-actions"><button class="secondary" @onclick="OpenCustomerEditor">Editar cliente</button><AuthorizeView Policy="@AppPolicies.Administration"><Authorized><button class="delete-customer" @onclick="()=>_showDelete=true">Eliminar cliente</button></Authorized></AuthorizeView></div>
   <div class="stats"><article><strong>@_customer.DeliveryPoints.Count</strong><span>Puntos</span></article><article><strong>@_customer.DeliveryPoints.Count(x=>x.Kind=="Branch")</strong><span>Sucursales</span></article><article><strong>@_customer.DeliveryPoints.Count(x=>x.Kind=="Franchise")</strong><span>Franquicias</span></article><article><strong>@_customer.Contacts.Count</strong><span>Contactos</span></article><article><strong>@_customer.PaymentResponsibles.Count</strong><span>Responsables de pago</span></article></div>
  </header>
 
@@ -74,9 +75,14 @@ else
  <div class="modal-backdrop" @onclick="()=>_showCustomer=false"><section class="modal" @onclick:stopPropagation><header><h2>Editar cliente</h2><button @onclick="()=>_showCustomer=false">×</button></header><div class="modal-body"><div class="two"><label>Tipo<select @bind="_edit.Kind"><option value="Individual">Persona</option><option value="Company">Empresa</option></select></label><label>Categoría<select @bind="_edit.Category">@foreach(var c in Categories){<option value="@c.Value">@c.Text</option>}</select></label></div><label>Nombre<input @bind="_edit.Name"/></label><div class="two"><label>Teléfono general<input @bind="_edit.Phone"/></label><label>Correo<input @bind="_edit.Email"/></label></div><label>Observaciones<textarea @bind="_edit.Notes"></textarea></label><label class="check"><input type="checkbox" @bind="_edit.IsActive"/> Cliente activo</label></div><footer><button class="secondary" @onclick="()=>_showCustomer=false">Cancelar</button><button @onclick="SaveCustomer">Guardar cambios</button></footer></section></div>
 }
 
+@if(_showDelete && _customer is not null)
+{
+ <div class="modal-backdrop" @onclick="()=>_showDelete=false"><section class="modal" role="dialog" aria-modal="true" aria-labelledby="delete-customer-title" @onclick:stopPropagation><header><h2 id="delete-customer-title">Eliminar cliente</h2><button @onclick="()=>_showDelete=false" aria-label="Cerrar">×</button></header><div class="modal-body"><p>¿Eliminar definitivamente a <strong>@_customer.Name</strong> y sus contactos, puntos y responsables de pago? Esta acción no se puede deshacer. Si tiene pedidos, cobros o solicitudes vinculadas, se conservará el cliente y podrás desactivarlo.</p></div><footer><button class="secondary" @onclick="()=>_showDelete=false">Cancelar</button><button class="delete-customer" @onclick="DeleteCustomer" disabled="@_saving">@(_saving?"Eliminando…":"Eliminar cliente")</button></footer></section></div>
+}
+
 @code {
  [Parameter] public Guid CustomerId { get; set; }
- private TentacionSana.Application.Customers.CustomerDetail? _customer; private string _tab="summary"; private bool _showPoint,_showContact,_showPayer,_showCustomer,_saving; private Guid? _editingPointId; private string? _pointImageUrl,_message; private readonly List<string> _errors=[]; private readonly Dictionary<Guid,string> _pointImages=[]; private PointForm _point=new(); private ContactForm _contact=new(); private PayerForm _payer=new(); private CustomerForm _edit=new();
+ private TentacionSana.Application.Customers.CustomerDetail? _customer; private string _tab="summary"; private bool _showPoint,_showContact,_showPayer,_showCustomer,_showDelete,_saving; private Guid? _editingPointId; private string? _pointImageUrl,_message; private readonly List<string> _errors=[]; private readonly Dictionary<Guid,string> _pointImages=[]; private PointForm _point=new(); private ContactForm _contact=new(); private PayerForm _payer=new(); private CustomerForm _edit=new();
  private static readonly (string Value,string Text)[] PointKinds=[("Home","Domicilio"),("MainLocation","Local principal"),("Branch","Sucursal"),("Franchise","Franquicia"),("PointOfSale","Punto de venta"),("Warehouse","Depósito"),("Other","Otro")];
  private static readonly (string Value,string Text)[] Categories=[("Individual","Particular"),("Gym","Gimnasio"),("HealthStore","Tienda saludable"),("Minimarket","Minimarket"),("Reseller","Revendedor"),("Distributor","Distribuidor"),("Other","Otro")];
  protected override Task OnParametersSetAsync()=>Load();
@@ -89,6 +95,7 @@ else
  private async Task SavePayer(){var r=await Service.AddPaymentResponsibleAsync(CustomerId,new(_payer.Kind,_payer.Label,_payer.ContactId,_payer.Name,_payer.Phone,_payer.Email),await UserId());await Result(r,"Responsable guardado.");if(r.Succeeded){_payer=new();_showPayer=false;}}
  private void OpenCustomerEditor(){_edit=new(){Kind=_customer!.Kind,Category=_customer.Category,Name=_customer.Name,Phone=_customer.Phone,Email=_customer.Email,Notes=_customer.Notes,IsActive=_customer.IsActive};_showCustomer=true;}
  private async Task SaveCustomer(){var r=await Service.UpdateCustomerAsync(CustomerId,new(_edit.Kind,_edit.Category,_edit.Name,_edit.Phone,_edit.Email,_edit.Notes,_edit.IsActive,await UserId()));await Result(r,"Cliente actualizado.");if(r.Succeeded)_showCustomer=false;}
+ private async Task DeleteCustomer(){if(_saving)return;_saving=true;try{var r=await Service.DeleteCustomerAsync(CustomerId,await UserId());if(r.Succeeded){Navigation.NavigateTo("/app/clientes");return;}_errors.Clear();_errors.AddRange(r.Errors);_showDelete=false;}finally{_saving=false;}}
  private async Task UploadPointImage(InputFileChangeEventArgs e){if(_editingPointId is null)return;try{await using var stream=e.File.OpenReadStream(10*1024*1024);var r=await ImageService.UploadAsync(CustomerId,_editingPointId.Value,stream,e.File.Name,e.File.ContentType,e.File.Size,await UserId());await Result(r,"Imagen guardada.");if(r.Succeeded)_pointImageUrl=await ImageService.GetUrlAsync(_editingPointId.Value);}catch(IOException){_errors.Clear();_errors.Add("No se pudo leer la imagen o supera 10 MB.");}}
  private async Task Result(CustomerOperationResult r,string success){_errors.Clear();_message=r.Succeeded?success:null;if(!r.Succeeded)_errors.AddRange(r.Errors);await Load();}
  private CustomerContactView? Contact(Guid? id){var c=_customer?.Contacts.FirstOrDefault(x=>x.Id==id);return c is null?null:new(c.Name,c.Phone);}
