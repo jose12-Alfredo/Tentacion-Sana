@@ -45,7 +45,7 @@ public sealed class SalesAnalyticsService(ApplicationDbContext db, TimeProvider 
                 .Where(h => h.NewStatus == OrderStatus.Delivered)
                 .Max(h => h.ChangedAtUtc).ToOffset(offset).DateTime),
             Customer = customerNames.GetValueOrDefault(order.CustomerId, "Cliente sin nombre"),
-            Revenue = order.Lines.Where(line => line.IsActive).Sum(line => line.LineTotal),
+            Revenue = order.Lines.Where(line => line.IsActive).Sum(line => line.LineTotal) + order.DeliveryFee,
             Units = order.Lines.Where(line => line.IsActive).Sum(line => line.SaleQuantity),
             ReplacementUnits = order.Lines.Where(line => line.IsActive).Sum(line => line.ReplacementQuantity),
             TastingUnits = order.Lines.Where(line => line.IsActive).Sum(line => line.TastingQuantity)

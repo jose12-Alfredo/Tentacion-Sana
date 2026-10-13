@@ -2022,6 +2022,10 @@ namespace TentacionSana.Infrastructure.Persistence.Migrations
                     b.Property<Guid>("CustomerId")
                         .HasColumnType("uuid");
 
+                    b.Property<decimal>("DeliveryFee")
+                        .HasPrecision(12, 2)
+                        .HasColumnType("numeric(12,2)");
+
                     b.Property<Guid?>("DeliveryPointId")
                         .HasColumnType("uuid");
 

@@ -268,12 +268,17 @@ public sealed class DeliveryService(ApplicationDbContext db, TimeProvider clock,
             delivery.Complete(delivered, command.ReceiverName, userId, now);
             db.DeliveryStatusHistory.Add(delivery.History[^1]);
             var receivable = await db.Receivables.SingleOrDefaultAsync(x => x.OrderId == order.Id, cancellationToken);
-            if (saleAmount > 0)
+            var deliveryFee = await db.Deliveries.AnyAsync(x => x.OrderId == order.Id && x.CompletedAtUtc != null, cancellationToken)
+                ? 0 : order.DeliveryFee;
+            if (saleAmount > 0 || deliveryFee > 0)
             {
-                var sale = Sale.Create(order.Id, delivery.Id, saleAmount, historicalCost, now);
-                db.Sales.Add(sale);
+                if (saleAmount > 0)
+                {
+                    var sale = Sale.Create(order.Id, delivery.Id, saleAmount, historicalCost, now);
+                    db.Sales.Add(sale);
+                }
                 if (receivable is null) { receivable = Receivable.Create(order.Id, order.CustomerId, order.PaymentResponsiblePartyId); db.Receivables.Add(receivable); }
-                receivable.AddSale(saleAmount);
+                receivable.AddSale(saleAmount + deliveryFee);
             }
             if (command.PaymentAmount > 0) throw new InvalidOperationException("Registra el pago por separado para adjuntar su respaldo obligatorio.");
             if (order.Reservations.All(x => !x.IsActive) && order.Status is (OrderStatus.Ready or OrderStatus.OutForDelivery)) { order.MarkDelivered(userId, now); db.OrderStatusHistory.Add(order.StatusHistory[^1]); }
@@ -634,7 +639,7 @@ public sealed class DeliveryService(ApplicationDbContext db, TimeProvider clock,
             var routeStop = latest is null ? null : routeStops.FirstOrDefault(x => x.DeliveryId == latest.Id);
             var route = routeStop is null ? null : routes.GetValueOrDefault(routeStop.DeliveryRouteId);
             var status = tracked is null ? (order.Status == OrderStatus.Delivered ? "Delivered" : "Pending") : BoardStatus(tracked.Status);
-            var total = order.Lines.Where(x => x.IsActive).Sum(x => x.SaleQuantity * x.SoldUnitPrice);
+            var total = order.Lines.Where(x => x.IsActive).Sum(x => x.SaleQuantity * x.SoldUnitPrice) + order.DeliveryFee;
             var paid = paidByOrder.GetValueOrDefault(order.Id);
             var balance = Math.Max(0, total - paid);
             var totalPending = pending.Sale + pending.Replacement + pending.Tasting;
@@ -758,7 +763,8 @@ public sealed class DeliveryService(ApplicationDbContext db, TimeProvider clock,
                 Reference=db.DeliveryPoints.Where(p=>p.Id==db.Orders.Where(o=>o.Id==x.OrderId).Select(o=>o.DeliveryPointId).FirstOrDefault()).Select(p=>p.Reference).FirstOrDefault(),
                 Location=db.DeliveryPoints.Where(p=>p.Id==db.Orders.Where(o=>o.Id==x.OrderId).Select(o=>o.DeliveryPointId).FirstOrDefault()).Select(p=>p.Location).FirstOrDefault(),
                 RoutePosition=db.DeliveryRouteStops.Where(stop=>stop.DeliveryId==x.Id).Select(stop=>(int?)stop.Position).FirstOrDefault(),
-                Total=db.OrderLines.Where(line=>line.OrderId==x.OrderId&&line.IsActive).Sum(line=>(decimal?)(line.SaleQuantity*line.SoldUnitPrice))??0,
+                Total=(db.OrderLines.Where(line=>line.OrderId==x.OrderId&&line.IsActive).Sum(line=>(decimal?)(line.SaleQuantity*line.SoldUnitPrice))??0)
+                    + db.Orders.Where(order=>order.Id==x.OrderId).Select(order=>order.DeliveryFee).Single(),
                 Paid=db.PaymentAllocations.Where(allocation=>allocation.OrderId==x.OrderId&&db.Payments.Any(payment=>payment.Id==allocation.PaymentId&&payment.Status==PaymentStatus.Confirmed)).Sum(allocation=>(decimal?)allocation.Amount)??0,
                 DeliveryEvidenceCount=db.DeliveryEvidence.Count(evidence=>evidence.DeliveryId==x.Id&&evidence.IsActive),
                 PaymentEvidenceCount=db.PaymentEvidence.Count(evidence=>db.Payments.Any(payment=>payment.Id==evidence.PaymentId&&payment.Status==PaymentStatus.Confirmed)&&db.PaymentAllocations.Any(allocation=>allocation.PaymentId==evidence.PaymentId&&allocation.OrderId==x.OrderId)),
@@ -799,8 +805,9 @@ public sealed class DeliveryService(ApplicationDbContext db, TimeProvider clock,
                     .Select(order => db.CustomerContacts.Where(contact => contact.Id == order.ContactId).Select(contact => contact.Phone).SingleOrDefault()).Single(),
                 Notes = db.Orders.Where(order => order.Id == delivery.OrderId).Select(order => order.Notes).Single(),
                 DriverName = db.Users.Where(user => user.Id == delivery.DriverUserId).Select(user => user.DisplayName).SingleOrDefault(),
-                Total = db.OrderLines.Where(line => line.OrderId == delivery.OrderId && line.IsActive)
-                    .Sum(line => (decimal?)(line.SaleQuantity * line.SoldUnitPrice)) ?? 0,
+                Total = (db.OrderLines.Where(line => line.OrderId == delivery.OrderId && line.IsActive)
+                    .Sum(line => (decimal?)(line.SaleQuantity * line.SoldUnitPrice)) ?? 0)
+                    + db.Orders.Where(order => order.Id == delivery.OrderId).Select(order => order.DeliveryFee).Single(),
                 ReceivableVersion = db.Receivables.Where(receivable => receivable.OrderId == delivery.OrderId)
                     .Select(receivable => (int?)receivable.Version).SingleOrDefault() ?? 1
             })

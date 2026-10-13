@@ -5,6 +5,22 @@ namespace TentacionSana.UnitTests.Orders;
 public sealed class OrderTests
 {
     [Fact]
+    public void DeliveryFeeIsOptionalValidatedAndRecordedInHistory()
+    {
+        var order = Order.CreateDraft(Guid.NewGuid(), null, UserId, Now);
+
+        Assert.Equal(0m, order.DeliveryFee);
+        Assert.Throws<ArgumentException>(() => order.SetDeliveryFee(-1m, UserId, Now));
+        Assert.Throws<ArgumentException>(() => order.SetDeliveryFee(12.345m, UserId, Now));
+
+        order.SetDeliveryFee(15.50m, UserId, Now);
+
+        Assert.Equal(15.50m, order.DeliveryFee);
+        Assert.Equal("DeliveryFee", order.ChangeHistory[^1].Field);
+        Assert.Equal("15.50", order.ChangeHistory[^1].NewValue);
+    }
+
+    [Fact]
     public void ReadyOrderCanBecomeDeliveredWhenAssignedDeliveryIsCompleted()
     {
         var order = Order.CreateDraft(Guid.NewGuid(), null, UserId, Now);

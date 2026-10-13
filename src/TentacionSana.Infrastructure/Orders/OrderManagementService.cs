@@ -28,7 +28,7 @@ public sealed class OrderManagementService(ApplicationDbContext db, TimeProvider
     {
         var order=await Load(id,ct); if(order is null)return Fail("El pedido no existe."); if(order.Version!=version)return Conflict();
         if(!await ValidateRelations(c,ct))return Fail("La sucursal, contacto o responsable de pago no pertenece al cliente.");
-        try { var dates=order.PromisedDateHistory.Count; var changes=order.ChangeHistory.Count; order.Configure(c.CustomerId,c.DeliveryPointId,c.ContactId,c.PaymentResponsiblePartyId,c.PromisedAtUtc,c.Notes,user,clock.GetUtcNow()); if(order.PromisedDateHistory.Count>dates)db.PromisedDateHistory.Add(order.PromisedDateHistory[^1]); foreach(var item in order.ChangeHistory.Skip(changes))db.OrderChangeHistory.Add(item); return await Save(order,"OrderConfigured",user,ct); } catch(Exception ex) when(ex is ArgumentException or InvalidOperationException){return Fail(ex.Message);}
+        try { var dates=order.PromisedDateHistory.Count; var changes=order.ChangeHistory.Count; var now=clock.GetUtcNow(); order.Configure(c.CustomerId,c.DeliveryPointId,c.ContactId,c.PaymentResponsiblePartyId,c.PromisedAtUtc,c.Notes,user,now); order.SetDeliveryFee(c.DeliveryFee,user,now); if(order.PromisedDateHistory.Count>dates)db.PromisedDateHistory.Add(order.PromisedDateHistory[^1]); foreach(var item in order.ChangeHistory.Skip(changes))db.OrderChangeHistory.Add(item); return await Save(order,"OrderConfigured",user,ct); } catch(Exception ex) when(ex is ArgumentException or InvalidOperationException){return Fail(ex.Message);}
     }
 
     public async Task<OrderOperationResult> AddLineAsync(Guid id,int version,OrderLineCommand c,Guid user,CancellationToken ct=default)
@@ -110,6 +110,7 @@ public sealed class OrderManagementService(ApplicationDbContext db, TimeProvider
             var changes=order.ChangeHistory.Count;
             var promisedDates=order.PromisedDateHistory.Count;
             order.Configure(configuration.CustomerId,configuration.DeliveryPointId,configuration.ContactId,configuration.PaymentResponsiblePartyId,configuration.PromisedAtUtc,configuration.Notes,user,completedAtUtc);
+            order.SetDeliveryFee(configuration.DeliveryFee,user,completedAtUtc);
             foreach(var change in order.ChangeHistory.Skip(changes)) db.OrderChangeHistory.Add(change);
             foreach(var date in order.PromisedDateHistory.Skip(promisedDates)) db.PromisedDateHistory.Add(date);
 
@@ -176,11 +177,11 @@ public sealed class OrderManagementService(ApplicationDbContext db, TimeProvider
             order.MarkDelivered(user,completedAtUtc);
             db.OrderStatusHistory.Add(order.StatusHistory[^1]);
 
-            if(saleAmount>0)
+            if(saleAmount>0 || order.DeliveryFee>0)
             {
-                db.Sales.Add(Sale.Create(order.Id,delivery.Id,saleAmount,historicalCost,completedAtUtc));
+                if(saleAmount>0) db.Sales.Add(Sale.Create(order.Id,delivery.Id,saleAmount,historicalCost,completedAtUtc));
                 var receivable=Receivable.Create(order.Id,order.CustomerId,order.PaymentResponsiblePartyId);
-                receivable.AddSale(saleAmount);
+                receivable.AddSale(saleAmount+order.DeliveryFee);
                 db.Receivables.Add(receivable);
             }
 
@@ -249,8 +250,10 @@ public sealed class OrderManagementService(ApplicationDbContext db, TimeProvider
             if (await db.Deliveries.AnyAsync(x => x.OrderId == id, ct) || await db.Payments.AnyAsync(x => x.OrderId == id, ct) || await db.Receivables.AnyAsync(x => x.OrderId == id, ct))
                 return Fail("El pedido ya tiene entregas o cobros. No se puede cambiar el cliente sin afectar ese historial.");
         }
+        if (c.DeliveryFee != order.DeliveryFee && await db.Deliveries.AnyAsync(x => x.OrderId == id && x.CompletedAtUtc != null, ct))
+            return Fail("El costo de envío ya fue incluido en una entrega. No se puede modificar después de cobrarlo.");
         if(!await ValidateRelations(c,ct))return Fail("Las relaciones comerciales no pertenecen al cliente.");
-        var changes=order.ChangeHistory.Count;var dates=order.PromisedDateHistory.Count;var now=clock.GetUtcNow();try{order.ReviseConfiguration(c.CustomerId,c.DeliveryPointId,c.ContactId,c.PaymentResponsiblePartyId,c.PromisedAtUtc,c.Notes,reason,user,now);foreach(var x in order.ChangeHistory.Skip(changes))db.OrderChangeHistory.Add(x);foreach(var x in order.PromisedDateHistory.Skip(dates))db.PromisedDateHistory.Add(x);var snapshot=await Snapshot(order,now,ct);order.Snapshots.Add(snapshot);db.OrderSnapshots.Add(snapshot);return await Save(order,"ConfirmedOrderConfigured",user,ct,reason);}catch(Exception ex)when(ex is ArgumentException or InvalidOperationException){return Fail(ex.Message);}
+        var changes=order.ChangeHistory.Count;var dates=order.PromisedDateHistory.Count;var now=clock.GetUtcNow();try{order.ReviseConfiguration(c.CustomerId,c.DeliveryPointId,c.ContactId,c.PaymentResponsiblePartyId,c.PromisedAtUtc,c.Notes,reason,user,now);order.ReviseDeliveryFee(c.DeliveryFee,reason,user,now);foreach(var x in order.ChangeHistory.Skip(changes))db.OrderChangeHistory.Add(x);foreach(var x in order.PromisedDateHistory.Skip(dates))db.PromisedDateHistory.Add(x);var snapshot=await Snapshot(order,now,ct);order.Snapshots.Add(snapshot);db.OrderSnapshots.Add(snapshot);return await Save(order,"ConfirmedOrderConfigured",user,ct,reason);}catch(Exception ex)when(ex is ArgumentException or InvalidOperationException){return Fail(ex.Message);}
     }
 
     public async Task<OrderOperationResult> DeleteDraftAsync(Guid id,int version,Guid user,CancellationToken ct=default)
@@ -330,17 +333,17 @@ public sealed class OrderManagementService(ApplicationDbContext db, TimeProvider
         var deliveryHistory=await db.DeliveryStatusHistory.AsNoTracking().Where(x=>deliveryIds.Contains(x.DeliveryId)).Select(x=>new OrderHistoryItem(x.ChangedAtUtc,"Entrega",$"{x.PreviousStatus} → {x.NewStatus}: {x.Reason}")).ToListAsync(ct);
         var receivable=await db.Receivables.AsNoTracking().Where(x=>x.OrderId==id).Select(x=>new { x.InvoicedAmount,x.PaidAmount,x.Version }).SingleOrDefaultAsync(ct);
         var payments=await db.Payments.AsNoTracking().Where(x=>x.OrderId==id&&x.Status==Domain.Deliveries.PaymentStatus.Confirmed).OrderBy(x=>x.ReceivedAtUtc).Select(x=>new { Method=x.Method.ToString(),x.Amount,x.ReceivedAtUtc }).ToListAsync(ct);
-        var paymentMethod=PaymentMethod(payments.Select(x=>x.Method)); var paid=receivable?.PaidAmount??payments.Sum(x=>x.Amount); var orderTotal=o.Lines.Where(x=>x.IsActive).Sum(x=>x.LineTotal); var balance=Math.Max(0,orderTotal-paid);
+        var paymentMethod=PaymentMethod(payments.Select(x=>x.Method)); var paid=receivable?.PaidAmount??payments.Sum(x=>x.Amount); var orderTotal=o.Lines.Where(x=>x.IsActive).Sum(x=>x.LineTotal)+o.DeliveryFee; var balance=Math.Max(0,orderTotal-paid);
         var history=new[]{new OrderHistoryItem(o.CreatedAtUtc,"Pedido","Pedido creado")}.Concat(o.StatusHistory.Select(x=>new OrderHistoryItem(x.ChangedAtUtc,"Estado",$"{x.PreviousStatus} → {x.NewStatus}: {x.Reason}")))
             .Concat(o.ChangeHistory.Select(x=>new OrderHistoryItem(x.ChangedAtUtc,"Cambio",$"{x.Field}: {x.PreviousValue} → {x.NewValue}")))
             .Concat(o.PromisedDateHistory.Select(x=>new OrderHistoryItem(x.ChangedAtUtc,"Fecha prometida",$"{x.PreviousDateUtc:g} → {x.NewDateUtc:g}")))
             .Concat(deliveryHistory).Concat(payments.Select(x=>new OrderHistoryItem(x.ReceivedAtUtc,"Pago",$"Pago registrado por {PaymentMethodText(x.Method)} · Bs {x.Amount:0.00}"))).OrderByDescending(x=>x.AtUtc).ToList();
         var lines=o.Lines.Where(x=>x.IsActive).Select(x=>{var r=o.Reservations.FirstOrDefault(r=>r.OrderLineId==x.Id&&r.IsActive);return new OrderLineDetail(x.Id,x.ProductId,x.ProductName,x.SaleQuantity,x.ReplacementQuantity,x.TastingQuantity,x.Quantity,x.StandardUnitPrice,x.SoldUnitPrice,x.UnitDiscount,x.DiscountReason,x.ReplacementReason,x.ReplacementNotes,x.TastingReason,x.TastingNotes,r?.ReservedQuantity??0,r?.ShortageQuantity??0);}).ToList();
-        return new(o.Id,o.Number,o.CustomerId,o.DeliveryPointId,o.ContactId,o.PaymentResponsiblePartyId,customer,point,contact,delivery?.Driver,delivery?.Status,o.Status.ToString(),PaymentStatus(paid,balance,payments.Count),paymentMethod,paid,balance,receivable?.Version??1,o.PromisedAtUtc,o.Notes,o.Version,lines,history,o.Reservations.Where(x=>x.IsActive).Sum(x=>x.ShortageQuantity));
+        return new(o.Id,o.Number,o.CustomerId,o.DeliveryPointId,o.ContactId,o.PaymentResponsiblePartyId,customer,point,contact,delivery?.Driver,delivery?.Status,o.Status.ToString(),PaymentStatus(paid,balance,payments.Count),paymentMethod,paid,balance,receivable?.Version??1,o.PromisedAtUtc,o.Notes,o.Version,lines,history,o.Reservations.Where(x=>x.IsActive).Sum(x=>x.ShortageQuantity),o.DeliveryFee);
     }
     public async Task<IReadOnlyList<OrderListItem>> ListAsync(CancellationToken ct=default)
     {
-        var orders=await db.Orders.AsNoTracking().Where(x=>x.ArchivedAtUtc==null).OrderByDescending(x=>x.CreatedAtUtc).Select(x=>new {x.Id,x.Number,x.CustomerId,x.DeliveryPointId,x.ContactId,Status=x.Status.ToString(),x.PromisedAtUtc,x.Notes,x.CreatedAtUtc,x.Version,Total=x.Lines.Where(l=>l.IsActive).Sum(l=>l.SoldUnitPrice*l.SaleQuantity),Sale=x.Lines.Where(l=>l.IsActive).Sum(l=>l.SaleQuantity),Replacement=x.Lines.Where(l=>l.IsActive).Sum(l=>l.ReplacementQuantity),Tasting=x.Lines.Where(l=>l.IsActive).Sum(l=>l.TastingQuantity),Quantity=x.Lines.Where(l=>l.IsActive).Sum(l=>l.Quantity),Products=x.Lines.Where(l=>l.IsActive).Select(l=>l.ProductName).ToList()}).ToListAsync(ct);
+        var orders=await db.Orders.AsNoTracking().Where(x=>x.ArchivedAtUtc==null).OrderByDescending(x=>x.CreatedAtUtc).Select(x=>new {x.Id,x.Number,x.CustomerId,x.DeliveryPointId,x.ContactId,Status=x.Status.ToString(),x.PromisedAtUtc,x.Notes,x.CreatedAtUtc,x.Version,Total=x.Lines.Where(l=>l.IsActive).Sum(l=>l.SoldUnitPrice*l.SaleQuantity)+x.DeliveryFee,Sale=x.Lines.Where(l=>l.IsActive).Sum(l=>l.SaleQuantity),Replacement=x.Lines.Where(l=>l.IsActive).Sum(l=>l.ReplacementQuantity),Tasting=x.Lines.Where(l=>l.IsActive).Sum(l=>l.TastingQuantity),Quantity=x.Lines.Where(l=>l.IsActive).Sum(l=>l.Quantity),Products=x.Lines.Where(l=>l.IsActive).Select(l=>l.ProductName).ToList()}).ToListAsync(ct);
         var ids=orders.Select(x=>x.Id).ToList(); var customerIds=orders.Select(x=>x.CustomerId).Distinct().ToList(); var pointIds=orders.Where(x=>x.DeliveryPointId!=null).Select(x=>x.DeliveryPointId!.Value).Distinct().ToList();
         var customers=await db.Customers.AsNoTracking().Where(x=>customerIds.Contains(x.Id)).ToDictionaryAsync(x=>x.Id,x=>x.Name,ct);
         var points=await db.DeliveryPoints.AsNoTracking().Where(x=>pointIds.Contains(x.Id)).ToDictionaryAsync(x=>x.Id,x=>new{x.Label,x.Location,x.ContactId},ct);

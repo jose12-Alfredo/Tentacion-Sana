@@ -20,6 +20,7 @@ public sealed class Order
     public OrderPaymentStatus PaymentStatus { get; private set; }
     public DateTimeOffset? PromisedAtUtc { get; private set; }
     public string? Notes { get; private set; }
+    public decimal DeliveryFee { get; private set; }
     public DateTimeOffset CreatedAtUtc { get; private set; }
     public DateTimeOffset UpdatedAtUtc { get; private set; }
     public Guid CreatedByUserId { get; private set; }
@@ -72,6 +73,28 @@ public sealed class Order
         if (customerId != CustomerId) ChangeHistory.Add(OrderChangeHistory.Create(Id, "CustomerId", CustomerId.ToString(), customerId.ToString(), userId, "Edición del borrador.", now));
         CustomerId = customerId; DeliveryPointId = deliveryPointId; ContactId = contactId; PaymentResponsiblePartyId = payerId;
         PromisedAtUtc = promisedAtUtc; Notes = string.IsNullOrWhiteSpace(notes) ? null : notes.Trim(); Touch(userId, now);
+    }
+
+    public void SetDeliveryFee(decimal fee, Guid userId, DateTimeOffset now)
+    {
+        EnsureDraft();
+        ChangeDeliveryFee(fee, "Edición del borrador.", userId, now);
+    }
+
+    public void ReviseDeliveryFee(decimal fee, string reason, Guid userId, DateTimeOffset now)
+    {
+        EnsureModifiable(reason);
+        ChangeDeliveryFee(fee, reason, userId, now);
+    }
+
+    private void ChangeDeliveryFee(decimal fee, string reason, Guid userId, DateTimeOffset now)
+    {
+        if (fee < 0 || fee > 9999999999.99m || decimal.Round(fee, 2) != fee)
+            throw new ArgumentException("El costo de envío debe ser un importe válido, no negativo y con máximo dos decimales.");
+        if (fee == DeliveryFee) return;
+        ChangeHistory.Add(OrderChangeHistory.Create(Id, "DeliveryFee", DeliveryFee.ToString("0.00", System.Globalization.CultureInfo.InvariantCulture), fee.ToString("0.00", System.Globalization.CultureInfo.InvariantCulture), userId, reason, now));
+        DeliveryFee = fee;
+        Touch(userId, now);
     }
 
     public void RemoveLine(Guid lineId, Guid userId, DateTimeOffset now) { EnsureDraft(); var line = Lines.SingleOrDefault(x => x.Id == lineId) ?? throw new ArgumentException("La línea no existe."); Lines.Remove(line); ChangeHistory.Add(OrderChangeHistory.Create(Id, "LineRemoved", line.ProductName, null, userId, "Edición del borrador.", now)); Touch(userId, now); }
