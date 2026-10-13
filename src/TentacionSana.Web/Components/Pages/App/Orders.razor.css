@@ -91,3 +91,5 @@
 }
 @media(max-width:600px){.create-panel footer a{width:100%}}
 .status-draft{background:#e9edf0;color:#50606a}
+
+.money-cell .fee-breakdown{display:block;margin-top:.2rem;color:#667085;font-size:.66rem;font-weight:500;white-space:normal;line-height:1.3}

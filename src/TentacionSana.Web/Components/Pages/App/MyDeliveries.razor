@@ -87,7 +87,7 @@ else
                     </span>
                     <span class="delivery-units"><strong>@(IsCompleted(item) ? item.DeliveredQuantity : item.PendingQuantity)</strong><small>@(IsCompleted(item) ? "entregadas" : "por entregar")</small></span>
                     <span class="delivery-date @DeliveryDateClass(item)"><strong>@DeliveryDateLabel(item)</strong><small>@item.ScheduledAtUtc.ToLocalTime().ToString("HH:mm")</small></span>
-                    <span class="delivery-balance"><strong>Saldo @Money(item.Balance)</strong><small>Total @Money(item.Total) · Cobrado @Money(item.Paid)</small></span>
+                    <span class="delivery-balance"><strong>Saldo @Money(item.Balance)</strong><small>Total @Money(item.Total) · Cobrado @Money(item.Paid)</small>@if (item.DeliveryFee > 0) { <small class="fee-breakdown">Productos @Money(item.Total - item.DeliveryFee) + envío @Money(item.DeliveryFee)</small> }</span>
                     <span class="delivery-states"><span class="delivery-status @StatusClass(item.Status)">@StatusText(item.Status)</span><span class="payment-status @PaymentStatusClass(item)">@PaymentStatusText(item)</span></span>
                     <span class="delivery-action"><span class="row-action">@(IsCompleted(item) ? "Ver detalle" : item.Status == "InRoute" ? "Continuar entrega" : "Iniciar entrega") <b aria-hidden="true">›</b></span><small>@(item.DeliveryEvidenceCount + item.PaymentEvidenceCount) evidencia(s)</small></span>
                 </button>
@@ -106,7 +106,7 @@ else
 
                         <section class="financial-summary">
                             <header><div><span>COBRO DEL PEDIDO</span><h3>@PaymentStatusText(_detail)</h3></div><span class="payment-status @PaymentStatusClass(_detail)">@PaymentStatusText(_detail)</span></header>
-                            <dl><div><dt>Total</dt><dd>@Money(_detail.Total)</dd></div><div><dt>Cobrado</dt><dd class="paid">@Money(_detail.Paid)</dd></div><div><dt>Saldo pendiente</dt><dd class="pending">@Money(_detail.Balance)</dd></div></dl>
+                            <dl>@if (_detail.DeliveryFee > 0) { <div><dt>Productos</dt><dd>@Money(_detail.Total - _detail.DeliveryFee)</dd></div><div><dt>Envío</dt><dd>@Money(_detail.DeliveryFee)</dd></div> }<div><dt>Total</dt><dd>@Money(_detail.Total)</dd></div><div><dt>Cobrado</dt><dd class="paid">@Money(_detail.Paid)</dd></div><div><dt>Saldo pendiente</dt><dd class="pending">@Money(_detail.Balance)</dd></div></dl>
                             @if (_detail.Payments is { Count: > 0 })
                             {
                                 <ul class="delivery-payment-history">

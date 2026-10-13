@@ -650,7 +650,7 @@ public sealed class DeliveryService(ApplicationDbContext db, TimeProvider clock,
                 (order.Status is OrderStatus.Confirmed or OrderStatus.InPreparation or OrderStatus.Ready or OrderStatus.OutForDelivery) &&
                 totalPending > 0 && !string.IsNullOrWhiteSpace(point?.Location);
             var hasLocation = Uri.TryCreate(point?.Location, UriKind.Absolute, out var locationUri) && locationUri.Scheme is "http" or "https";
-            items.Add(new DeliveryBoardItem(order.Id, latest?.Id, routeStop?.DeliveryRouteId, routeStop?.Position, order.Number, customers.GetValueOrDefault(order.CustomerId, "Cliente"), point?.Label, order.DeliveryPointId, point?.Address, point?.Reference, point?.Location, coordinate?.Latitude, coordinate?.Longitude, contact?.Name, contact?.Phone, pending.Sale, pending.Replacement, pending.Tasting, balance, status, latest?.DriverUserId, latest?.DriverUserId is { } driverId ? drivers.GetValueOrDefault(driverId) : null, latest?.Version ?? 0, canAdd, hasLocation, latest?.CompletedAtUtc, order.PromisedAtUtc, total, paid));
+            items.Add(new DeliveryBoardItem(order.Id, latest?.Id, routeStop?.DeliveryRouteId, routeStop?.Position, order.Number, customers.GetValueOrDefault(order.CustomerId, "Cliente"), point?.Label, order.DeliveryPointId, point?.Address, point?.Reference, point?.Location, coordinate?.Latitude, coordinate?.Longitude, contact?.Name, contact?.Phone, pending.Sale, pending.Replacement, pending.Tasting, balance, status, latest?.DriverUserId, latest?.DriverUserId is { } driverId ? drivers.GetValueOrDefault(driverId) : null, latest?.Version ?? 0, canAdd, hasLocation, latest?.CompletedAtUtc, order.PromisedAtUtc, total, paid, order.DeliveryFee));
         }
         return new DeliveryBoard(referenceDate, items, deliveredToday, collectedToday);
     }
@@ -763,6 +763,7 @@ public sealed class DeliveryService(ApplicationDbContext db, TimeProvider clock,
                 Reference=db.DeliveryPoints.Where(p=>p.Id==db.Orders.Where(o=>o.Id==x.OrderId).Select(o=>o.DeliveryPointId).FirstOrDefault()).Select(p=>p.Reference).FirstOrDefault(),
                 Location=db.DeliveryPoints.Where(p=>p.Id==db.Orders.Where(o=>o.Id==x.OrderId).Select(o=>o.DeliveryPointId).FirstOrDefault()).Select(p=>p.Location).FirstOrDefault(),
                 RoutePosition=db.DeliveryRouteStops.Where(stop=>stop.DeliveryId==x.Id).Select(stop=>(int?)stop.Position).FirstOrDefault(),
+                DeliveryFee=db.Orders.Where(order=>order.Id==x.OrderId).Select(order=>order.DeliveryFee).Single(),
                 Total=(db.OrderLines.Where(line=>line.OrderId==x.OrderId&&line.IsActive).Sum(line=>(decimal?)(line.SaleQuantity*line.SoldUnitPrice))??0)
                     + db.Orders.Where(order=>order.Id==x.OrderId).Select(order=>order.DeliveryFee).Single(),
                 Paid=db.PaymentAllocations.Where(allocation=>allocation.OrderId==x.OrderId&&db.Payments.Any(payment=>payment.Id==allocation.PaymentId&&payment.Status==PaymentStatus.Confirmed)).Sum(allocation=>(decimal?)allocation.Amount)??0,
@@ -775,7 +776,7 @@ public sealed class DeliveryService(ApplicationDbContext db, TimeProvider clock,
         return items.Select(x =>
         {
             var coordinate = coordinateTasks[x.Id].Result;
-            return new DeliveryItem(x.Id,x.Number,x.Customer,x.Status,x.DriverUserId,x.DriverName,x.ScheduledAtUtc,x.Pending,x.Version,x.RoutePosition,x.Total,x.Paid,Math.Max(0,x.Total-x.Paid),x.DeliveryEvidenceCount,x.PaymentEvidenceCount,x.PaymentMethod,x.Delivered,x.DeliveryPoint,x.DeliveryPointId,x.Address,x.Reference,x.Location,coordinate?.Latitude,coordinate?.Longitude);
+            return new DeliveryItem(x.Id,x.Number,x.Customer,x.Status,x.DriverUserId,x.DriverName,x.ScheduledAtUtc,x.Pending,x.Version,x.RoutePosition,x.Total,x.Paid,Math.Max(0,x.Total-x.Paid),x.DeliveryEvidenceCount,x.PaymentEvidenceCount,x.PaymentMethod,x.Delivered,x.DeliveryPoint,x.DeliveryPointId,x.Address,x.Reference,x.Location,coordinate?.Latitude,coordinate?.Longitude,x.DeliveryFee);
         }).ToList();
     }
 
@@ -804,6 +805,7 @@ public sealed class DeliveryService(ApplicationDbContext db, TimeProvider clock,
                 ContactPhone = db.Orders.Where(order => order.Id == delivery.OrderId)
                     .Select(order => db.CustomerContacts.Where(contact => contact.Id == order.ContactId).Select(contact => contact.Phone).SingleOrDefault()).Single(),
                 Notes = db.Orders.Where(order => order.Id == delivery.OrderId).Select(order => order.Notes).Single(),
+                DeliveryFee = db.Orders.Where(order => order.Id == delivery.OrderId).Select(order => order.DeliveryFee).Single(),
                 DriverName = db.Users.Where(user => user.Id == delivery.DriverUserId).Select(user => user.DisplayName).SingleOrDefault(),
                 Total = (db.OrderLines.Where(line => line.OrderId == delivery.OrderId && line.IsActive)
                     .Sum(line => (decimal?)(line.SaleQuantity * line.SoldUnitPrice)) ?? 0)
@@ -830,7 +832,7 @@ public sealed class DeliveryService(ApplicationDbContext db, TimeProvider clock,
         return new DeliveryDetail(header.Id, header.OrderId, header.OrderNumber, header.CustomerName, header.Address, header.Location,
             header.ContactName, header.ContactPhone, header.Notes, header.Status, header.DriverUserId, header.DriverName,
             header.ScheduledAtUtc, header.Version, lines, evidence, history, Math.Max(0, header.Total - payments),
-            header.ReceivableVersion, header.Total, payments, paymentItems);
+            header.ReceivableVersion, header.Total, payments, paymentItems, header.DeliveryFee);
     }
 
     public async Task<IReadOnlyList<DeliveryOrderOption>> SchedulableOrdersAsync(CancellationToken cancellationToken = default)

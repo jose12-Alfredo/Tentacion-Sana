@@ -295,7 +295,7 @@ else
                                     </td>
                                     <td><span class="promise-date @DueClass(item)">@DueText(item)</span></td>
                                     <td><strong>@Physical(item) uds</strong><small>@Breakdown(item)</small></td>
-                                    <td><strong class="money-value">@Money(item.Balance)</strong>@if (HasPartialPayment(item)) { <small>saldo pendiente</small> }</td>
+                                    <td><strong class="money-value">@Money(item.Balance)</strong>@if (HasPartialPayment(item)) { <small>saldo pendiente</small> }@if (item.DeliveryFee > 0) { <small class="fee-breakdown">Total @Money(item.Total): productos @Money(item.Total - item.DeliveryFee) + envío @Money(item.DeliveryFee)</small> }</td>
                                     <td><span class="@($"delivery-status {StatusClass(BoardStatusKey(item))}")">@BoardStatusText(item)</span></td>
                                     <td>@if (CanAssignDriver(item)) { <button class="driver-trigger @(item.DriverUserId is null ? "unassigned" : null)" @onclick="() => OpenDriverDialog(item)">@DriverName(item)</button> } else { <span class="driver-readonly">@DriverName(item)</span> }</td>
                                     <td>
@@ -335,7 +335,7 @@ else
                             </div>
                             <div class="mobile-facts">
                                 <div class="mobile-fact"><small>Unidades</small><strong>@Physical(item) uds</strong><span>@Breakdown(item)</span></div>
-                                <div class="mobile-fact"><small>Total a cobrar</small><strong>@Money(item.Balance)</strong>@if (HasPartialPayment(item)) { <span>saldo pendiente</span> }</div>
+                                <div class="mobile-fact"><small>Total a cobrar</small><strong>@Money(item.Balance)</strong>@if (HasPartialPayment(item)) { <span>saldo pendiente</span> }@if (item.DeliveryFee > 0) { <span class="fee-breakdown">Total @Money(item.Total): productos @Money(item.Total - item.DeliveryFee) + envío @Money(item.DeliveryFee)</span> }</div>
                             </div>
                             <div class="mobile-driver"><span>Repartidor</span>@if (CanAssignDriver(item)) { <button class="driver-trigger @(item.DriverUserId is null ? "unassigned" : null)" @onclick="() => OpenDriverDialog(item)">@DriverName(item)</button> } else { <strong>@DriverName(item)</strong> }</div>
                             <div class="mobile-actions">
