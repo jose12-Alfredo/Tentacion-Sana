@@ -18,3 +18,7 @@
 .report-panel>.modal-actions{position:sticky;bottom:0;z-index:2;margin-top:1rem;background:#fff}
 @media(max-width:760px){.report-panel{max-height:94dvh}}
 @media(prefers-reduced-motion:reduce){*{scroll-behavior:auto!important}}
+.evidence-view-button{cursor:pointer;padding:.35rem .2rem;border:0;background:none;color:#246b45;text-decoration:underline;font-weight:700}
+.receivables-photo-overlay{position:fixed;inset:0;z-index:1200;display:grid;place-items:center;padding:1rem;background:#102316a6}
+.receivables-photo-dialog{display:flex;flex-direction:column;width:min(90vw,920px);max-height:calc(100vh - 2rem);padding:1rem;border-radius:14px;background:#fff;box-shadow:0 20px 50px #0004}
+.receivables-photo-dialog>div{display:flex;align-items:center;justify-content:space-between;gap:1rem;margin-bottom:.8rem}.receivables-photo-dialog h2{margin:0;font-size:1.1rem}.receivables-photo-dialog button{cursor:pointer;padding:.45rem .7rem;border:1px solid #b8ccb9;border-radius:8px;background:#fff;color:#246b45;font-weight:700}.receivables-photo-dialog img{display:block;max-width:100%;max-height:calc(100vh - 7rem);margin:auto;object-fit:contain}

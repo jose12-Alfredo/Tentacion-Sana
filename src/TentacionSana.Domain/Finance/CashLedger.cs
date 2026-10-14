@@ -2,7 +2,7 @@ namespace TentacionSana.Domain.Finance;
 
 public enum CashAccount { Bank, Cash }
 public enum CashDirection { Income, Expense }
-public enum CashSource { CustomerPayment, InventoryPurchase, Manual, Transfer, CashCountAdjustment, BalanceMigrationAdjustment }
+public enum CashSource { CustomerPayment, InventoryPurchase, Manual, Transfer, CashCountAdjustment, BalanceMigrationAdjustment, RenditionRepayment }
 
 public sealed class CashMovement
 {
@@ -17,6 +17,7 @@ public sealed class CashMovement
     public decimal Amount { get; private set; }
     public Guid? PaymentId { get; private set; }
     public Guid? SupplyPurchaseId { get; private set; }
+    public Guid? CashPayableId { get; private set; }
     public Guid? TransferId { get; private set; }
     public Guid? AccountingAccountId { get; private set; }
     public string EvidencePublicId { get; private set; } = "";
@@ -29,14 +30,14 @@ public sealed class CashMovement
     public static CashMovement Create(CashAccount account, CashDirection direction, CashSource source, DateTimeOffset occurredAtUtc,
         string detail, decimal amount, string publicId, string fileName, string format, long bytes, Guid userId,
         DateTimeOffset registeredAtUtc, Guid? paymentId = null, Guid? supplyPurchaseId = null, string category = "", Guid? transferId = null,
-        Guid? accountingAccountId = null)
+        Guid? accountingAccountId = null, Guid? cashPayableId = null)
     {
         if (string.IsNullOrWhiteSpace(detail)) throw new ArgumentException("El detalle es obligatorio.");
         if (amount <= 0) throw new ArgumentException("El monto debe ser mayor que cero.");
         if (source != CashSource.BalanceMigrationAdjustment && string.IsNullOrWhiteSpace(publicId)) throw new ArgumentException("La foto del respaldo es obligatoria.");
         return new CashMovement { Id = Guid.NewGuid(), Account = account, Direction = direction, Source = source,
             OccurredAtUtc = occurredAtUtc, Detail = detail.Trim(), Category = category.Trim(), Amount = decimal.Round(amount, 2), PaymentId = paymentId, TransferId=transferId, AccountingAccountId=accountingAccountId,
-            SupplyPurchaseId = supplyPurchaseId, EvidencePublicId = publicId, EvidenceFileName = Path.GetFileName(fileName),
+            SupplyPurchaseId = supplyPurchaseId, CashPayableId = cashPayableId, EvidencePublicId = publicId, EvidenceFileName = Path.GetFileName(fileName),
             EvidenceFormat = format, EvidenceBytes = bytes, RegisteredByUserId = userId, RegisteredAtUtc = registeredAtUtc };
     }
 
@@ -103,6 +104,9 @@ public sealed class CashPayable
     public string PersonName { get; private set; } = "";
     public decimal Amount { get; private set; }
     public PayableStatus Status { get; private set; }
+    public decimal PaidAmount { get; private set; }
+    public int Version { get; private set; }
+    public decimal Balance => Amount - PaidAmount;
     public string EvidencePublicId { get; private set; } = "";
     public string EvidenceFileName { get; private set; } = "";
     public string EvidenceFormat { get; private set; } = "";
@@ -115,5 +119,13 @@ public sealed class CashPayable
         if (amount <= 0) throw new ArgumentException("El monto de la rendición debe ser mayor que cero.");
         if (string.IsNullOrWhiteSpace(publicId)) throw new ArgumentException("La foto de la rendición es obligatoria.");
         return new() { Id = Guid.NewGuid(), SupplyPurchaseId = purchaseId, PersonName = person.Trim(), Amount = decimal.Round(amount, 2), Status = PayableStatus.Pending, EvidencePublicId=publicId,EvidenceFileName=Path.GetFileName(fileName),EvidenceFormat=format,EvidenceBytes=bytes,CreatedAtUtc = now, CreatedByUserId = userId };
+    }
+    public void ApplyPayment(decimal amount)
+    {
+        amount = decimal.Round(amount, 2);
+        if (amount <= 0 || amount > Balance) throw new ArgumentException("El pago debe ser mayor que cero y no superar el saldo pendiente.");
+        PaidAmount += amount;
+        Status = Balance == 0 ? PayableStatus.Paid : PayableStatus.Pending;
+        Version++;
     }
 }

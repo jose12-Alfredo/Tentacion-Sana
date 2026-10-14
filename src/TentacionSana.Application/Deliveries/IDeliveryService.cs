@@ -24,6 +24,7 @@ public interface IDeliveryService
     Task<IReadOnlyList<DriverOption>> DriverOptionsAsync(Guid? includeCurrentUserId = null, CancellationToken cancellationToken = default);
     Task<IReadOnlyList<ReceivableItem>> ReceivablesAsync(CancellationToken cancellationToken = default);
     Task<IReadOnlyList<PaymentHistoryItem>> PaymentsAsync(Guid orderId, CancellationToken cancellationToken = default);
+    Task<IReadOnlyList<EvidenceItem>> GetOrderEvidenceAsync(Guid orderId, CancellationToken cancellationToken = default);
     Task<SignedEvidenceResult> GetPaymentEvidenceUrlAsync(Guid evidenceId, Guid userId, CancellationToken cancellationToken = default);
     Task<EvidenceContentResult> GetPaymentEvidenceContentAsync(Guid evidenceId, Guid userId, CancellationToken cancellationToken = default);
 }

@@ -38,7 +38,7 @@ public sealed record ReservationDemand(Guid ReservationId,Guid OrderId,int Short
 public sealed record ReservationAssignment(Guid ReservationId,Guid OrderId,int Quantity);
 public sealed record CreateSupplyCommand(string Name,string BaseUnit,string PurchasePresentation,decimal BaseQuantityPerPackage);
 public sealed record UpdateSupplyCommand(Guid SupplyId,string Name,string BaseUnit,string PurchasePresentation,decimal BaseQuantityPerPackage);
-public sealed record PurchaseCommand(Guid SupplyId,DateTimeOffset PurchasedAtUtc,string BaseUnit,string PurchasePresentation,decimal BaseQuantityPerPackage,decimal PackageQuantity,decimal UnitPrice,string PaymentMethod="",string? RenditionPerson=null,Stream? EvidenceContent=null,string? EvidenceFileName=null,string? EvidenceContentType=null,long EvidenceLength=0);
+public sealed record PurchaseCommand(Guid SupplyId,DateTimeOffset PurchasedAtUtc,string BaseUnit,string PurchasePresentation,decimal BaseQuantityPerPackage,decimal PackageQuantity,decimal UnitPrice,string PaymentMethod="",Stream? EvidenceContent=null,string? EvidenceFileName=null,string? EvidenceContentType=null,long EvidenceLength=0);
 public sealed record SupplyCountCommand(Guid SupplyId,decimal CountedQuantity,string Reason,decimal? PricePerPackage=null);
 public sealed record RecipeLineCommand(Guid SupplyId,decimal RequiredQuantity);
 public sealed record SaveRecipeCommand(Guid ProductId,string Name,decimal YieldQuantity,IReadOnlyList<RecipeLineCommand> Lines);

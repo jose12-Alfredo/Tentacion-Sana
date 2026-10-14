@@ -1388,6 +1388,9 @@ namespace TentacionSana.Infrastructure.Persistence.Migrations
                         .HasMaxLength(80)
                         .HasColumnType("character varying(80)");
 
+                    b.Property<Guid?>("CashPayableId")
+                        .HasColumnType("uuid");
+
                     b.Property<string>("Detail")
                         .IsRequired()
                         .HasMaxLength(500)
@@ -1443,6 +1446,8 @@ namespace TentacionSana.Infrastructure.Persistence.Migrations
 
                     b.HasIndex("AccountingAccountId");
 
+                    b.HasIndex("CashPayableId");
+
                     b.HasIndex("PaymentId")
                         .IsUnique();
 
@@ -1465,6 +1470,14 @@ namespace TentacionSana.Infrastructure.Persistence.Migrations
                     b.Property<decimal>("Amount")
                         .HasPrecision(14, 2)
                         .HasColumnType("numeric(14,2)");
+
+                    b.Property<decimal>("PaidAmount")
+                        .HasPrecision(14, 2)
+                        .HasColumnType("numeric(14,2)");
+
+                    b.Property<int>("Version")
+                        .IsConcurrencyToken()
+                        .HasColumnType("integer");
 
                     b.Property<DateTimeOffset>("CreatedAtUtc")
                         .HasColumnType("timestamp with time zone");
@@ -1504,6 +1517,8 @@ namespace TentacionSana.Infrastructure.Persistence.Migrations
                         .HasColumnType("uuid");
 
                     b.HasKey("Id");
+
+                    b.HasIndex("CreatedByUserId");
 
                     b.HasIndex("SupplyPurchaseId")
                         .IsUnique();
@@ -2931,6 +2946,11 @@ namespace TentacionSana.Infrastructure.Persistence.Migrations
                     b.HasOne("TentacionSana.Domain.Finance.AccountingAccount", null)
                         .WithMany()
                         .HasForeignKey("AccountingAccountId")
+                        .OnDelete(DeleteBehavior.Restrict);
+
+                    b.HasOne("TentacionSana.Domain.Finance.CashPayable", null)
+                        .WithMany()
+                        .HasForeignKey("CashPayableId")
                         .OnDelete(DeleteBehavior.Restrict);
                 });
 

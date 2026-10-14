@@ -452,6 +452,8 @@ app.MapGet("/media/payment-evidence/{evidenceId:guid}", GetPaymentEvidenceAsync)
     .RequireAuthorization(AppPolicies.InternalAccess);
 app.MapGet("/media/cash-evidence/{movementId:guid}", GetCashEvidenceAsync)
     .RequireAuthorization(AppPolicies.InternalAccess);
+app.MapGet("/media/payable-evidence/{payableId:guid}", GetPayableEvidenceAsync)
+    .RequireAuthorization(AppPolicies.ManageFinance);
 app.MapGet("/health", () => Results.Ok()).AllowAnonymous();
 
 app.Run();
@@ -483,6 +485,12 @@ static async Task<IResult> GetCashEvidenceAsync(Guid movementId, ClaimsPrincipal
     var userId = CurrentUserId(user);
     if (userId is null) return Results.Unauthorized();
     var evidence = await cashLedger.GetEvidenceContentAsync(movementId, userId.Value, cancellationToken);
+    return EvidenceFile(evidence.Succeeded, evidence.Content, evidence.ContentType);
+}
+
+static async Task<IResult> GetPayableEvidenceAsync(Guid payableId, ICashLedgerService cashLedger, CancellationToken cancellationToken)
+{
+    var evidence = await cashLedger.GetPayableEvidenceContentAsync(payableId, cancellationToken);
     return EvidenceFile(evidence.Succeeded, evidence.Content, evidence.ContentType);
 }
 

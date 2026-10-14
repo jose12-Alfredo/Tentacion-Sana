@@ -3,6 +3,7 @@
 @rendermode InteractiveServer
 @attribute [Authorize(Policy=AppPolicies.ManageFinance)]
 @inject IReceivablesService AccountService
+@inject IDeliveryService DeliveryService
 @inject AuthenticationStateProvider Auth
 @inject IJSRuntime JS
 
@@ -171,7 +172,7 @@ else
             <div class="history-actions"><button @onclick="OpenHistoricalReport">Generar estado con historial</button></div>
             <h3>Pagos y aplicaciones</h3>
             @if (_history.Payments.Count == 0) { <p class="empty-inline">Todav&iacute;a no hay pagos registrados.</p> }
-            else { <ul class="history-list">@foreach (var payment in _history.Payments) { <li><div><strong>@Money(payment.Amount) &middot; @MethodText(payment.Method)</strong><span>@payment.PaymentDateUtc.ToLocalTime().ToString("dd/MM/yyyy HH:mm")</span>@if (!string.IsNullOrWhiteSpace(payment.Notes)) { <small>@payment.Notes</small> }</div><p>@string.Join(" \u00B7 ", payment.Applications.Select(x => $"#{x.OrderNumber}: {Money(x.Amount)}"))</p></li> }</ul> }
+            else { <ul class="history-list">@foreach (var payment in _history.Payments) { <li><div><strong>@Money(payment.Amount) &middot; @MethodText(payment.Method)</strong><span>@payment.PaymentDateUtc.ToLocalTime().ToString("dd/MM/yyyy HH:mm")</span>@if (!string.IsNullOrWhiteSpace(payment.Notes)) { <small>@payment.Notes</small> }</div><p>@string.Join(" \u00B7 ", payment.Applications.Select(x => $"#{x.OrderNumber}: {Money(x.Amount)}"))</p>@if (payment.EvidenceId is { } evidenceId) { <button type="button" class="evidence-view-button" @onclick="() => ViewPaymentPhotoAsync(evidenceId)">Ver comprobante</button> }</li> }</ul> }
             <h3>Reportes generados</h3>
             @if (_history.Reports.Count == 0) { <p class="empty-inline">Todav&iacute;a no hay reportes auditados.</p> }
             else { <ul class="history-list reports">@foreach (var report in _history.Reports) { <li><div><strong>@report.ReportNumber</strong><span>@report.GeneratedAtUtc.ToLocalTime().ToString("dd/MM/yyyy HH:mm")</span></div><p>@ReportTypeText(report.Type) &middot; @report.OrderCount pedido(s) &middot; saldo @Money(report.BalanceAtGeneration)</p></li> }</ul> }
@@ -179,7 +180,18 @@ else
     </div>
 }
 
+@if (_historyPhotoUrl is not null)
+{
+    <div class="receivables-photo-overlay" @onclick="CloseHistoryPhoto"><section class="receivables-photo-dialog" role="dialog" aria-modal="true" aria-label="Comprobante de pago" @onclick:stopPropagation>
+        <div><h2>Comprobante de pago</h2><button type="button" @onclick="CloseHistoryPhoto">Cerrar ×</button></div>
+        <img src="@_historyPhotoUrl" alt="Comprobante de pago" />
+    </section></div>
+}
+
 @code {
+    private string? _historyPhotoUrl;
+    private async Task ViewPaymentPhotoAsync(Guid evidenceId) { var result = await DeliveryService.GetPaymentEvidenceUrlAsync(evidenceId, await CurrentUserIdAsync()); if (result.Succeeded) _historyPhotoUrl = result.Url; else SetMessage(string.Join(" ", result.Errors), true); }
+    private void CloseHistoryPhoto() => _historyPhotoUrl = null;
     private ReceivablesOverview? _overview;
     private string _search = string.Empty, _customer = "All", _branch = "All", _status = "All", _age = "All";
     private string? _message; private bool _isError, _saving;

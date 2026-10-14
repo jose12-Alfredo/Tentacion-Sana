@@ -75,6 +75,20 @@ public sealed class CashLedgerTests
     }
 
     [Fact]
+    public void RenditionPaymentsReduceBalanceAndCloseDebt()
+    {
+        var payable = CashPayable.Create(Guid.NewGuid(), "María", 100m, "foto", "x.jpg", "jpg", 1, Guid.NewGuid(), DateTimeOffset.UtcNow);
+        payable.ApplyPayment(40m);
+        Assert.Equal(60m, payable.Balance);
+        Assert.Equal(PayableStatus.Pending, payable.Status);
+        Assert.Throws<ArgumentException>(() => payable.ApplyPayment(60.01m));
+        payable.ApplyPayment(60m);
+        Assert.Equal(0m, payable.Balance);
+        Assert.Equal(PayableStatus.Paid, payable.Status);
+        Assert.Throws<ArgumentException>(() => payable.ApplyPayment(1m));
+    }
+
+    [Fact]
     public void TransferPairKeepsSameAmountAndInternalReference()
     {
         var transferId=Guid.NewGuid();var now=DateTimeOffset.UtcNow;var user=Guid.NewGuid();

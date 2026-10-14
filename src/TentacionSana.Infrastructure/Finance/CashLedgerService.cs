@@ -25,7 +25,7 @@ public sealed class CashLedgerService(ApplicationDbContext db, IOptions<Cloudina
         var all = await ActiveMovements.AsNoTracking().Select(x => new { x.Account, x.Direction, x.Source, x.OccurredAtUtc, x.Amount }).ToListAsync(cancellationToken);
         decimal Balance(CashAccount account) => all.Where(x => x.Account == account).Sum(x => x.Direction == CashDirection.Income ? x.Amount : -x.Amount);
         var localNow=clock.GetLocalNow();var periodStart=new DateTimeOffset(localNow.Year,localNow.Month,1,0,0,0,localNow.Offset).ToUniversalTime();
-        var business=all.Where(x=>x.OccurredAtUtc>=periodStart&&x.Source is CashSource.CustomerPayment or CashSource.InventoryPurchase or CashSource.Manual).ToList();
+        var business=all.Where(x=>x.OccurredAtUtc>=periodStart&&x.Source is CashSource.CustomerPayment or CashSource.InventoryPurchase or CashSource.Manual or CashSource.RenditionRepayment).ToList();
         var paymentIds=rows.Where(x=>x.PaymentId!=null).Select(x=>x.PaymentId!.Value).ToList();
         var paymentOrders=await db.Payments.AsNoTracking().Where(x=>paymentIds.Contains(x.Id)).Select(x=>new{x.Id,x.OrderId}).ToDictionaryAsync(x=>x.Id,cancellationToken);
         var orderIds=paymentOrders.Values.Select(x=>x.OrderId).Distinct().ToList();
@@ -36,6 +36,59 @@ public sealed class CashLedgerService(ApplicationDbContext db, IOptions<Cloudina
         var income=business.Where(x=>x.Direction==CashDirection.Income).Sum(x=>x.Amount);var expense=business.Where(x=>x.Direction==CashDirection.Expense).Sum(x=>x.Amount);
         return new(Balance(CashAccount.Bank), Balance(CashAccount.Cash), income,expense,income-expense,
             rows.Select(x => new CashMovementItem(x.Id,x.Account.ToString(),x.Direction.ToString(),x.Source.ToString(),x.Category,x.OccurredAtUtc,Detail(x),x.Amount,x.TransferId,x.AccountingAccountId)).ToList(), payables);
+    }
+
+    public async Task<PayablesOverview> GetPayablesAsync(CancellationToken cancellationToken = default)
+    {
+        var payables = await db.CashPayables.AsNoTracking().OrderByDescending(x => x.CreatedAtUtc).ToListAsync(cancellationToken);
+        var userIds = payables.Select(x => x.CreatedByUserId).Distinct().ToList();
+        var names = await db.Users.AsNoTracking().Where(x => userIds.Contains(x.Id)).ToDictionaryAsync(x => x.Id, x => x.DisplayName, cancellationToken);
+        var purchaseIds = payables.Select(x => x.SupplyPurchaseId).ToList();
+        var purchases = await db.SupplyPurchases.AsNoTracking().Where(x => purchaseIds.Contains(x.Id))
+            .Select(x => new { x.Id, x.SupplyId, x.PurchasedAtUtc }).ToListAsync(cancellationToken);
+        var supplyIds = purchases.Select(x => x.SupplyId).Distinct().ToList();
+        var supplies = await db.Supplies.AsNoTracking().Where(x => supplyIds.Contains(x.Id)).ToDictionaryAsync(x => x.Id, x => x.Name, cancellationToken);
+        var purchaseById = purchases.ToDictionary(x => x.Id);
+        var users = payables.GroupBy(x => x.CreatedByUserId).Select(group => new PayableUserItem(group.Key,
+            names.GetValueOrDefault(group.Key) ?? group.First().PersonName, group.Sum(x => x.Amount), group.Sum(x => x.PaidAmount), group.Sum(x => x.Balance)))
+            .OrderByDescending(x => x.Balance).ThenBy(x => x.Name).ToList();
+        var items = payables.Select(x => new PayablePurchaseItem(x.Id, x.CreatedByUserId, x.SupplyPurchaseId,
+            purchaseById.TryGetValue(x.SupplyPurchaseId, out var purchase) ? supplies.GetValueOrDefault(purchase.SupplyId) ?? "Insumo" : "Insumo",
+            purchaseById.TryGetValue(x.SupplyPurchaseId, out var dated) ? dated.PurchasedAtUtc : x.CreatedAtUtc,
+            x.Amount, x.PaidAmount, x.Balance)).ToList();
+        var payments = await db.CashMovements.AsNoTracking().Where(x => x.CashPayableId != null)
+            .OrderByDescending(x => x.OccurredAtUtc).Select(x => new PayablePaymentItem(x.Id, x.CashPayableId!.Value, x.OccurredAtUtc, x.Account.ToString(), x.Amount))
+            .ToListAsync(cancellationToken);
+        return new(users, items, payments);
+    }
+
+    public async Task<CashResult> RepayPayableAsync(RepayPayableCommand command, Guid userId, CancellationToken cancellationToken = default)
+    {
+        if (command.Account is not ("Bank" or "Cash")) return Fail("Selecciona banco/QR o caja/efectivo.");
+        if (command.Amount <= 0 || decimal.Round(command.Amount, 2) <= 0) return Fail("El monto debe ser mayor que cero.");
+        if (command.PaidAtUtc > clock.GetUtcNow().AddMinutes(5)) return Fail("La fecha de devolución no puede ser futura.");
+        var payable = await db.CashPayables.SingleOrDefaultAsync(x => x.Id == command.PayableId, cancellationToken);
+        if (payable is null) return Fail("La rendición no existe.");
+        if (decimal.Round(command.Amount, 2) > payable.Balance) return Fail("El monto supera el saldo pendiente.");
+        var upload = await Upload(command.EvidenceContent, command.EvidenceFileName, command.EvidenceContentType, command.EvidenceLength, "rendiciones", cancellationToken);
+        if (!upload.Ok) return Fail(upload.Error!);
+        try
+        {
+            payable.ApplyPayment(command.Amount);
+            var now = clock.GetUtcNow();
+            var name = await db.Users.Where(x => x.Id == payable.CreatedByUserId).Select(x => x.DisplayName).SingleOrDefaultAsync(cancellationToken) ?? payable.PersonName;
+            var movement = CashMovement.Create(command.Account == "Bank" ? CashAccount.Bank : CashAccount.Cash,
+                CashDirection.Expense, CashSource.RenditionRepayment, command.PaidAtUtc,
+                $"Devolución de rendición a {name}", command.Amount, upload.PublicId!, command.EvidenceFileName, upload.Format!, upload.Bytes,
+                userId, now, category: "Devolución de rendición", cashPayableId: payable.Id);
+            db.CashMovements.Add(movement);
+            db.AuditEntries.Add(new AuditEntry { Id = Guid.NewGuid(), Action = "CashPayableRepaid", EntityType = "CashPayable", EntityId = payable.Id.ToString(), UserId = userId, OccurredAtUtc = now,
+                NewValuesJson = JsonSerializer.Serialize(new { movement.Id, command.Account, command.Amount, command.PaidAtUtc, payable.PaidAmount, payable.Status }) });
+            await db.SaveChangesAsync(cancellationToken);
+            return new(true, movement.Id, []);
+        }
+        catch (ArgumentException ex) { return Fail(ex.Message); }
+        catch (DbUpdateConcurrencyException) { return Fail("El saldo de esta rendición cambió. Actualiza la página e intenta nuevamente."); }
     }
 
     public async Task<CashResult> RegisterManualAsync(ManualCashMovementCommand command, Guid userId, CancellationToken cancellationToken = default)
@@ -214,6 +267,17 @@ public sealed class CashLedgerService(ApplicationDbContext db, IOptions<Cloudina
         if(evidence is null)return new(false,null,null,["El movimiento no existe."]);
         var downloaded=await CloudinaryPrivateMedia.DownloadAsync(options.Value,httpClientFactory,evidence.EvidencePublicId,evidence.EvidenceFormat,evidence.EvidenceFileName,clock.GetUtcNow().AddMinutes(5),cancellationToken);
         return downloaded is null?new(false,null,null,["No se pudo recuperar el respaldo."]):new(true,downloaded.Value.Content,downloaded.Value.ContentType,[]);
+    }
+
+    public async Task<CashEvidenceContentResult> GetPayableEvidenceContentAsync(Guid payableId, CancellationToken cancellationToken = default)
+    {
+        var evidence = await db.CashPayables.AsNoTracking().Where(x => x.Id == payableId)
+            .Select(x => new { x.EvidencePublicId, x.EvidenceFormat, x.EvidenceFileName }).SingleOrDefaultAsync(cancellationToken);
+        if (evidence is null) return new(false, null, null, ["La rendición no existe."]);
+        var downloaded = await CloudinaryPrivateMedia.DownloadAsync(options.Value, httpClientFactory,
+            evidence.EvidencePublicId, evidence.EvidenceFormat, evidence.EvidenceFileName, clock.GetUtcNow().AddMinutes(5), cancellationToken);
+        return downloaded is null ? new(false, null, null, ["No se pudo recuperar el comprobante de compra."])
+            : new(true, downloaded.Value.Content, downloaded.Value.ContentType, []);
     }
 
     private async Task<(bool Ok,string? PublicId,string? Format,long Bytes,string? Error)> Upload(Stream content,string name,string type,long length,string folder,CancellationToken cancellationToken)

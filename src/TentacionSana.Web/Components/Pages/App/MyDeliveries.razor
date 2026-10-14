@@ -7,7 +7,6 @@
 @inject IInventoryService InventoryService
 @inject IDeliveryPointImageService PointImages
 @inject AuthenticationStateProvider Auth
-@inject NavigationManager Navigation
 @inject Microsoft.JSInterop.IJSRuntime JS
 @implements IAsyncDisposable
 
@@ -187,7 +186,17 @@ else
     </div>
 </details>
 
+@if (_photoUrl is not null)
+{
+    <div class="route-photo-overlay" @onclick="ClosePhoto"><section class="route-photo-dialog" role="dialog" aria-modal="true" aria-label="Foto de respaldo" @onclick:stopPropagation>
+        <div><h2>@_photoTitle</h2><button type="button" @onclick="ClosePhoto">Cerrar ×</button></div>
+        <img src="@_photoUrl" alt="@_photoTitle" />
+    </section></div>
+}
+
 @code {
+    private string? _photoUrl, _photoTitle;
+    private void ClosePhoto() { _photoUrl = null; _photoTitle = null; }
     private IReadOnlyList<DeliveryItem>? _items;
     private IEnumerable<DeliveryItem> DisplayItems => (_items ?? []).OrderBy(IsCompleted).ThenBy(x => x.RoutePosition ?? int.MaxValue).ThenByDescending(x => x.ScheduledAtUtc);
     private DeliveryItem? NextDelivery => DisplayItems.FirstOrDefault(x => !IsCompleted(x));
@@ -375,8 +384,8 @@ else
         if (_detail is not null) await OpenAsync(_detail.Id);
         await ReloadAsync();
     }
-    private async Task ViewEvidenceAsync(Guid id) { var result = await EvidenceService.GetSignedUrlAsync(id, _userId); if (result.Succeeded && result.Url is not null) Navigation.NavigateTo(result.Url, true); else SetMessage(string.Join(" ", result.Errors), true); }
-    private async Task ViewPaymentEvidenceAsync(Guid id) { var result = await Service.GetPaymentEvidenceUrlAsync(id, _userId); if (result.Succeeded && result.Url is not null) Navigation.NavigateTo(result.Url, true); else SetMessage(string.Join(" ", result.Errors), true); }
+    private async Task ViewEvidenceAsync(Guid id) { var result = await EvidenceService.GetSignedUrlAsync(id, _userId); if (result.Succeeded && result.Url is not null) { _photoUrl = result.Url; _photoTitle = "Foto de entrega"; } else SetMessage(string.Join(" ", result.Errors), true); }
+    private async Task ViewPaymentEvidenceAsync(Guid id) { var result = await Service.GetPaymentEvidenceUrlAsync(id, _userId); if (result.Succeeded && result.Url is not null) { _photoUrl = result.Url; _photoTitle = "Comprobante de pago"; } else SetMessage(string.Join(" ", result.Errors), true); }
     private static string? MapUrl(string? value) => Uri.TryCreate(value, UriKind.Absolute, out var uri) && uri.Scheme is "http" or "https" ? uri.AbsoluteUri : null;
     private static string? WhatsApp(string? phone) { if (string.IsNullOrWhiteSpace(phone)) return null; var digits = new string(phone.Where(char.IsDigit).ToArray()); if (digits.Length == 8) digits = "591" + digits; return digits.Length < 8 ? null : $"https://wa.me/{digits}"; }
     private static string Money(decimal value) => $"Bs {value:N2}";

@@ -861,6 +861,13 @@ public sealed class DeliveryService(ApplicationDbContext db, TimeProvider clock,
             .Join(db.Payments.Where(x=>x.Status==PaymentStatus.Confirmed),allocation=>allocation.PaymentId,payment=>payment.Id,(allocation,payment)=>new{allocation,payment})
             .OrderByDescending(x=>x.payment.PaymentDateUtc).Select(x=>new PaymentHistoryItem(x.payment.Id,x.allocation.Amount,x.payment.Method.ToString(),x.payment.PaymentDateUtc,x.payment.Notes,db.PaymentEvidence.Where(e=>e.PaymentId==x.payment.Id).Select(e=>e.Id).FirstOrDefault())).ToListAsync(cancellationToken);
 
+    public async Task<IReadOnlyList<EvidenceItem>> GetOrderEvidenceAsync(Guid orderId, CancellationToken cancellationToken = default) =>
+        await db.DeliveryEvidence.AsNoTracking()
+            .Where(evidence => evidence.IsActive && db.Deliveries.Any(delivery => delivery.Id == evidence.DeliveryId && delivery.OrderId == orderId))
+            .OrderByDescending(evidence => evidence.UploadedAtUtc)
+            .Select(evidence => new EvidenceItem(evidence.Id, evidence.FileName, evidence.UploadedAtUtc))
+            .ToListAsync(cancellationToken);
+
     public async Task<SignedEvidenceResult> GetPaymentEvidenceUrlAsync(Guid evidenceId,Guid userId,CancellationToken cancellationToken=default)
     {
         var exists=await db.PaymentEvidence.AsNoTracking().AnyAsync(x=>x.Id==evidenceId,cancellationToken);

@@ -1,0 +1,95 @@
+@page "/app/cuentas-por-pagar"
+@layout AdminLayout
+@rendermode InteractiveServer
+@attribute [Authorize(Policy = AppPolicies.ManageFinance)]
+@inject ICashLedgerService Ledger
+@inject AuthenticationStateProvider Auth
+
+<PageTitle>Cuentas por pagar | Tentación Sana</PageTitle>
+<div class="payables-page">
+    <header><small>FINANZAS · RENDICIONES</small><h1>Cuentas por pagar</h1><p>Las compras por rendición se deben al usuario que las registró. Cada devolución sale de banco o caja y queda en el flujo de efectivo.</p></header>
+    @if (_error is not null) { <p class="notice error" role="alert">@_error</p> }
+    @if (_message is not null) { <p class="notice" role="status">@_message</p> }
+    @if (_data is null) { <p>Cargando rendiciones…</p> }
+    else
+    {
+        <div class="totals"><article><span>Total rendido</span><strong>Bs @_data.Users.Sum(x => x.Total).ToString("N2")</strong></article><article><span>Devuelto</span><strong>Bs @_data.Users.Sum(x => x.Paid).ToString("N2")</strong></article><article><span>Pendiente</span><strong>Bs @_data.Users.Sum(x => x.Balance).ToString("N2")</strong></article></div>
+        @if (_data.Users.Count == 0) { <section class="empty">Aún no hay compras por rendición.</section> }
+        @foreach (var user in _data.Users)
+        {
+            <section class="person"><div class="person-heading"><div><small>Usuario que pagó</small><h2>@user.Name</h2></div><div class="person-balance"><span>Pendiente</span><strong>Bs @user.Balance.ToString("N2")</strong><small>Rendido: Bs @user.Total.ToString("N2") · Devuelto: Bs @user.Paid.ToString("N2")</small></div></div>
+                <div class="scroll"><table><thead><tr><th>Compra</th><th>Fecha</th><th>Rendido</th><th>Devuelto</th><th>Pendiente</th><th>Comprobante de compra</th><th>Acción</th></tr></thead><tbody>
+                    @foreach (var purchase in _data.Purchases.Where(x => x.UserId == user.UserId))
+                    {
+                        <tr><td>@purchase.SupplyName</td><td>@purchase.PurchasedAtUtc.ToLocalTime().ToString("dd/MM/yyyy")</td><td>Bs @purchase.Amount.ToString("N2")</td><td>Bs @purchase.Paid.ToString("N2")</td><td><strong>Bs @purchase.Balance.ToString("N2")</strong></td><td><button type="button" class="photo-link" @onclick="() => ShowPurchaseEvidence(purchase)">Ver foto</button></td><td>@if (purchase.Balance > 0) { <button type="button" @onclick="() => StartPayment(purchase)">Devolver</button> } else { <span>Cancelada</span> }</td></tr>
+                    }
+                </tbody></table></div>
+            </section>
+        }
+        @if (_data.Payments.Count > 0)
+        {
+            <section class="person"><h2>Devoluciones registradas</h2><div class="scroll"><table><thead><tr><th>Fecha</th><th>Usuario</th><th>Origen</th><th>Monto</th><th>Respaldo</th></tr></thead><tbody>
+                @foreach (var payment in _data.Payments)
+                {
+                    <tr><td>@payment.PaidAtUtc.ToLocalTime().ToString("dd/MM/yyyy")</td><td>@NameFor(payment.PayableId)</td><td>@(payment.Account == "Bank" ? "Banco / QR" : "Caja / efectivo")</td><td>Bs @payment.Amount.ToString("N2")</td><td><button type="button" class="photo-link" @onclick="() => ShowPaymentEvidence(payment)">Ver comprobante</button></td></tr>
+                }
+            </tbody></table></div></section>
+        }
+    }
+    @if (_selected is not null)
+    {
+        <div class="overlay"><section class="dialog" role="dialog" aria-modal="true" aria-label="Registrar devolución"><h2>Devolver rendición</h2><p>@_selected.SupplyName · saldo pendiente Bs @_selected.Balance.ToString("N2")</p>
+            <label>Origen del dinero<select @bind="_account"><option value="Bank">Banco / QR</option><option value="Cash">Caja / efectivo</option></select></label>
+            <label>Monto a devolver<input type="number" min="0.01" max="@_selected.Balance" step="0.01" @bind="_amount" /></label>
+            <label>Fecha<input type="date" @bind="_paidAt" /></label>
+            <label>Respaldo de la devolución <InputFile OnChange="e => _file = e.File" accept="image/jpeg,image/png,image/webp" /></label>
+            <div class="actions"><button type="button" @onclick="CancelPayment" disabled="@_saving">Cancelar</button><button type="button" class="primary" @onclick="PayAsync" disabled="@_saving">@(_saving ? "Guardando…" : "Registrar devolución")</button></div>
+        </section></div>
+    }
+    @if (_evidenceUrl is not null)
+    {
+        <div class="overlay evidence-overlay" @onclick="CloseEvidence">
+            <section class="evidence-dialog" role="dialog" aria-modal="true" aria-label="@_evidenceTitle" @onclick:stopPropagation>
+                <div class="evidence-heading"><h2>@_evidenceTitle</h2><button type="button" @onclick="CloseEvidence" aria-label="Cerrar foto">Cerrar ×</button></div>
+                <img src="@_evidenceUrl" alt="@_evidenceTitle" />
+            </section>
+        </div>
+    }
+</div>
+
+@code {
+    private PayablesOverview? _data;
+    private PayablePurchaseItem? _selected;
+    private string _account = "Bank";
+    private decimal _amount;
+    private DateTime _paidAt = DateTime.Today;
+    private IBrowserFile? _file;
+    private string? _error, _message;
+    private string? _evidenceUrl, _evidenceTitle;
+    private bool _saving;
+    protected override async Task OnInitializedAsync() => _data = await Ledger.GetPayablesAsync();
+    private string NameFor(Guid payableId) { var purchase = _data!.Purchases.FirstOrDefault(x => x.Id == payableId); return _data.Users.FirstOrDefault(x => x.UserId == purchase?.UserId)?.Name ?? "Usuario"; }
+    private void StartPayment(PayablePurchaseItem purchase) { _selected = purchase; _amount = purchase.Balance; _account = "Bank"; _paidAt = DateTime.Today; _file = null; _error = null; _message = null; }
+    private void CancelPayment() => _selected = null;
+    private void ShowPurchaseEvidence(PayablePurchaseItem purchase) { _evidenceUrl = $"/media/payable-evidence/{purchase.Id:N}"; _evidenceTitle = $"Comprobante de compra: {purchase.SupplyName}"; }
+    private void ShowPaymentEvidence(PayablePaymentItem payment) { _evidenceUrl = $"/media/cash-evidence/{payment.Id:N}"; _evidenceTitle = "Comprobante de devolución"; }
+    private void CloseEvidence() { _evidenceUrl = null; _evidenceTitle = null; }
+    private async Task PayAsync()
+    {
+        if (_selected is null) return;
+        _error = null; _message = null;
+        if (_file is null) { _error = "Adjunta el comprobante de la devolución."; return; }
+        if (_amount <= 0 || _amount > _selected.Balance) { _error = "El monto debe ser mayor que cero y no superar el saldo pendiente."; return; }
+        _saving = true;
+        try
+        {
+            await using var content = _file.OpenReadStream(10 * 1024 * 1024);
+            var actor = Guid.Parse((await Auth.GetAuthenticationStateAsync()).User.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)!.Value);
+            var result = await Ledger.RepayPayableAsync(new(_selected.Id, _account, _amount, new DateTimeOffset(DateTime.SpecifyKind(_paidAt, DateTimeKind.Local)).ToUniversalTime(), content, _file.Name, _file.ContentType, _file.Size), actor);
+            if (!result.Succeeded) { _error = string.Join(" ", result.Errors); return; }
+            _data = await Ledger.GetPayablesAsync(); _selected = null; _message = "Devolución registrada en cuentas por pagar y flujo de efectivo.";
+        }
+        catch { _error = "No se pudo registrar la devolución. Comprueba la foto y vuelve a intentarlo."; }
+        finally { _saving = false; }
+    }
+}

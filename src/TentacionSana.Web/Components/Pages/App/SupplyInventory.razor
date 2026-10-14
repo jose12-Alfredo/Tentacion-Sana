@@ -51,9 +51,9 @@
         @if (SelectedPurchaseSupply is not null) { <p class="conversion">Puedes cambiar la presentación solo para esta compra. Todo se convertirá a <strong>@PurchaseUnitText</strong> y se sumará al mismo saldo.</p> }
         <div class="field-grid purchase-presentation"><label>Fecha<input type="date" @bind="_purchaseDate" /></label><label>Unidad de medida<select @bind="_purchaseUnit"><option value="Gram">Gramos (g)</option><option value="Milliliter">Mililitros (ml)</option><option value="Unit">Unidades</option></select></label><label>Presentación comprada<input @bind="_purchasePresentation" placeholder="Ej.: bolsa de 800 g" /></label><label>Contenido de cada paquete<input type="number" min="0.0001" step="0.0001" @bind="_purchasePackageContent" /><span class="field-unit">@PurchaseUnitText por paquete</span></label></div>
         <div class="field-grid purchase-amount"><label>Cantidad de paquetes<input type="number" min="0.0001" step="0.0001" @bind="_purchasePackages" /></label><label>Precio por paquete (Bs)<input type="number" min="0" step="0.01" @bind="_purchaseUnitPrice" /></label></div>
-        <div class="field-grid purchase-amount"><label>Forma de pago<select @bind="_purchasePaymentMethod"><option value="">Selecciona</option><option value="Qr">Banco / QR</option><option value="Cash">Caja / efectivo</option><option value="Rendition">Rendición</option></select></label>@if(_purchasePaymentMethod=="Rendition"){<label>Persona que pagó<input @bind="_purchaseRenditionPerson" placeholder="Nombre completo" /></label>}<label>Foto del comprobante<InputFile OnChange="e=>_purchaseEvidence=e.File" accept="image/jpeg,image/png,image/webp" /></label></div>
+        <div class="field-grid purchase-amount"><label>Forma de pago<select @bind="_purchasePaymentMethod"><option value="">Selecciona</option><option value="Qr">Banco / QR</option><option value="Cash">Caja / efectivo</option><option value="Rendition">Rendición</option></select></label>@if(_purchasePaymentMethod=="Rendition"){<p>La empresa quedará debiendo esta compra al usuario que la registra.</p>}<label>Foto del comprobante<InputFile OnChange="e=>_purchaseEvidence=e.File" accept="image/jpeg,image/png,image/webp" /></label></div>
         <div class="calculation"><span>Entrada al saldo</span><strong>@Quantity(PurchaseBaseQuantity) @(SelectedPurchaseSupply?.Unit ?? "")</strong><span>Total: Bs @((_purchasePackages * _purchaseUnitPrice).ToString("N2"))</span></div>
-        <button class="primary" @onclick="RegisterPurchaseAsync" disabled="@(_saving || _purchaseSupplyId == Guid.Empty || string.IsNullOrWhiteSpace(_purchasePresentation) || _purchasePackageContent <= 0 || _purchasePackages <= 0 || string.IsNullOrWhiteSpace(_purchasePaymentMethod) || _purchaseEvidence is null || (_purchasePaymentMethod=="Rendition"&&string.IsNullOrWhiteSpace(_purchaseRenditionPerson)))">@(_saving ? "Guardando compra…" : "Registrar compra")</button>
+        <button class="primary" @onclick="RegisterPurchaseAsync" disabled="@(_saving || _purchaseSupplyId == Guid.Empty || string.IsNullOrWhiteSpace(_purchasePresentation) || _purchasePackageContent <= 0 || _purchasePackages <= 0 || string.IsNullOrWhiteSpace(_purchasePaymentMethod) || _purchaseEvidence is null)">@(_saving ? "Guardando compra…" : "Registrar compra")</button>
     </section>
 
     <section class="work-card supply-card">
@@ -114,7 +114,6 @@
     private decimal _purchasePackageContent;
     private string _purchaseUnit = "Gram";
     private string _purchasePaymentMethod = "";
-    private string _purchaseRenditionPerson = "";
     private IBrowserFile? _purchaseEvidence;
     private string _supplyName = "";
     private string _supplyUnit = "Gram";
@@ -164,13 +163,13 @@
         {
             if(_purchaseEvidence is null){_errors.Add("La foto del comprobante es obligatoria.");return;}
             await using var evidenceContent=_purchaseEvidence.OpenReadStream(10*1024*1024);
-            var result = await Inventory.RegisterPurchaseAsync(new(_purchaseSupplyId, purchasedAt, _purchaseUnit, presentation, packageContent, packages, unitPrice,_purchasePaymentMethod,_purchaseRenditionPerson,evidenceContent,_purchaseEvidence.Name,_purchaseEvidence.ContentType,_purchaseEvidence.Size), await UserIdAsync());
+            var result = await Inventory.RegisterPurchaseAsync(new(_purchaseSupplyId, purchasedAt, _purchaseUnit, presentation, packageContent, packages, unitPrice,_purchasePaymentMethod,evidenceContent,_purchaseEvidence.Name,_purchaseEvidence.ContentType,_purchaseEvidence.Size), await UserIdAsync());
             if (!result.Succeeded) { _errors.AddRange(result.Errors); return; }
             ApplyPurchaseLocally(result.Id!.Value, supply, purchasedAt, presentation, packages, unitPrice, baseQuantity, unit);
             _message = $"Compra registrada. El saldo aumentó en {Quantity(baseQuantity)} {unit}.";
             _purchasePackages = 1;
             _purchaseUnitPrice = 0;
-            _purchasePaymentMethod = ""; _purchaseRenditionPerson = ""; _purchaseEvidence = null;
+            _purchasePaymentMethod = ""; _purchaseEvidence = null;
         }
         catch
         {

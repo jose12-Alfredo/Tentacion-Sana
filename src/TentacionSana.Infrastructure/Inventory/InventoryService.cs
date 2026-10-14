@@ -470,7 +470,6 @@ public sealed class InventoryService(ApplicationDbContext db, TimeProvider clock
         if (!Enum.TryParse<MeasurementUnit>(command.BaseUnit, true, out var purchaseUnit)) return Fail("Selecciona una unidad de medida válida.");
         if (command.PaymentMethod is not ("Qr" or "Cash" or "Rendition")) return Fail("Selecciona QR, efectivo o rendición como forma de pago.");
         if (command.EvidenceContent is null || string.IsNullOrWhiteSpace(command.EvidenceFileName) || command.EvidenceLength<=0) return Fail("La foto del comprobante de compra es obligatoria.");
-        if (command.PaymentMethod=="Rendition"&&string.IsNullOrWhiteSpace(command.RenditionPerson)) return Fail("Indica la persona a quien se debe la rendición.");
         var allowedTypes=new[]{"image/jpeg","image/png","image/webp"};
         if(string.IsNullOrWhiteSpace(command.EvidenceContentType)||!allowedTypes.Contains(command.EvidenceContentType.ToLowerInvariant())||command.EvidenceLength>10*1024*1024)return Fail("El comprobante debe ser JPG, PNG o WebP de hasta 10 MB.");
         var settings=cloudinaryOptions.Value;var cloudinary=new Cloudinary(new Account(settings.CloudName,settings.ApiKey,settings.ApiSecret)){Api={Secure=true}};
@@ -505,9 +504,14 @@ public sealed class InventoryService(ApplicationDbContext db, TimeProvider clock
             db.SupplyPurchases.Add(purchase);
             db.SupplyMovements.Add(SupplyMovement.Create(supply.Id, null, purchase.Id, SupplyMovementKind.Purchase, purchase.TotalBaseQuantity,
                 purchase.UnitPrice / purchase.BaseQuantityPerPackage, $"Compra de {purchase.PackageQuantity:0.####} {purchase.PurchasePresentation}", userId, now));
-            if(command.PaymentMethod=="Rendition") db.CashPayables.Add(CashPayable.Create(purchase.Id,command.RenditionPerson!,purchase.TotalPrice,upload.PublicId,command.EvidenceFileName,upload.Format??"",upload.Bytes,userId,now));
+            if(command.PaymentMethod=="Rendition")
+            {
+                var person = await db.Users.Where(x=>x.Id==userId).Select(x=>x.DisplayName).SingleOrDefaultAsync(ct);
+                if (string.IsNullOrWhiteSpace(person)) return Fail("No se encontró el usuario que registró la compra.");
+                db.CashPayables.Add(CashPayable.Create(purchase.Id,person,purchase.TotalPrice,upload.PublicId,command.EvidenceFileName,upload.Format??"",upload.Bytes,userId,now));
+            }
             else db.CashMovements.Add(CashMovement.Create(command.PaymentMethod=="Qr"?CashAccount.Bank:CashAccount.Cash,CashDirection.Expense,CashSource.InventoryPurchase,command.PurchasedAtUtc,$"Compra de {supply.Name}: {purchase.PackageQuantity:0.####} {purchase.PurchasePresentation}",purchase.TotalPrice,upload.PublicId,command.EvidenceFileName,upload.Format??"",upload.Bytes,userId,now,supplyPurchaseId:purchase.Id,category:"Ingredientes"));
-            db.AuditEntries.Add(new AuditEntry { Id = Guid.NewGuid(), Action = "SupplyPurchaseRegistered", EntityType = "SupplyPurchase", EntityId = purchase.Id.ToString(), UserId = userId, OccurredAtUtc = now, NewValuesJson = JsonSerializer.Serialize(new{command.SupplyId,command.PurchasedAtUtc,command.PurchasePresentation,command.PackageQuantity,command.UnitPrice,command.PaymentMethod,command.RenditionPerson}) });
+            db.AuditEntries.Add(new AuditEntry { Id = Guid.NewGuid(), Action = "SupplyPurchaseRegistered", EntityType = "SupplyPurchase", EntityId = purchase.Id.ToString(), UserId = userId, OccurredAtUtc = now, NewValuesJson = JsonSerializer.Serialize(new{command.SupplyId,command.PurchasedAtUtc,command.PurchasePresentation,command.PackageQuantity,command.UnitPrice,command.PaymentMethod}) });
             await db.SaveChangesAsync(ct); return Ok(purchase.Id);
         }
         catch (ArgumentException ex) { return Fail(ex.Message); }

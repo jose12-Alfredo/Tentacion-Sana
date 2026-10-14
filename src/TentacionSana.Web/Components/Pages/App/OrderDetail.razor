@@ -4,6 +4,7 @@
 @attribute [Authorize(Policy = AppPolicies.ManageSales)]
 @inject IOrderManagementService Service
 @inject IDeliveryService DeliveryService
+@inject IDeliveryEvidenceService DeliveryEvidenceService
 @inject IDeliveryPointImageService PointImageService
 @inject AuthenticationStateProvider AuthenticationStateProvider
 @inject ILoggerFactory LoggerFactory
@@ -178,10 +179,21 @@ else
             <section class="side-card payment-card"><header><h2>Pago</h2><span class="badge @PaymentClass(_order.PaymentStatus)">@PaymentText(_order.PaymentStatus)</span></header><dl><div><dt>Productos</dt><dd>Bs @ProductSubtotal.ToString("N2")</dd></div><div><dt>Envío</dt><dd>Bs @_form.DeliveryFee.ToString("N2")</dd></div><div><dt>Total</dt><dd>Bs @OrderTotal.ToString("N2")</dd></div><div><dt>Pagado</dt><dd class="paid">Bs @_order.Paid.ToString("N2")</dd></div><div><dt>Saldo</dt><dd class="pending">Bs @_order.Balance.ToString("N2")</dd></div><div><dt>Estado</dt><dd>@PaymentText(_order.PaymentStatus)</dd></div><div><dt>Método</dt><dd>@MethodText(_order.PaymentMethod)</dd></div></dl>@if (_payments.Count > 0) { <h3>Historial de pagos</h3><ul class="payment-history">@foreach (var payment in _payments) { <li><span>@payment.PaymentDateUtc.ToLocalTime().ToString("dd/MM/yyyy · HH:mm") · @MethodText(payment.Method)</span><strong>Bs @payment.Amount.ToString("N2")</strong>@if (payment.EvidenceId != Guid.Empty) { <button class="link-button" @onclick="() => OpenPaymentEvidence(payment.EvidenceId)">Ver comprobante</button> }</li> }</ul> }@if (_paymentEvidenceUrl is not null) { <a class="panel-link" href="@_paymentEvidenceUrl" target="_blank">Abrir comprobante ↗</a> }</section>
             @if (_order.Status != "Cancelled" && _order.Balance > 0) { <AuthorizeView Policy="@AppPolicies.ManageFinance"><Authorized><details class="side-card payment-entry"><summary>Registrar pago</summary><p>El respaldo es obligatorio.</p><label>Monto<input type="number" min="0.01" max="@_order.Balance" step="0.01" @bind="_paymentAmount" /></label><label>Método<select @bind="_paymentMethod"><option value="Qr">QR</option><option value="Cash">Efectivo</option></select></label><label>Fecha<input type="date" @bind="_paymentDate" /></label><label>Respaldo obligatorio<InputFile OnChange="e => _paymentEvidence = e.File" accept="image/jpeg,image/png,image/webp" /></label><label>Observación<input @bind="_paymentNotes" /></label><button @onclick="RegisterPaymentAsync">Guardar pago</button></details></Authorized></AuthorizeView> }
             <section class="side-card delivery-card"><header><h2>Entrega</h2></header><dl><div><dt>Fecha prometida</dt><dd>@(_order.PromisedAtUtc?.ToLocalTime().ToString("dd/MM/yyyy") ?? "Sin definir")</dd></div><div><dt>Sucursal</dt><dd>@(_order.DeliveryPoint ?? "Sin asignar")</dd></div><div><dt>Contacto</dt><dd>@(_order.Contact ?? "Sin asignar")</dd></div><div><dt>Repartidor</dt><dd>@(_order.Driver ?? "Sin asignar")</dd></div><div><dt>Estado</dt><dd>@DeliveryText(_order.DeliveryStatus)</dd></div></dl>@if (!string.IsNullOrWhiteSpace(SelectedPoint?.Location)) { <a class="panel-link location-panel-link" href="@SelectedPoint.Location" target="_blank" rel="noopener noreferrer">Abrir ubicación ↗</a> }@if (_order.DeliveryStatus == "InRoute") { <button class="panel-link return-delivery-action" @onclick="ReturnDeliveryToPendingAsync">Volver a pendiente de salida</button> }@if (_order.Status is "Confirmed" or "InPreparation" or "Ready") { <a class="panel-link" href="/app/entregas">Organizar en Entregas →</a> }</section>
+            @if (_deliveryEvidence.Count > 0)
+            {
+                <section class="side-card"><h2>Fotos de entrega</h2><ul class="payment-history">@foreach (var evidence in _deliveryEvidence) { <li><span>@evidence.UploadedAtUtc.ToLocalTime().ToString("dd/MM/yyyy · HH:mm")</span><button type="button" class="link-button" @onclick="() => OpenDeliveryEvidence(evidence.Id)">Ver foto</button></li> }</ul></section>
+            }
             @if (!string.IsNullOrWhiteSpace(_order.Notes)) { <section class="side-card notes-card"><h2>Observación</h2><p>@_order.Notes</p></section> }
         </aside>
     </div>
     <section class="timeline-card"><header><small>Trazabilidad</small><h2>Historial del pedido</h2></header>@if (_order.History.Count == 0) { <p>Aún no hay movimientos registrados.</p> } else { <ol>@foreach (var history in _order.History) { <li><time>@history.AtUtc.ToLocalTime().ToString("d MMM · HH:mm")</time><div><strong>@history.Kind</strong><p>@history.Description</p></div></li> }</ol> }</section>
+}
+@if (_paymentEvidenceUrl is not null || _deliveryEvidenceUrl is not null)
+{
+    <div class="order-photo-overlay" @onclick="ClosePhoto"><section class="order-photo-dialog" role="dialog" aria-modal="true" aria-label="Foto del comprobante" @onclick:stopPropagation>
+        <div><h2>@(_deliveryEvidenceUrl is not null ? "Foto de entrega" : "Comprobante de pago")</h2><button type="button" @onclick="ClosePhoto">Cerrar ×</button></div>
+        <img src="@(_deliveryEvidenceUrl ?? _paymentEvidenceUrl)" alt="@(_deliveryEvidenceUrl is not null ? "Foto de entrega" : "Comprobante de pago")" />
+    </section></div>
 }
 
 @code {
@@ -190,6 +202,7 @@ else
     private IReadOnlyList<OrderOption> _customers = [];
     private IReadOnlyList<ProductOption> _products = [];
     private IReadOnlyList<PaymentHistoryItem> _payments = [];
+    private IReadOnlyList<EvidenceItem> _deliveryEvidence = [];
     private readonly List<string> _errors = [];
     private readonly List<string> _lineErrors = [];
     private readonly List<string> _actionErrors = [];
@@ -200,7 +213,7 @@ else
     private Form _form = new();
     private LineForm _line = new();
     private string _cancelReason = "", _revisionReason = "", _paymentMethod = "Qr", _paymentNotes = "";
-    private string? _pointImageUrl, _paymentEvidenceUrl;
+    private string? _pointImageUrl, _paymentEvidenceUrl, _deliveryEvidenceUrl;
     private IBrowserFile? _paymentEvidence;
     private decimal _paymentAmount;
     private DateTime _paymentDate = DateTime.Today;
@@ -233,7 +246,7 @@ else
     private decimal LineSubtotal => _line.SaleQuantity * _line.SoldPrice;
 
     protected override async Task OnParametersSetAsync() { _customers = await Service.CustomerOptionsAsync(); _products = await Service.ProductOptionsAsync(); await LoadAsync(); }
-    private async Task LoadAsync(CancellationToken ct = default) { _order = await Service.GetAsync(OrderId, ct); _payments = await DeliveryService.PaymentsAsync(OrderId, ct); if (_order is null) return; _form = new() { CustomerId = _order.CustomerId, DeliveryPointId = _order.DeliveryPointId, ContactId = _order.ContactId, PayerId = _order.PaymentResponsiblePartyId, PromisedLocal = _order.PromisedAtUtc?.ToLocalTime().DateTime, Notes = _order.Notes, DeliveryFee = _order.DeliveryFee }; _pointImageUrl = _order.DeliveryPointId is null ? null : await PointImageService.GetUrlAsync(_order.DeliveryPointId.Value, ct); if (_paymentAmount <= 0) _paymentAmount = _order.Balance; }
+    private async Task LoadAsync(CancellationToken ct = default) { _order = await Service.GetAsync(OrderId, ct); _payments = await DeliveryService.PaymentsAsync(OrderId, ct); _deliveryEvidence = await DeliveryService.GetOrderEvidenceAsync(OrderId, ct); if (_order is null) return; _form = new() { CustomerId = _order.CustomerId, DeliveryPointId = _order.DeliveryPointId, ContactId = _order.ContactId, PayerId = _order.PaymentResponsiblePartyId, PromisedLocal = _order.PromisedAtUtc?.ToLocalTime().DateTime, Notes = _order.Notes, DeliveryFee = _order.DeliveryFee }; _pointImageUrl = _order.DeliveryPointId is null ? null : await PointImageService.GetUrlAsync(_order.DeliveryPointId.Value, ct); if (_paymentAmount <= 0) _paymentAmount = _order.Balance; }
     private Task CustomerChanged() { _form.DeliveryPointId = null; _form.ContactId = null; _form.PayerId = null; _pointImageUrl = null; return Task.CompletedTask; }
     private async Task PointChanged() { _form.ContactId = SelectedPoint?.ContactId; _form.PayerId = SelectedPoint?.PayerId; _pointImageUrl = _form.DeliveryPointId is null ? null : await PointImageService.GetUrlAsync(_form.DeliveryPointId.Value); }
     private Task ProductChanged() { _line.SoldPrice = _products.FirstOrDefault(x => x.Id == _line.ProductId)?.CurrentPrice ?? 0; return Task.CompletedTask; }
@@ -360,6 +373,8 @@ else
     private async Task ReviseLineAsync() { if (_revisionLineId is not null) await Handle(await Service.ReviseLineAsync(OrderId, _revisionLineId.Value, _order!.Version, new(_revisionSaleQuantity, _revisionReplacementQuantity, _revisionTastingQuantity, _revisionPrice, _revisionDiscountReason, _revisionReplacementReason, _revisionReplacementNotes, _revisionTastingReason, _revisionTastingNotes, _revisionReason), await UserId()), false); }
     private async Task RemoveConfirmedLineAsync() { if (_revisionLineId is not null) await Handle(await Service.RemoveConfirmedLineAsync(OrderId, _revisionLineId.Value, _order!.Version, _revisionReason, await UserId()), false); }
     private async Task OpenPaymentEvidence(Guid evidenceId) { var result = await DeliveryService.GetPaymentEvidenceUrlAsync(evidenceId, await UserId()); if (result.Succeeded) _paymentEvidenceUrl = result.Url; else { _errors.Clear(); _errors.AddRange(result.Errors); } }
+    private async Task OpenDeliveryEvidence(Guid evidenceId) { var result = await DeliveryEvidenceService.GetSignedUrlAsync(evidenceId, await UserId()); if (result.Succeeded) _deliveryEvidenceUrl = result.Url; else { _errors.Clear(); _errors.AddRange(result.Errors); } }
+    private void ClosePhoto() { _paymentEvidenceUrl = null; _deliveryEvidenceUrl = null; }
     private async Task RegisterPaymentAsync() { _errors.Clear(); if (_paymentEvidence is null) { _errors.Add("Debes adjuntar un respaldo para registrar este pago."); return; } await using var content = _paymentEvidence.OpenReadStream(10 * 1024 * 1024); var paymentDate = new DateTimeOffset(DateTime.SpecifyKind(_paymentDate, DateTimeKind.Local)).ToUniversalTime(); var result = await DeliveryService.RegisterPaymentAsync(new(OrderId, _order!.ReceivableVersion, Guid.NewGuid().ToString("N"), _paymentAmount, _paymentMethod, null, false, _order.Status != "Delivered", paymentDate, _paymentNotes, content, _paymentEvidence.Name, _paymentEvidence.ContentType, _paymentEvidence.Size), await UserId()); if (!result.Succeeded) _errors.AddRange(result.Errors); else { _paymentEvidence = null; _paymentAmount = 0; await LoadAsync(); } }
     private async Task ReturnDeliveryToPendingAsync() { _errors.Clear(); var result = await DeliveryService.ReturnOrderToPendingAsync(OrderId, await UserId()); if (!result.Succeeded) _errors.AddRange(result.Errors); else await LoadAsync(); }
     private async Task Handle(OrderOperationResult result, bool resetLine = true) { _errors.Clear(); if (!result.Succeeded) { _errors.AddRange(result.Errors); return; } if (resetLine) _line = new(); await LoadAsync(); }
