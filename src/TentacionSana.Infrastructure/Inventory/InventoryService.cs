@@ -47,8 +47,11 @@ public sealed class InventoryService(ApplicationDbContext db, TimeProvider clock
             var latestCosts = new Dictionary<Guid, decimal>();
             foreach (var supplyId in ingredients.Select(x => x.SupplyId).Distinct())
             {
-                var purchase = await db.SupplyPurchases.AsNoTracking().Where(x => x.SupplyId == supplyId).OrderByDescending(x => x.PurchasedAtUtc).FirstOrDefaultAsync(ct);
-                if (purchase is not null) latestCosts[supplyId] = purchase.UnitPrice / purchase.BaseQuantityPerPackage;
+                var cost = await db.SupplyMovements.AsNoTracking()
+                    .Where(x => x.SupplyId == supplyId && x.HistoricalBaseUnitCost != null &&
+                        (x.Kind == SupplyMovementKind.Purchase || x.Kind == SupplyMovementKind.PositiveAdjustment))
+                    .OrderByDescending(x => x.OccurredAtUtc).Select(x => x.HistoricalBaseUnitCost).FirstOrDefaultAsync(ct);
+                if (cost is not null) latestCosts[supplyId] = cost.Value;
             }
             decimal? estimatedUnitCost = ingredients.Count > 0 && ingredients.All(x => latestCosts.ContainsKey(x.SupplyId))
                 ? decimal.Round(ingredients.Sum(x => RecipeQuantities.Required(x.RequiredQuantity, recipe!.YieldQuantity, command.ProducedUnits) * latestCosts[x.SupplyId]) / goodUnits, 2)
@@ -278,13 +281,19 @@ public sealed class InventoryService(ApplicationDbContext db, TimeProvider clock
         var balances = await db.SupplyBalances.AsNoTracking().ToDictionaryAsync(x => x.SupplyId, ct);
         var allPurchases = await db.SupplyPurchases.AsNoTracking().OrderByDescending(x => x.PurchasedAtUtc).ToListAsync(ct);
         var lastPurchases = allPurchases.GroupBy(x => x.SupplyId).ToDictionary(x => x.Key, x => x.First());
+        var pricedMovements = await db.SupplyMovements.AsNoTracking()
+            .Where(x => x.HistoricalBaseUnitCost != null &&
+                (x.Kind == SupplyMovementKind.Purchase || x.Kind == SupplyMovementKind.PositiveAdjustment))
+            .OrderByDescending(x => x.OccurredAtUtc).ToListAsync(ct);
+        var latestPrices = pricedMovements.GroupBy(x => x.SupplyId).ToDictionary(x => x.Key, x => x.First());
         var stock = supplies.Select(supply =>
         {
             balances.TryGetValue(supply.Id, out var balance);
             lastPurchases.TryGetValue(supply.Id, out var purchase);
+            latestPrices.TryGetValue(supply.Id, out var pricedMovement);
             var quantity = balance?.Quantity ?? 0;
             return new SupplyStockItem(supply.Id, supply.Name, UnitText(supply.BaseUnit), supply.PurchasePresentation,
-                supply.BaseQuantityPerPackage, quantity, quantity / supply.BaseQuantityPerPackage, purchase?.UnitPrice,
+                supply.BaseQuantityPerPackage, quantity, quantity / supply.BaseQuantityPerPackage, pricedMovement?.HistoricalBaseUnitCost * supply.BaseQuantityPerPackage ?? purchase?.UnitPrice,
                 purchase?.PurchasedAtUtc, balance?.Version ?? 0);
         }).ToList();
 
@@ -318,7 +327,8 @@ public sealed class InventoryService(ApplicationDbContext db, TimeProvider clock
             var current = balances.GetValueOrDefault(group.Key)?.Quantity ?? 0;
             var shortage = Math.Max(0, required - current);
             var packages = RecipeQuantities.PackagesToBuy(shortage, supply.BaseQuantityPerPackage);
-            var price = lastPurchases.GetValueOrDefault(group.Key)?.UnitPrice;
+            var price = latestPrices.GetValueOrDefault(group.Key)?.HistoricalBaseUnitCost * supply.BaseQuantityPerPackage
+                ?? lastPurchases.GetValueOrDefault(group.Key)?.UnitPrice;
             return new SupplyRequirement(supply.Id, supply.Name, UnitText(supply.BaseUnit), required, current, shortage,
                 supply.PurchasePresentation, supply.BaseQuantityPerPackage, packages, price is null ? null : packages * price.Value);
         }).OrderByDescending(x => x.Shortage > 0).ThenByDescending(x => x.Shortage).ThenBy(x => x.Supply).ToList();
@@ -486,6 +496,7 @@ public sealed class InventoryService(ApplicationDbContext db, TimeProvider clock
 
     public async Task<InventoryResult> RegisterSupplyCountAsync(SupplyCountCommand command, Guid userId, CancellationToken ct = default)
     {
+        if (command.PricePerPackage is < 0) return Fail("El precio por presentación no puede ser negativo.");
         try
         {
             var state = await (from inventorySupply in db.Supplies
@@ -501,8 +512,8 @@ public sealed class InventoryService(ApplicationDbContext db, TimeProvider clock
             balance.Adjust(command.CountedQuantity); db.SupplyStockCounts.Add(count);
             if (count.Difference != 0) db.SupplyMovements.Add(SupplyMovement.Create(command.SupplyId, null, null,
                 count.Difference > 0 ? SupplyMovementKind.PositiveAdjustment : SupplyMovementKind.NegativeAdjustment,
-                count.Difference, null, command.Reason, userId, now));
-            db.AuditEntries.Add(new AuditEntry { Id = Guid.NewGuid(), Action = "SupplyStockCounted", EntityType = "SupplyStockCount", EntityId = count.Id.ToString(), UserId = userId, OccurredAtUtc = now, NewValuesJson = JsonSerializer.Serialize(new { command.SupplyId, count.ExpectedQuantity, count.CountedQuantity, count.Difference }), Reason = command.Reason.Trim() });
+                count.Difference, command.PricePerPackage / state.Supply.BaseQuantityPerPackage, command.Reason, userId, now));
+            db.AuditEntries.Add(new AuditEntry { Id = Guid.NewGuid(), Action = "SupplyStockCounted", EntityType = "SupplyStockCount", EntityId = count.Id.ToString(), UserId = userId, OccurredAtUtc = now, NewValuesJson = JsonSerializer.Serialize(new { command.SupplyId, count.ExpectedQuantity, count.CountedQuantity, count.Difference, command.PricePerPackage }), Reason = command.Reason.Trim() });
             await db.SaveChangesAsync(ct); return Ok(count.Id);
         }
         catch (ArgumentException ex) { return Fail(ex.Message); }

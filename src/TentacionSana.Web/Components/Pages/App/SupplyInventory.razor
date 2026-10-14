@@ -87,7 +87,7 @@
 
 @if (_countSupply is not null)
 {
-    <div class="modal-backdrop" @onclick="CloseCount"><section class="count-dialog" role="dialog" aria-modal="true" @onclick:stopPropagation><header><div><small>Entrada sin costo / conteo físico</small><h2>@_countSupply.Name</h2></div><button @onclick="CloseCount">×</button></header><p>Saldo del sistema: <strong>@Quantity(_countSupply.Stock) @_countSupply.Unit</strong>. Escribe la <strong>cantidad total que realmente tienes en la cocina</strong>. El sistema ajustará la diferencia sin registrar una compra ni asignarle costo.</p>@if (_errors.Count > 0) { <div class="modal-errors">@foreach (var error in _errors) { <span>@error</span> }</div> }<label>Cantidad total disponible<input type="number" min="0" step="0.0001" @bind="_countedQuantity" /><span class="field-unit">@_countSupply.Unit</span></label><label>Motivo<input @bind="_countReason" placeholder="Ej.: stock inicial existente antes del sistema" /></label><footer><button class="secondary" @onclick="CloseCount">Cancelar</button><button class="primary" @onclick="RegisterCountAsync" disabled="@(string.IsNullOrWhiteSpace(_countReason) || _saving)">@(_saving ? "Guardando ajuste…" : "Guardar sin costo")</button></footer></section></div>
+    <div class="modal-backdrop" @onclick="CloseCount"><section class="count-dialog" role="dialog" aria-modal="true" @onclick:stopPropagation><header><div><small>Stock inicial / conteo físico</small><h2>@_countSupply.Name</h2></div><button @onclick="CloseCount">×</button></header><p>Saldo del sistema: <strong>@Quantity(_countSupply.Stock) @_countSupply.Unit</strong>. Escribe la <strong>cantidad total que realmente tienes en la cocina</strong>. Puedes indicar un precio de referencia sin registrar una compra ni un pago.</p>@if (_errors.Count > 0) { <div class="modal-errors">@foreach (var error in _errors) { <span>@error</span> }</div> }<label>Cantidad total disponible<input type="number" min="0" step="0.0001" @bind="_countedQuantity" /><span class="field-unit">@_countSupply.Unit</span></label><label>Precio por @_countSupply.PurchasePresentation (Bs, opcional)<input type="number" min="0" step="0.01" @bind="_countPricePerPackage" /></label><label>Motivo<input @bind="_countReason" placeholder="Ej.: stock inicial existente antes del sistema" /></label><footer><button class="secondary" @onclick="CloseCount">Cancelar</button><button class="primary" @onclick="RegisterCountAsync" disabled="@(string.IsNullOrWhiteSpace(_countReason) || _saving)">@(_saving ? "Guardando ajuste…" : "Guardar ajuste")</button></footer></section></div>
 }
 
 @if (_editSupply is not null)
@@ -127,6 +127,7 @@
     private readonly List<RecipeLineDraft> _recipeLines = [];
     private SupplyStockItem? _countSupply;
     private decimal _countedQuantity;
+    private decimal? _countPricePerPackage;
     private string _countReason = "";
     private SupplyStockItem? _editSupply;
     private string _editName = "";
@@ -244,7 +245,7 @@
         }
         finally { _saving = false; }
     }
-    private void OpenCount(SupplyStockItem item) { ResetFeedback(); _countSupply = item; _countedQuantity = Math.Max(0, item.Stock); _countReason = item.Stock <= 0 ? "Stock inicial existente antes del sistema" : "Conteo físico de inventario"; }
+    private void OpenCount(SupplyStockItem item) { ResetFeedback(); _countSupply = item; _countedQuantity = Math.Max(0, item.Stock); _countPricePerPackage = item.LastUnitPrice; _countReason = item.Stock <= 0 ? "Stock inicial existente antes del sistema" : "Conteo físico de inventario"; }
     private void CloseCount() { if (_saving) return; _countSupply = null; _countReason = ""; _errors.Clear(); }
     private async Task RegisterCountAsync()
     {
@@ -257,10 +258,10 @@
         _saving = true;
         try
         {
-            var result = await Inventory.RegisterSupplyCountAsync(new(supply.Id, counted, reason), await UserIdAsync());
+            var result = await Inventory.RegisterSupplyCountAsync(new(supply.Id, counted, reason, _countPricePerPackage), await UserIdAsync());
             if (!result.Succeeded) { _errors.AddRange(result.Errors); return; }
             ApplyCountLocally(result.Id!.Value, supply, counted, reason);
-            _message = $"Stock de {supply.Name} ajustado sin costo a {Quantity(counted)} {supply.Unit}.";
+            _message = $"Stock de {supply.Name} ajustado a {Quantity(counted)} {supply.Unit}.";
             saved = true;
         }
         catch { _errors.Add("No se pudo guardar el ajuste. La pantalla quedó habilitada para volver a intentarlo."); }
@@ -270,7 +271,8 @@
     private void ApplyCountLocally(Guid countId,SupplyStockItem supply,decimal counted,string reason)
     {
         var difference = counted - supply.Stock;
-        var updatedSupply = supply with { Stock = counted, PackageEquivalent = counted / supply.BaseQuantityPerPackage };
+        var updatedSupply = supply with { Stock = counted, PackageEquivalent = counted / supply.BaseQuantityPerPackage,
+            LastUnitPrice = difference > 0 && _countPricePerPackage is not null ? _countPricePerPackage : supply.LastUnitPrice };
         var requirements = _dashboard.Requirements.Select(item =>
         {
             if (item.SupplyId != supply.Id) return item;
