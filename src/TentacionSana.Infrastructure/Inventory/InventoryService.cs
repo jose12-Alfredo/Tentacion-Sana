@@ -152,6 +152,67 @@ public sealed class InventoryService(ApplicationDbContext db, TimeProvider clock
         return new ProductionDashboard(needs, needs.Count(x => x.Shortage > 0), needs.Sum(x => x.Shortage), producedToday, balances.Values.Sum(x => x.PhysicalQuantity));
     }
 
+    public async Task<InventoryResult> RepriceProductionBatchAsync(RepriceProductionBatchCommand command, Guid userId, CancellationToken ct = default)
+    {
+        if (!await IsAdministrator(userId)) return Fail("Solo una persona administradora puede recalcular costos de lotes.");
+        if (string.IsNullOrWhiteSpace(command.Reason)) return Fail("Indica el motivo de la recotización.");
+        await using var transaction = await db.Database.BeginTransactionAsync(IsolationLevel.Serializable, ct);
+        try
+        {
+            var batch = await db.ProductionBatches.SingleOrDefaultAsync(x => x.Id == command.BatchId && !x.IsVoided, ct);
+            if (batch is null) return Fail("El lote no existe o fue anulado.");
+            if (batch.Version != command.Version) return Fail("El lote cambió. Recarga la pantalla antes de recalcularlo.");
+            if (batch.RecipeVersionId is null) return Fail("Este lote no tiene receta; no se puede calcular su costo por insumos.");
+            var recipe = await db.RecipeVersions.AsNoTracking().SingleAsync(x => x.Id == batch.RecipeVersionId, ct);
+            var ingredients = await db.RecipeIngredients.AsNoTracking().Where(x => x.RecipeVersionId == recipe.Id).ToListAsync(ct);
+            if (ingredients.Count == 0) return Fail("La receta del lote no tiene insumos.");
+            var costs = new Dictionary<Guid, decimal>();
+            foreach (var supplyId in ingredients.Select(x => x.SupplyId).Distinct())
+            {
+                var cost = await db.SupplyMovements.AsNoTracking()
+                    .Where(x => x.SupplyId == supplyId && x.HistoricalBaseUnitCost != null &&
+                        (x.Kind == SupplyMovementKind.Purchase || x.Kind == SupplyMovementKind.PositiveAdjustment))
+                    .OrderByDescending(x => x.OccurredAtUtc).Select(x => x.HistoricalBaseUnitCost).FirstOrDefaultAsync(ct);
+                if (cost is null) return Fail("Falta el precio referencial de uno o más insumos de la receta.");
+                costs[supplyId] = cost.Value;
+            }
+            var previousCost = batch.EstimatedUnitCost;
+            var produced = batch.GoodUnits + batch.WasteUnits;
+            var unitCost = ingredients.Sum(x => RecipeQuantities.Required(x.RequiredQuantity, recipe.YieldQuantity, produced) * costs[x.SupplyId]) / batch.GoodUnits;
+            batch.Reprice(unitCost);
+
+            var affectedAllocations = await db.InventoryMovementAllocations.Where(x => x.ProductionBatchId == batch.Id).ToListAsync(ct);
+            foreach (var allocation in affectedAllocations) allocation.Reprice(batch.EstimatedUnitCost!.Value);
+            var movementIds = affectedAllocations.Select(x => x.MovementId).Distinct().ToList();
+            var movements = await db.InventoryMovements.Where(x => movementIds.Contains(x.Id)).ToListAsync(ct);
+            foreach (var movement in movements)
+            {
+                var allocations = await db.InventoryMovementAllocations.Where(x => x.MovementId == movement.Id).ToListAsync(ct);
+                var weighted = allocations.Any(x => x.HistoricalUnitCost is null)
+                    ? (decimal?)null : allocations.Sum(x => x.Quantity * x.HistoricalUnitCost!.Value) / Math.Abs(movement.Quantity);
+                movement.Reprice(weighted);
+            }
+            foreach (var time in movements.Where(x => x.Kind == InventoryMovementKind.DeliveredSale).Select(x => x.OccurredAtUtc).Distinct())
+            {
+                var sales = await db.Sales.Where(x => x.OccurredAtUtc == time).ToListAsync(ct);
+                if (sales.Count != 1) throw new InvalidOperationException("No se pudo asociar de forma única una venta con la salida del lote. No se modificó ningún costo.");
+                var saleMovements = await db.InventoryMovements.Where(x => x.Kind == InventoryMovementKind.DeliveredSale && x.OccurredAtUtc == time).ToListAsync(ct);
+                sales[0].Reprice(saleMovements.Any(x => x.HistoricalTotalCost is null)
+                    ? null : saleMovements.Sum(x => x.HistoricalTotalCost!.Value));
+            }
+            db.AuditEntries.Add(new AuditEntry { Id = Guid.NewGuid(), UserId = userId, Action = "ProductionBatchRepriced", EntityType = "ProductionBatch", EntityId = batch.Id.ToString(), PreviousValuesJson = JsonSerializer.Serialize(new { EstimatedUnitCost = previousCost }), NewValuesJson = JsonSerializer.Serialize(new { batch.EstimatedUnitCost, batch.EstimatedTotalCost }), Reason = command.Reason.Trim(), OccurredAtUtc = clock.GetUtcNow() });
+            await db.SaveChangesAsync(ct);
+            await transaction.CommitAsync(ct);
+            return Ok(batch.Id);
+        }
+        catch (Exception ex) when (ex is ArgumentException or InvalidOperationException or DbUpdateConcurrencyException or DbUpdateException)
+        {
+            await transaction.RollbackAsync(ct);
+            db.ChangeTracker.Clear();
+            return Fail(ex.Message);
+        }
+    }
+
     public async Task<InventoryResult> UpdateProductionBatchAsync(UpdateProductionBatchCommand command, Guid userId, CancellationToken ct = default)
     {
         if (!await IsAdministrator(userId)) return Fail("Solo una persona administradora puede corregir lotes.");

@@ -11,6 +11,7 @@ public interface IInventoryService
  Task<ProductionDashboard> GetProductionDashboardAsync(CancellationToken cancellationToken=default);
  Task<IReadOnlyList<ProductionOrderDemand>> GetProductionOrderDemandAsync(Guid productId,CancellationToken cancellationToken=default);
  Task<InventoryResult> UpdateProductionBatchAsync(UpdateProductionBatchCommand command,Guid userId,CancellationToken cancellationToken=default);
+ Task<InventoryResult> RepriceProductionBatchAsync(RepriceProductionBatchCommand command,Guid userId,CancellationToken cancellationToken=default);
  Task<InventoryResult> DeleteProductionBatchAsync(DeleteProductionBatchCommand command,Guid userId,CancellationToken cancellationToken=default);
  Task<SupplyInventoryDashboard> GetSupplyDashboardAsync(CancellationToken cancellationToken=default);
  Task<RecipeDetail?> GetRecipeAsync(Guid productId,CancellationToken cancellationToken=default);
@@ -22,6 +23,7 @@ public interface IInventoryService
 }
 public sealed record ProductionCommand(Guid ProductId,DateTimeOffset ProducedAtUtc,int ProducedUnits,int WasteUnits);
 public sealed record UpdateProductionBatchCommand(Guid BatchId,int Version,int ProducedUnits,int WasteUnits,string Reason);
+public sealed record RepriceProductionBatchCommand(Guid BatchId,int Version,string Reason);
 public sealed record DeleteProductionBatchCommand(Guid BatchId,int Version,string Reason);
 public sealed record OutputCommand(Guid ProductId,int Quantity,string Kind,string Reason);
 public sealed record CountCommand(Guid ProductId,int CountedQuantity,string Reason);

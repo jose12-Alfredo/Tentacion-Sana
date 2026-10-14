@@ -72,14 +72,18 @@
 
 <section class="card batches-card"><div class="section-heading"><div><h2>Últimos lotes generados</h2><p>Historial de producción y saldo disponible por FIFO.</p></div></div>
     @if (_batches.Count == 0) { <div class="empty-state">Aún no se registraron lotes de producción.</div> }
-    else { <div class="table-shell"><table><thead><tr><th>Lote</th><th>Producto</th><th>Fecha y hora</th><th>Producido</th><th>Merma</th><th>Aprovechable</th><th>Restante</th><th>Estado</th><th>Registrado por</th><AuthorizeView Policy="@AppPolicies.Administration"><Authorized><th>Acciones</th></Authorized></AuthorizeView></tr></thead><tbody>
-        @foreach (var batch in _batches) { <tr><td><strong>@batch.Number</strong></td><td>@batch.Product</td><td>@batch.ProducedAtUtc.ToLocalTime().ToString("dd/MM/yyyy HH:mm")</td><td>@(batch.GoodUnits + batch.WasteUnits)</td><td>@batch.WasteUnits</td><td>@batch.GoodUnits</td><td>@batch.Remaining</td><td><span class="badge @BatchStatusClass(batch)">@BatchStatus(batch)</span></td><td>@batch.RegisteredBy</td><AuthorizeView Policy="@AppPolicies.Administration"><Authorized><td><div class="row-actions"><button class="secondary small" @onclick="() => OpenEdit(batch)">Editar</button><button class="danger-button small" @onclick="() => OpenDelete(batch)">Eliminar</button></div></td></Authorized></AuthorizeView></tr> }
+    else { <div class="table-shell"><table><thead><tr><th>Lote</th><th>Producto</th><th>Fecha y hora</th><th>Producido</th><th>Merma</th><th>Aprovechable</th><th>Restante</th><th>Costo unitario</th><th>Estado</th><th>Registrado por</th><AuthorizeView Policy="@AppPolicies.Administration"><Authorized><th>Acciones</th></Authorized></AuthorizeView></tr></thead><tbody>
+        @foreach (var batch in _batches) { <tr><td><strong>@batch.Number</strong></td><td>@batch.Product</td><td>@batch.ProducedAtUtc.ToLocalTime().ToString("dd/MM/yyyy HH:mm")</td><td>@(batch.GoodUnits + batch.WasteUnits)</td><td>@batch.WasteUnits</td><td>@batch.GoodUnits</td><td>@batch.Remaining</td><td>@(batch.EstimatedUnitCost is null ? "Sin costo" : $"Bs {batch.EstimatedUnitCost:N2}")</td><td><span class="badge @BatchStatusClass(batch)">@BatchStatus(batch)</span></td><td>@batch.RegisteredBy</td><AuthorizeView Policy="@AppPolicies.Administration"><Authorized><td><div class="row-actions"><button class="secondary small" @onclick="() => OpenEdit(batch)">Editar</button><button class="secondary small" @onclick="() => OpenReprice(batch)">Recalcular costo</button><button class="danger-button small" @onclick="() => OpenDelete(batch)">Eliminar</button></div></td></Authorized></AuthorizeView></tr> }
     </tbody></table></div> }
 </section>
 
 @if (_editBatch is not null)
 {
     <div class="modal-backdrop" @onclick="CloseBatchDialog"><section class="batch-dialog" role="dialog" aria-modal="true" @onclick:stopPropagation><header><div><small>Corrección administrativa</small><h2>Editar @_editBatch.Number</h2></div><button class="icon-button" @onclick="CloseBatchDialog">×</button></header><p>El inventario y las reservas se ajustarán automáticamente. Las unidades ya consumidas por FIFO no pueden eliminarse.</p><div class="amount-grid"><label>Cantidad producida<input type="number" min="1" @bind="_editProduced" /></label><label>Merma<input type="number" min="0" @bind="_editWaste" /></label></div><label>Motivo de la corrección<input @bind="_batchReason" placeholder="Ej.: cantidad digitada incorrectamente" /></label><footer><button class="secondary" @onclick="CloseBatchDialog">Cancelar</button><button class="primary" @onclick="SaveBatchAsync" disabled="@(_batchSaving || string.IsNullOrWhiteSpace(_batchReason))">@(_batchSaving ? "Guardando…" : "Guardar corrección")</button></footer></section></div>
+}
+@if (_repriceBatch is not null)
+{
+    <div class="modal-backdrop" @onclick="CloseBatchDialog"><section class="batch-dialog" role="dialog" aria-modal="true" @onclick:stopPropagation><header><div><small>Corrección de costo</small><h2>Recalcular @_repriceBatch.Number</h2></div><button class="icon-button" @onclick="CloseBatchDialog">×</button></header><p>Se usarán los precios referenciales actuales de los insumos de la receta de este lote. El costo se actualizará en las unidades ya entregadas y en el estado de resultados. No cambia cantidades ni registra compras.</p>@if (_errors.Count > 0) { <div class="error-summary" role="alert">@foreach (var error in _errors) { <p>@error</p> }</div> }<label>Motivo de la corrección<input @bind="_batchReason" placeholder="Ej.: precios de insumos cargados después de producir" /></label><footer><button class="secondary" @onclick="CloseBatchDialog">Cancelar</button><button class="primary" @onclick="RepriceBatchAsync" disabled="@(_batchSaving || string.IsNullOrWhiteSpace(_batchReason))">@(_batchSaving ? "Recalculando…" : "Recalcular costo")</button></footer></section></div>
 }
 @if (_deleteBatch is not null)
 {
@@ -100,6 +104,7 @@
     private string? _message;
     private bool _saving;
     private BatchItem? _editBatch;
+    private BatchItem? _repriceBatch;
     private BatchItem? _deleteBatch;
     private int _editProduced;
     private int _editWaste;
@@ -140,9 +145,11 @@
     private static string StatusText(string status) => status switch { "Confirmed" => "Confirmado", "InPreparation" => "En preparación", "Ready" => "Listo", "OutForDelivery" => "En reparto", _ => status };
     private static string BatchStatus(BatchItem batch) => batch.Remaining == 0 ? "Agotado" : batch.Remaining == batch.GoodUnits ? "Activo" : "En uso";
     private static string BatchStatusClass(BatchItem batch) => batch.Remaining == 0 ? "exhausted" : batch.Remaining == batch.GoodUnits ? "active" : "in-use";
-    private void OpenEdit(BatchItem batch) { _editBatch = batch; _deleteBatch = null; _editProduced = batch.GoodUnits + batch.WasteUnits; _editWaste = batch.WasteUnits; _batchReason = ""; }
-    private void OpenDelete(BatchItem batch) { _errors.Clear(); _deleteBatch = batch; _editBatch = null; _batchReason = ""; }
-    private void CloseBatchDialog() { if (_batchSaving) return; _editBatch = null; _deleteBatch = null; _batchReason = ""; }
+    private void OpenEdit(BatchItem batch) { _editBatch = batch; _deleteBatch = null; _repriceBatch = null; _editProduced = batch.GoodUnits + batch.WasteUnits; _editWaste = batch.WasteUnits; _batchReason = ""; }
+    private void OpenReprice(BatchItem batch) { _errors.Clear(); _repriceBatch = batch; _editBatch = null; _deleteBatch = null; _batchReason = "Precios referenciales de insumos cargados después de producir"; }
+    private async Task RepriceBatchAsync() { if (_repriceBatch is null) return; _batchSaving = true; var result = await StockService.RepriceProductionBatchAsync(new(_repriceBatch.Id, _repriceBatch.Version, _batchReason), await UserIdAsync()); _batchSaving = false; if (!result.Succeeded) { _errors.Clear(); _errors.AddRange(result.Errors); return; } _message = $"Costo del lote {_repriceBatch.Number} recalculado. Revisa el estado de resultados."; CloseBatchDialog(); await ReloadAsync(); }
+    private void OpenDelete(BatchItem batch) { _errors.Clear(); _deleteBatch = batch; _editBatch = null; _repriceBatch = null; _batchReason = ""; }
+    private void CloseBatchDialog() { if (_batchSaving) return; _editBatch = null; _deleteBatch = null; _repriceBatch = null; _batchReason = ""; }
     private async Task SaveBatchAsync() { if (_editBatch is null) return; _batchSaving = true; var result = await StockService.UpdateProductionBatchAsync(new(_editBatch.Id, _editBatch.Version, _editProduced, _editWaste, _batchReason), await UserIdAsync()); _batchSaving = false; if (!result.Succeeded) { _errors.Clear(); _errors.AddRange(result.Errors); return; } _message = $"Lote {_editBatch.Number} corregido y auditado."; CloseBatchDialog(); await ReloadAsync(); }
     private async Task DeleteBatchAsync() { if (_deleteBatch is null) return; _batchSaving = true; var number = _deleteBatch.Number; var result = await StockService.DeleteProductionBatchAsync(new(_deleteBatch.Id, _deleteBatch.Version, _batchReason), await UserIdAsync()); _batchSaving = false; if (!result.Succeeded) { _errors.Clear(); _errors.AddRange(result.Errors); return; } _message = $"Lote {number} eliminado. Se retiró el producto terminado, se devolvieron los insumos y se recalcularon las reservas."; CloseBatchDialog(); await ReloadAsync(); }
 }
