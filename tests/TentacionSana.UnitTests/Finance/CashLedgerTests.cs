@@ -42,6 +42,20 @@ public sealed class CashLedgerTests
     }
 
     [Fact]
+    public void MigrationAdjustmentCanRecordBankDifferenceWithoutPurchaseEvidence()
+    {
+        var now = DateTimeOffset.UtcNow;
+        var movement = CashMovement.Create(CashAccount.Bank, CashDirection.Expense,
+            CashSource.BalanceMigrationAdjustment, now, "Saldo inicial al migrar datos", 125.50m,
+            "", "", "", 0, Guid.NewGuid(), now, category: "Migración de saldo bancario");
+
+        Assert.Equal(CashAccount.Bank, movement.Account);
+        Assert.Equal(CashSource.BalanceMigrationAdjustment, movement.Source);
+        Assert.Equal(125.50m, movement.Amount);
+        Assert.Null(movement.AccountingAccountId);
+    }
+
+    [Fact]
     public void RenditionCreatesPendingPayableForPerson()
     {
         var payable = CashPayable.Create(Guid.NewGuid(), "María Pérez", 125.555m, "rendiciones/foto", "ticket.webp", "webp", 500,

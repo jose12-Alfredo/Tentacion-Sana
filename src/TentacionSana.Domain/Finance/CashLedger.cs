@@ -2,7 +2,7 @@ namespace TentacionSana.Domain.Finance;
 
 public enum CashAccount { Bank, Cash }
 public enum CashDirection { Income, Expense }
-public enum CashSource { CustomerPayment, InventoryPurchase, Manual, Transfer, CashCountAdjustment }
+public enum CashSource { CustomerPayment, InventoryPurchase, Manual, Transfer, CashCountAdjustment, BalanceMigrationAdjustment }
 
 public sealed class CashMovement
 {
@@ -33,7 +33,7 @@ public sealed class CashMovement
     {
         if (string.IsNullOrWhiteSpace(detail)) throw new ArgumentException("El detalle es obligatorio.");
         if (amount <= 0) throw new ArgumentException("El monto debe ser mayor que cero.");
-        if (string.IsNullOrWhiteSpace(publicId)) throw new ArgumentException("La foto del respaldo es obligatoria.");
+        if (source != CashSource.BalanceMigrationAdjustment && string.IsNullOrWhiteSpace(publicId)) throw new ArgumentException("La foto del respaldo es obligatoria.");
         return new CashMovement { Id = Guid.NewGuid(), Account = account, Direction = direction, Source = source,
             OccurredAtUtc = occurredAtUtc, Detail = detail.Trim(), Category = category.Trim(), Amount = decimal.Round(amount, 2), PaymentId = paymentId, TransferId=transferId, AccountingAccountId=accountingAccountId,
             SupplyPurchaseId = supplyPurchaseId, EvidencePublicId = publicId, EvidenceFileName = Path.GetFileName(fileName),

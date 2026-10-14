@@ -5,6 +5,7 @@ using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
 using TentacionSana.Application.Finance;
+using TentacionSana.Application.Security;
 using TentacionSana.Domain.Finance;
 using TentacionSana.Infrastructure.Auditing;
 using TentacionSana.Infrastructure.Media;
@@ -68,6 +69,51 @@ public sealed class CashLedgerService(ApplicationDbContext db, IOptions<Cloudina
         if(command.EvidenceContent is not null)upload=await Upload(command.EvidenceContent,command.EvidenceFileName!,command.EvidenceContentType!,command.EvidenceLength,"arqueos",cancellationToken);
         if(!upload.Ok)return Fail(upload.Error!);
         try{var count=CashCount.Create(command.CountedAtUtc,expected,command.CountedAmount,command.Observation,upload.PublicId,command.EvidenceFileName,upload.Format,upload.Bytes,userId);db.CashCounts.Add(count);if(difference!=0)db.CashMovements.Add(CashMovement.Create(CashAccount.Cash,difference>0?CashDirection.Income:CashDirection.Expense,CashSource.CashCountAdjustment,command.CountedAtUtc,$"Ajuste por arqueo: {command.Observation}",Math.Abs(difference),upload.PublicId!,command.EvidenceFileName!,upload.Format!,upload.Bytes,userId,clock.GetUtcNow(),category:"Ajuste de arqueo"));await db.SaveChangesAsync(cancellationToken);return new(true,count.Id,[]);}catch(ArgumentException ex){return Fail(ex.Message);}
+    }
+
+    public async Task<CashResult> AdjustBankBalanceAsync(BankBalanceAdjustmentCommand command, Guid userId, CancellationToken cancellationToken = default)
+    {
+        if (!await db.UserRoles.AnyAsync(x => x.UserId == userId &&
+                (db.Roles.Any(r => r.Id == x.RoleId && r.Name == AppRoles.Administrator) ||
+                 db.RoleClaims.Any(c => c.RoleId == x.RoleId && c.ClaimType == AppPermissions.ClaimType && c.ClaimValue == AppPermissions.Administration)), cancellationToken))
+            return Fail("Solo administración puede ajustar el saldo inicial del banco.");
+        if (command.ActualBalance < 0 || decimal.Round(command.ActualBalance, 2) != command.ActualBalance)
+            return Fail("El saldo real debe ser positivo o cero, con hasta dos decimales.");
+        if (string.IsNullOrWhiteSpace(command.Reason) || command.Reason.Trim().Length > 500)
+            return Fail("Indica un motivo de hasta 500 caracteres.");
+
+        var strategy = db.Database.CreateExecutionStrategy();
+        try
+        {
+            return await strategy.ExecuteAsync(async () =>
+            {
+                db.ChangeTracker.Clear();
+                await using var transaction = await db.Database.BeginTransactionAsync(IsolationLevel.Serializable, cancellationToken);
+                var current = await ActiveMovements.Where(x => x.Account == CashAccount.Bank)
+                    .SumAsync(x => x.Direction == CashDirection.Income ? x.Amount : -x.Amount, cancellationToken);
+                if (current != command.ExpectedBalance) return Fail("El saldo bancario cambió. Recarga la pantalla antes de ajustarlo.");
+                var difference = command.ActualBalance - current;
+                if (difference == 0) return Fail("El saldo bancario ya coincide con el saldo real.");
+                var now = clock.GetUtcNow();
+                var movement = CashMovement.Create(CashAccount.Bank,
+                    difference > 0 ? CashDirection.Income : CashDirection.Expense,
+                    CashSource.BalanceMigrationAdjustment, now,
+                    $"Ajuste de saldo inicial: {command.Reason.Trim()}", Math.Abs(difference),
+                    "", "", "", 0, userId, now, category: "Migración de saldo bancario");
+                db.CashMovements.Add(movement);
+                db.AuditEntries.Add(new AuditEntry { Id = Guid.NewGuid(), Action = "BankBalanceAdjusted", EntityType = "CashMovement",
+                    EntityId = movement.Id.ToString(), UserId = userId, OccurredAtUtc = now,
+                    PreviousValuesJson = JsonSerializer.Serialize(new { Balance = current }),
+                    NewValuesJson = JsonSerializer.Serialize(new { Balance = command.ActualBalance, Difference = difference }),
+                    Reason = command.Reason.Trim() });
+                await db.SaveChangesAsync(cancellationToken);
+                await transaction.CommitAsync(cancellationToken);
+                return new CashResult(true, movement.Id, []);
+            });
+        }
+        catch (DbUpdateConcurrencyException) { db.ChangeTracker.Clear(); return Fail("El saldo cambió. Recarga e intenta nuevamente."); }
+        catch (DbUpdateException) { db.ChangeTracker.Clear(); return Fail("No se pudo guardar el ajuste bancario."); }
+        catch (ArgumentException ex) { db.ChangeTracker.Clear(); return Fail(ex.Message); }
     }
 
     public async Task<CashResult> UpdateMovementAsync(UpdateCashMovementCommand command, Guid userId, CancellationToken cancellationToken = default)
