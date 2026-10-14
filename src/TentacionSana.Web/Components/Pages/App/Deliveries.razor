@@ -14,10 +14,12 @@
     .delivery-tabs { display: none !important; }
     .deliveries-workspace { grid-template-columns: minmax(0, 1fr) clamp(18rem, 22vw, 21rem) !important; gap: 1rem; }
     .deliveries-workspace > .deliveries-list-card { grid-column: 1; grid-row: 1; min-width: 0; }
+    .deliveries-workspace > .deliveries-list-card { position: relative; z-index: 2; overflow: visible; }
     .deliveries-workspace > .route-map-card { grid-column: 1; grid-row: 2; margin-top: 0; min-width: 0; }
     .deliveries-workspace > .route-panel { grid-column: 2; grid-row: 1 / span 2; top: 1rem; }
     .interactive-route-map, .route-map-frame { height: 32rem; min-height: 32rem; }
     .delivery-table { overflow-x: visible; }
+    .delivery-table .row-menu nav { z-index: 30; }
     .delivery-table table { min-width: 0; table-layout: fixed; }
     .delivery-table th:nth-child(1) { width: 2.35rem; }
     .delivery-table th:nth-child(2) { width: 5.75rem; }
@@ -608,7 +610,7 @@ else
     }
     private static bool HasPartialPayment(DeliveryBoardItem item) => item.Paid > 0 && item.Balance > 0;
     private static string DriverName(DeliveryBoardItem item) => string.IsNullOrWhiteSpace(item.DriverName) ? "Sin asignar" : item.DriverName;
-    private static bool CanAssignDriver(DeliveryBoardItem item) => item.RouteId is null && item.Status is "Pending" or "Incident";
+    private static bool CanAssignDriver(DeliveryBoardItem item) => item.Status == "Incident" || (item.RouteId is null && item.Status == "Pending");
     private static bool CanSelect(DeliveryBoardItem item) => item.CanAddToRoute || CanAssignDriver(item);
     private static string? MapUrl(string? value) => Uri.TryCreate(value, UriKind.Absolute, out var uri) && uri.Scheme is "http" or "https" ? uri.AbsoluteUri : null;
     private static string? WhatsApp(string? phone) { if (string.IsNullOrWhiteSpace(phone)) return null; var digits = new string(phone.Where(char.IsDigit).ToArray()); if (digits.Length == 8) digits = "591" + digits; return digits.Length < 8 ? null : $"https://wa.me/{digits}"; }
