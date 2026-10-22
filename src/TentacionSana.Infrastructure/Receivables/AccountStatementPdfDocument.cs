@@ -62,7 +62,7 @@ internal static class AccountStatementPdfDocument
         page.DefaultTextStyle(x => x.FontFamily("Lato").FontSize(9).FontColor(Ink));
         page.Header().Row(row =>
         {
-            row.ConstantItem(118).Height(56).Background(Ink).Padding(8).Element(container => AddLogo(container, model.Logo, true));
+            row.ConstantItem(118).Height(56).Element(container => AddLogo(container, model.Logo, false));
             row.RelativeItem().PaddingLeft(18).Column(column =>
             {
                 column.Item().Text("ESTADO DE CUENTA").FontSize(22).SemiBold().FontColor(Ink);
