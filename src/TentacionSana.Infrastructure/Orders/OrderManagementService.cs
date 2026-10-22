@@ -308,8 +308,26 @@ public sealed class OrderManagementService(ApplicationDbContext db, TimeProvider
 
     public async Task<OrderOperationResult> ReviseLineAsync(Guid id,Guid lineId,int version,ConfirmedLineCommand c,Guid user,CancellationToken ct=default)
     {
-        await using var tx=await db.Database.BeginTransactionAsync(ct);var order=await Load(id,ct);if(order is null)return Fail("El pedido no existe.");if(order.Version!=version)return Conflict();if(!await CanModifyProgressed(order,user))return Fail("Este estado requiere autorización administrativa.");var line=order.Lines.SingleOrDefault(x=>x.Id==lineId);if(line is null)return Fail("La línea no existe.");if(c.SoldUnitPrice<line.StandardUnitPrice&&!await IsAdministrator(user))return Fail("El descuento requiere autorización de una persona administradora.");
-        try{var reservation=order.Reservations.Single(x=>x.OrderLineId==lineId&&x.IsActive);var oldReserved=reservation.ReservedQuantity;var total=c.SaleQuantity+c.ReplacementQuantity+c.TastingQuantity;order.ReviseLine(lineId,c.SaleQuantity,c.ReplacementQuantity,c.TastingQuantity,line.StandardUnitPrice,c.SoldUnitPrice,c.DiscountReason,c.ReplacementReason,c.ReplacementNotes,c.TastingReason,c.TastingNotes,c.Reason,user,clock.GetUtcNow());var balance=await db.ProductStockBalances.SingleAsync(x=>x.ProductId==line.ProductId,ct);if(total<oldReserved){balance.Release(oldReserved-total);reservation.Allocate(total);}else if(total>oldReserved)reservation.Allocate(oldReserved+balance.Reserve(total-oldReserved));db.OrderChangeHistory.Add(order.ChangeHistory[^1]);var result=await Save(order,"ConfirmedOrderLineChanged",user,ct,c.Reason);if(result.Succeeded)await tx.CommitAsync(ct);return result;}catch(Exception ex)when(ex is ArgumentException or InvalidOperationException){return Fail(ex.Message);}
+        await using var tx=await db.Database.BeginTransactionAsync(ct);var order=await Load(id,ct);if(order is null)return Fail("El pedido no existe.");if(order.Version!=version)return Conflict();if(!await CanModifyProgressed(order,user))return Fail("Este estado requiere autorización administrativa.");var line=order.Lines.SingleOrDefault(x=>x.Id==lineId&&x.IsActive);if(line is null)return Fail("La línea no existe o ya fue retirada.");
+        try
+        {
+            var reservation=order.Reservations.Single(x=>x.OrderLineId==lineId&&x.IsActive);var oldProductId=line.ProductId;var oldReserved=reservation.ReservedQuantity;var total=c.SaleQuantity+c.ReplacementQuantity+c.TastingQuantity;var productId=c.ProductId??line.ProductId;
+            var product=await db.Products.SingleOrDefaultAsync(x=>x.Id==productId&&x.IsActive,ct);if(product is null)return Fail("El producto seleccionado no está disponible.");
+            var now=clock.GetUtcNow();var standardPrice=productId==oldProductId?line.StandardUnitPrice:await db.ProductPrices.Where(x=>x.ProductId==productId&&x.EffectiveFromUtc<=now&&(x.EffectiveToUtc==null||x.EffectiveToUtc>now)).OrderByDescending(x=>x.EffectiveFromUtc).Select(x=>(decimal?)x.Amount).FirstOrDefaultAsync(ct)??0m;
+            if(c.SoldUnitPrice<standardPrice&&!await IsAdministrator(user))return Fail("El descuento requiere autorización de una persona administradora.");
+            order.ReviseLine(lineId,product.Id,product.Name,c.SaleQuantity,c.ReplacementQuantity,c.TastingQuantity,standardPrice,c.SoldUnitPrice,c.DiscountReason,c.ReplacementReason,c.ReplacementNotes,c.TastingReason,c.TastingNotes,c.Reason,user,now);
+            if(productId!=oldProductId)
+            {
+                if(oldReserved>0){var oldBalance=await db.ProductStockBalances.SingleAsync(x=>x.ProductId==oldProductId,ct);oldBalance.Release(oldReserved);}
+                var newBalance=await db.ProductStockBalances.SingleAsync(x=>x.ProductId==productId,ct);reservation.ChangeProduct(productId,total);reservation.Allocate(newBalance.Reserve(total));
+            }
+            else
+            {
+                var balance=await db.ProductStockBalances.SingleAsync(x=>x.ProductId==productId,ct);if(total<oldReserved){balance.Release(oldReserved-total);reservation.Allocate(total);}else if(total>oldReserved)reservation.Allocate(oldReserved+balance.Reserve(total-oldReserved));
+            }
+            db.OrderChangeHistory.Add(order.ChangeHistory[^1]);var result=await Save(order,"ConfirmedOrderLineChanged",user,ct,c.Reason);if(result.Succeeded)await tx.CommitAsync(ct);return result;
+        }
+        catch(Exception ex)when(ex is ArgumentException or InvalidOperationException){return Fail(ex.Message);}
     }
 
     public async Task<OrderOperationResult> RemoveConfirmedLineAsync(Guid id,Guid lineId,int version,string reason,Guid user,CancellationToken ct=default)
