@@ -149,6 +149,28 @@ public sealed class OrderTests
     }
 
     [Fact]
+    public void ConfirmedLineCanChangeTwentySalesToOneSaleAndOneTasting()
+    {
+        var order = Order.CreateDraft(Guid.NewGuid(), null, UserId, Now);
+        order.Configure(order.CustomerId, null, null, null, Now.AddDays(1), null, UserId, Now);
+        var line = order.AddLine(Guid.NewGuid(), "Abro", 20, 0, 0, 15m, 15m, null, null, null, null, null, UserId, Now);
+        order.Confirm(OrderSnapshot.Create(order.Id, "Cliente", null, null, null, null, null, Now), UserId, Now);
+        var reservation = Assert.Single(order.Reservations);
+        reservation.Allocate(20);
+
+        order.ReviseLine(line.Id, line.ProductId, line.ProductName, 1, 0, 1, 15m, 15m, null, null, null,
+            "Muestra comercial", null, "Cliente pidió una muestra", UserId, Now.AddMinutes(1));
+
+        Assert.Equal(1, line.SaleQuantity);
+        Assert.Equal(1, line.TastingQuantity);
+        Assert.Equal(2, line.Quantity);
+        Assert.Equal(15m, line.LineTotal);
+        Assert.Equal(2, reservation.Quantity);
+        Assert.Equal(2, reservation.ReservedQuantity);
+        Assert.Equal(0, reservation.ShortageQuantity);
+    }
+
+    [Fact]
     public void OutForDeliveryCannotBeSelectedManually()
     {
         var order = Order.CreateDraft(Guid.NewGuid(), null, UserId, Now);

@@ -308,33 +308,79 @@ public sealed class OrderManagementService(ApplicationDbContext db, TimeProvider
 
     public async Task<OrderOperationResult> ReviseLineAsync(Guid id,Guid lineId,int version,ConfirmedLineCommand c,Guid user,CancellationToken ct=default)
     {
-        await using var tx=await db.Database.BeginTransactionAsync(ct);var order=await Load(id,ct);if(order is null)return Fail("El pedido no existe.");if(order.Version!=version)return Conflict();if(!await CanModifyProgressed(order,user))return Fail("Este estado requiere autorización administrativa.");var line=order.Lines.SingleOrDefault(x=>x.Id==lineId&&x.IsActive);if(line is null)return Fail("La línea no existe o ya fue retirada.");
+        var strategy=db.Database.CreateExecutionStrategy();
         try
         {
-            var reservation=order.Reservations.Single(x=>x.OrderLineId==lineId&&x.IsActive);var oldProductId=line.ProductId;var oldReserved=reservation.ReservedQuantity;var total=c.SaleQuantity+c.ReplacementQuantity+c.TastingQuantity;var productId=c.ProductId??line.ProductId;
-            var product=await db.Products.SingleOrDefaultAsync(x=>x.Id==productId&&x.IsActive,ct);if(product is null)return Fail("El producto seleccionado no está disponible.");
-            var now=clock.GetUtcNow();var standardPrice=productId==oldProductId?line.StandardUnitPrice:await db.ProductPrices.Where(x=>x.ProductId==productId&&x.EffectiveFromUtc<=now&&(x.EffectiveToUtc==null||x.EffectiveToUtc>now)).OrderByDescending(x=>x.EffectiveFromUtc).Select(x=>(decimal?)x.Amount).FirstOrDefaultAsync(ct)??0m;
-            if(c.SoldUnitPrice<standardPrice&&!await IsAdministrator(user))return Fail("El descuento requiere autorización de una persona administradora.");
-            order.ReviseLine(lineId,product.Id,product.Name,c.SaleQuantity,c.ReplacementQuantity,c.TastingQuantity,standardPrice,c.SoldUnitPrice,c.DiscountReason,c.ReplacementReason,c.ReplacementNotes,c.TastingReason,c.TastingNotes,c.Reason,user,now);
-            if(productId!=oldProductId)
+            return await strategy.ExecuteAsync(async () =>
             {
-                if(oldReserved>0){var oldBalance=await db.ProductStockBalances.SingleAsync(x=>x.ProductId==oldProductId,ct);oldBalance.Release(oldReserved);}
-                var newBalance=await db.ProductStockBalances.SingleAsync(x=>x.ProductId==productId,ct);reservation.ChangeProduct(productId,total);reservation.Allocate(newBalance.Reserve(total));
-            }
-            else
-            {
-                var balance=await db.ProductStockBalances.SingleAsync(x=>x.ProductId==productId,ct);if(total<oldReserved){balance.Release(oldReserved-total);reservation.Allocate(total);}else if(total>oldReserved)reservation.Allocate(oldReserved+balance.Reserve(total-oldReserved));
-            }
-            db.OrderChangeHistory.Add(order.ChangeHistory[^1]);var result=await Save(order,"ConfirmedOrderLineChanged",user,ct,c.Reason);if(result.Succeeded)await tx.CommitAsync(ct);return result;
+                db.ChangeTracker.Clear();
+                await using var tx=await db.Database.BeginTransactionAsync(ct);
+                var order=await Load(id,ct);
+                if(order is null)return Fail("El pedido no existe.");
+                if(order.Version!=version)return Conflict();
+                if(!await CanModifyProgressed(order,user))return Fail("Este estado requiere autorización administrativa.");
+                var line=order.Lines.SingleOrDefault(x=>x.Id==lineId&&x.IsActive);
+                if(line is null)return Fail("La línea no existe o ya fue retirada.");
+                try
+                {
+                    var reservation=order.Reservations.Single(x=>x.OrderLineId==lineId&&x.IsActive);
+                    var oldProductId=line.ProductId;
+                    var oldReserved=reservation.ReservedQuantity;
+                    var total=c.SaleQuantity+c.ReplacementQuantity+c.TastingQuantity;
+                    var productId=c.ProductId??line.ProductId;
+                    var product=productId==oldProductId?null:await db.Products.SingleOrDefaultAsync(x=>x.Id==productId&&x.IsActive,ct);
+                    if(productId!=oldProductId&&product is null)return Fail("El producto seleccionado no está disponible.");
+                    var now=clock.GetUtcNow();
+                    var standardPrice=productId==oldProductId?line.StandardUnitPrice:await db.ProductPrices.Where(x=>x.ProductId==productId&&x.EffectiveFromUtc<=now&&(x.EffectiveToUtc==null||x.EffectiveToUtc>now)).OrderByDescending(x=>x.EffectiveFromUtc).Select(x=>(decimal?)x.Amount).FirstOrDefaultAsync(ct)??0m;
+                    if(c.SoldUnitPrice<standardPrice&&!await IsAdministrator(user))return Fail("El descuento requiere autorización de una persona administradora.");
+                    order.ReviseLine(lineId,productId,product?.Name??line.ProductName,c.SaleQuantity,c.ReplacementQuantity,c.TastingQuantity,standardPrice,c.SoldUnitPrice,c.DiscountReason,c.ReplacementReason,c.ReplacementNotes,c.TastingReason,c.TastingNotes,c.Reason,user,now);
+                    if(productId!=oldProductId)
+                    {
+                        if(oldReserved>0){var oldBalance=await db.ProductStockBalances.SingleAsync(x=>x.ProductId==oldProductId,ct);oldBalance.Release(oldReserved);}
+                        var newBalance=await db.ProductStockBalances.SingleOrDefaultAsync(x=>x.ProductId==productId,ct);
+                        if(newBalance is null){newBalance=ProductStockBalance.Create(productId);db.ProductStockBalances.Add(newBalance);}
+                        reservation.ChangeProduct(productId,total);
+                        reservation.Allocate(newBalance.Reserve(total));
+                    }
+                    else
+                    {
+                        var balance=await db.ProductStockBalances.SingleAsync(x=>x.ProductId==productId,ct);
+                        if(total<oldReserved){balance.Release(oldReserved-total);reservation.Allocate(total);}
+                        else if(total>oldReserved)reservation.Allocate(oldReserved+balance.Reserve(total-oldReserved));
+                    }
+                    db.OrderChangeHistory.Add(order.ChangeHistory[^1]);
+                    var result=await Save(order,"ConfirmedOrderLineChanged",user,ct,c.Reason);
+                    if(result.Succeeded)await tx.CommitAsync(ct);
+                    return result;
+                }
+                catch(Exception ex)when(ex is ArgumentException or InvalidOperationException){return Fail(ex.Message);}
+            });
         }
         catch(Exception ex)when(ex is ArgumentException or InvalidOperationException){return Fail(ex.Message);}
+        catch(DbUpdateException){return Fail("No se pudo guardar el ajuste en la base de datos. Recarga el pedido y vuelve a intentarlo.");}
     }
-
     public async Task<OrderOperationResult> RemoveConfirmedLineAsync(Guid id,Guid lineId,int version,string reason,Guid user,CancellationToken ct=default)
     {
-        await using var tx=await db.Database.BeginTransactionAsync(ct);var order=await Load(id,ct);if(order is null)return Fail("El pedido no existe.");if(order.Version!=version)return Conflict();if(!await CanModifyProgressed(order,user))return Fail("Este estado requiere autorización administrativa.");try{var reservation=order.Reservations.Single(x=>x.OrderLineId==lineId&&x.IsActive);var release=reservation.ReservedQuantity;order.RemoveConfirmedLine(lineId,reason,user,clock.GetUtcNow());if(release>0){var balance=await db.ProductStockBalances.SingleAsync(x=>x.ProductId==reservation.ProductId,ct);balance.Release(release);}db.OrderChangeHistory.Add(order.ChangeHistory[^1]);var result=await Save(order,"ConfirmedOrderLineRemoved",user,ct,reason);if(result.Succeeded)await tx.CommitAsync(ct);return result;}catch(Exception ex)when(ex is ArgumentException or InvalidOperationException){return Fail(ex.Message);}
+        var order=await Load(id,ct);
+        if(order is null)return Fail("El pedido no existe.");
+        if(order.Version!=version)return Conflict();
+        if(!await CanModifyProgressed(order,user))return Fail("Este estado requiere autorización administrativa.");
+        try
+        {
+            var reservation=order.Reservations.Single(x=>x.OrderLineId==lineId&&x.IsActive);
+            var release=reservation.ReservedQuantity;
+            order.RemoveConfirmedLine(lineId,reason,user,clock.GetUtcNow());
+            if(release>0)
+            {
+                var balance=await db.ProductStockBalances.SingleAsync(x=>x.ProductId==reservation.ProductId,ct);
+                balance.Release(release);
+            }
+            db.OrderChangeHistory.Add(order.ChangeHistory[^1]);
+            return await Save(order,"ConfirmedOrderLineRemoved",user,ct,reason);
+        }
+        catch(Exception ex)when(ex is ArgumentException or InvalidOperationException){return Fail(ex.Message);}
+        catch(DbUpdateException){return Fail("No se pudo retirar la línea. Recarga el pedido y vuelve a intentarlo.");}
     }
-
     public async Task<OrderOperationResult> AdvanceStatusAsync(Guid id,int version,string nextStatus,string reason,Guid user,CancellationToken ct=default)
     {
         var order=await Load(id,ct);if(order is null)return Fail("El pedido no existe.");if(order.Version!=version)return Conflict();if(!Enum.TryParse<OrderStatus>(nextStatus,true,out var next))return Fail("El estado solicitado no es válido.");if(order.Status!=OrderStatus.Confirmed&&!await IsAdministrator(user))return Fail("Este cambio de estado requiere autorización administrativa.");try{order.AdvanceTo(next,reason,user,clock.GetUtcNow());db.OrderStatusHistory.Add(order.StatusHistory[^1]);return await Save(order,"OrderStatusChanged",user,ct,reason);}catch(Exception ex)when(ex is ArgumentException or InvalidOperationException){return Fail(ex.Message);}
