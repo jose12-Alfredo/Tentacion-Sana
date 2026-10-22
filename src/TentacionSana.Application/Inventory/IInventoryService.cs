@@ -12,12 +12,16 @@ public interface IInventoryService
  Task<IReadOnlyList<ProductionOrderDemand>> GetProductionOrderDemandAsync(Guid productId,CancellationToken cancellationToken=default);
  Task<InventoryResult> UpdateProductionBatchAsync(UpdateProductionBatchCommand command,Guid userId,CancellationToken cancellationToken=default);
  Task<InventoryResult> RepriceProductionBatchAsync(RepriceProductionBatchCommand command,Guid userId,CancellationToken cancellationToken=default);
+ Task<ProductionCostDetail?> GetProductionCostDetailAsync(Guid batchId,CancellationToken cancellationToken=default);
  Task<InventoryResult> DeleteProductionBatchAsync(DeleteProductionBatchCommand command,Guid userId,CancellationToken cancellationToken=default);
  Task<SupplyInventoryDashboard> GetSupplyDashboardAsync(CancellationToken cancellationToken=default);
+ Task<SupplyCostHistory?> GetSupplyCostHistoryAsync(Guid supplyId,CancellationToken cancellationToken=default);
  Task<RecipeDetail?> GetRecipeAsync(Guid productId,CancellationToken cancellationToken=default);
  Task<InventoryResult> CreateSupplyAsync(CreateSupplyCommand command,Guid userId,CancellationToken cancellationToken=default);
  Task<InventoryResult> UpdateSupplyAsync(UpdateSupplyCommand command,Guid userId,CancellationToken cancellationToken=default);
  Task<InventoryResult> RegisterPurchaseAsync(PurchaseCommand command,Guid userId,CancellationToken cancellationToken=default);
+ Task<InventoryResult> UpdatePurchaseAsync(UpdatePurchaseCommand command,Guid userId,CancellationToken cancellationToken=default);
+ Task<InventoryResult> CorrectSupplyEntryPriceAsync(CorrectSupplyEntryPriceCommand command,Guid userId,CancellationToken cancellationToken=default);
  Task<InventoryResult> SaveRecipeAsync(SaveRecipeCommand command,Guid userId,CancellationToken cancellationToken=default);
  Task<InventoryResult> RegisterSupplyCountAsync(SupplyCountCommand command,Guid userId,CancellationToken cancellationToken=default);
 }
@@ -30,6 +34,8 @@ public sealed record CountCommand(Guid ProductId,int CountedQuantity,string Reas
 public sealed record InventoryResult(bool Succeeded,Guid? Id,IReadOnlyList<string> Errors,int AssignedUnits=0,int AssignedOrders=0,IReadOnlyList<string>? Warnings=null);
 public sealed record StockItem(Guid ProductId,string Product,int Physical,int Reserved,int Available,int Shortage,int Version);
 public sealed record BatchItem(Guid Id,string Number,string Product,DateTimeOffset ProducedAtUtc,int GoodUnits,int WasteUnits,int Remaining,decimal? EstimatedUnitCost,string RegisteredBy,int Version);
+public sealed record ProductionCostLine(Guid SupplyId,string Supply,string Unit,decimal Quantity,decimal? UnitCost,decimal? TotalCost,decimal? CurrentAverageUnitCost,bool HasRecordedUnitCost);
+public sealed record ProductionCostDetail(Guid BatchId,string BatchNumber,string Product,int ProducedUnits,int WasteUnits,int GoodUnits,decimal? UnitCost,decimal? TotalCost,IReadOnlyList<ProductionCostLine> Lines);
 public sealed record MovementItem(Guid Id,string Product,string Kind,int Quantity,decimal? HistoricalTotalCost,string Reason,DateTimeOffset AtUtc);
 public sealed record ProductionDashboard(IReadOnlyList<ProductionNeed> Products,int ProductsWithShortage,int UnitsToProduce,int ProducedToday,int TotalAvailable);
 public sealed record ProductionNeed(Guid ProductId,string Product,int Required,int Physical,int Reserved,int Available,int Shortage,int PendingDemand,DateTimeOffset? NearestPromisedAtUtc);
@@ -39,13 +45,20 @@ public sealed record ReservationAssignment(Guid ReservationId,Guid OrderId,int Q
 public sealed record CreateSupplyCommand(string Name,string BaseUnit,string PurchasePresentation,decimal BaseQuantityPerPackage);
 public sealed record UpdateSupplyCommand(Guid SupplyId,string Name,string BaseUnit,string PurchasePresentation,decimal BaseQuantityPerPackage);
 public sealed record PurchaseCommand(Guid SupplyId,DateTimeOffset PurchasedAtUtc,string BaseUnit,string PurchasePresentation,decimal BaseQuantityPerPackage,decimal PackageQuantity,decimal UnitPrice,string PaymentMethod="",Stream? EvidenceContent=null,string? EvidenceFileName=null,string? EvidenceContentType=null,long EvidenceLength=0);
+public sealed record UpdatePurchaseCommand(Guid PurchaseId,DateTimeOffset PurchasedAtUtc,string PurchasePresentation,decimal BaseQuantityPerPackage,decimal PackageQuantity,decimal UnitPrice,string Reason);
+public sealed record CorrectSupplyEntryPriceCommand(Guid MovementId,decimal BaseUnitCost,string Reason);
 public sealed record SupplyCountCommand(Guid SupplyId,decimal CountedQuantity,string Reason,decimal? PricePerPackage=null);
 public sealed record RecipeLineCommand(Guid SupplyId,decimal RequiredQuantity);
 public sealed record SaveRecipeCommand(Guid ProductId,string Name,decimal YieldQuantity,IReadOnlyList<RecipeLineCommand> Lines);
-public sealed record SupplyStockItem(Guid Id,string Name,string Unit,string PurchasePresentation,decimal BaseQuantityPerPackage,decimal Stock,decimal PackageEquivalent,decimal? LastUnitPrice,DateTimeOffset? LastPurchaseAtUtc,int Version);
+public sealed record SupplyStockItem(Guid Id,string Name,string Unit,string PurchasePresentation,decimal BaseQuantityPerPackage,decimal Stock,decimal PackageEquivalent,decimal? LastUnitPrice,DateTimeOffset? LastPurchaseAtUtc,int Version,decimal? AverageUnitCost=null)
+{
+ public decimal? InventoryValue=>AverageUnitCost is null?null:decimal.Round(Stock*AverageUnitCost.Value,2);
+}
 public sealed record SupplyRequirement(Guid SupplyId,string Supply,string Unit,decimal Required,decimal Stock,decimal Shortage,string PurchasePresentation,decimal BaseQuantityPerPackage,decimal PackagesToBuy,decimal? EstimatedCost);
 public sealed record SupplyPurchaseItem(Guid Id,string Supply,DateTimeOffset PurchasedAtUtc,decimal Packages,string Presentation,decimal BaseQuantity,string Unit,decimal UnitPrice,decimal TotalPrice,string RegisteredBy);
 public sealed record SupplyMovementItem(Guid Id,string Supply,string Unit,string Kind,decimal Quantity,string Reason,DateTimeOffset AtUtc);
+public sealed record SupplyCostHistory(Guid SupplyId,string Supply,string Unit,decimal CurrentStock,decimal? CurrentAverageUnitCost,IReadOnlyList<SupplyCostHistoryEntry> Entries);
+public sealed record SupplyCostHistoryEntry(Guid MovementId,Guid? PurchaseId,DateTimeOffset RegisteredAtUtc,DateTimeOffset? PurchasedAtUtc,string Kind,string Detail,decimal Quantity,decimal? BaseUnitCost,decimal? AverageUnitCostAfter,decimal StockAfter,string? PurchasePresentation,decimal? PackageQuantity,decimal? BaseQuantityPerPackage,decimal? PricePerPackage,decimal? TotalPrice);
 public sealed record ProductWithoutRecipe(Guid ProductId,string Product,int UnitsToProduce);
 public sealed record SupplyInventoryDashboard(IReadOnlyList<SupplyStockItem> Supplies,IReadOnlyList<SupplyRequirement> Requirements,IReadOnlyList<SupplyPurchaseItem> RecentPurchases,IReadOnlyList<SupplyMovementItem> RecentMovements,IReadOnlyList<ProductWithoutRecipe> ProductsWithoutRecipe);
 public sealed record RecipeLineDetail(Guid SupplyId,string Supply,string Unit,decimal RequiredQuantity);

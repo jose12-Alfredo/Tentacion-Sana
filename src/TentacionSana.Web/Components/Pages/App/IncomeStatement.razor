@@ -38,9 +38,9 @@ else
         </dl>
     </section>
 
-    @if (_report.SalesWithoutCalculatedCost > 0)
+    @if (_report.ProductionsWithoutCalculatedCost > 0)
     {
-        <p class="cost-warning"><strong>Revisa los costos:</strong> @_report.SalesWithoutCalculatedCost venta(s) no tienen costo de producción calculado y podrían aumentar la utilidad mostrada.</p>
+        <p class="cost-warning"><strong>Revisa los costos:</strong> @_report.ProductionsWithoutCalculatedCost lote(s) producido(s) no tienen un costo calculado y podrían aumentar la utilidad mostrada.</p>
     }
 
     <section class="statement-sheet" aria-label="Detalle del estado de resultados">
@@ -62,7 +62,7 @@ else
 
         <div class="statement-group">
             <h2>Costos</h2>
-            <div class="statement-row"><span>Costo de los productos vendidos</span><strong>(@Money(_report.CostOfSales))</strong></div>
+            <div class="statement-row"><span>Costo de la producción del período</span><strong>(@Money(_report.ProductionCost))</strong></div>
             @if (_report.OtherDirectCosts != 0)
             {
                 <div class="statement-row"><span>Otros costos directos</span><strong>(@Money(_report.OtherDirectCosts))</strong></div>
@@ -101,7 +101,7 @@ else
         <div>
             <small>Movimiento de inventario</small>
             <strong>@Money(_report.InventoryPurchases)</strong>
-            <p>Compras de insumos. No se gastan inmediatamente: pasan al costo cuando el producto se vende.</p>
+            <p>Compras de insumos. El costo se reconoce cuando esos insumos se consumen al registrar producción.</p>
         </div>
         <div>
             <small>Inversión en equipos</small>

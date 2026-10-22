@@ -12,18 +12,18 @@ public sealed record IncomeStatementReport(
     DateOnly To,
     decimal SalesRevenue,
     decimal OtherIncome,
-    decimal CostOfSales,
+    decimal ProductionCost,
     decimal OtherDirectCosts,
     IReadOnlyList<IncomeStatementLine> OperatingExpenses,
     decimal InventoryPurchases,
     decimal Investments,
-    int SalesWithoutCalculatedCost)
+    int ProductionsWithoutCalculatedCost)
 {
     public IReadOnlyList<IncomeStatementLine> IncomeAccounts { get; init; } = [];
     public IReadOnlyList<IncomeStatementLine> DirectCostAccounts { get; init; } = [];
     public IReadOnlyList<IncomeStatementLine> InvestmentAccounts { get; init; } = [];
     public decimal TotalRevenue => SalesRevenue + OtherIncome;
-    public decimal TotalCosts => CostOfSales + OtherDirectCosts;
+    public decimal TotalCosts => ProductionCost + OtherDirectCosts;
     public decimal GrossProfit => TotalRevenue - TotalCosts;
     public decimal TotalOperatingExpenses => OperatingExpenses.Sum(x => x.Amount);
     public decimal NetIncome => GrossProfit - TotalOperatingExpenses;

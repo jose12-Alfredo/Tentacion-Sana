@@ -17,7 +17,12 @@ public sealed class IncomeStatementService(ApplicationDbContext db, TimeProvider
         var sales = await db.Sales.AsNoTracking()
             .Where(x => x.OccurredAtUtc >= fromUtc && x.OccurredAtUtc < toUtc
                 && db.Orders.Any(order => order.Id == x.OrderId && order.ArchivedAtUtc == null))
-            .Select(x => new { x.Amount, x.HistoricalCost })
+            .Select(x => x.Amount)
+            .ToListAsync(cancellationToken);
+
+        var production = await db.ProductionBatches.AsNoTracking()
+            .Where(x => !x.IsVoided && x.ProducedAtUtc >= fromUtc && x.ProducedAtUtc < toUtc)
+            .Select(x => new { x.EstimatedTotalCost })
             .ToListAsync(cancellationToken);
 
         var manualMovements = await db.CashMovements.AsNoTracking()
@@ -49,14 +54,14 @@ public sealed class IncomeStatementService(ApplicationDbContext db, TimeProvider
         return new IncomeStatementReport(
             startDate,
             endDate,
-            sales.Sum(x => x.Amount),
+            sales.Sum(),
             otherIncome,
-            sales.Sum(x => x.HistoricalCost ?? 0),
+            production.Sum(x => x.EstimatedTotalCost ?? 0),
             directCosts,
             operatingExpenses,
             inventoryPurchases,
             investments,
-            sales.Count(x => x.HistoricalCost is null))
+            production.Count(x => x.EstimatedTotalCost is null))
         {
             IncomeAccounts = Lines(AccountingAccountKind.Income, CashDirection.Income),
             DirectCostAccounts = Lines(AccountingAccountKind.DirectCost, CashDirection.Expense),

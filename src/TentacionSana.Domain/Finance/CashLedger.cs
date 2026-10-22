@@ -68,6 +68,15 @@ public sealed class CashMovement
         Amount = decimal.Round(amount, 2);
     }
 
+    public void CorrectInventoryPurchase(DateTimeOffset occurredAtUtc, string detail, decimal amount)
+    {
+        if (Source != CashSource.InventoryPurchase || SupplyPurchaseId is null) throw new InvalidOperationException("El movimiento no corresponde a una compra de inventario.");
+        ValidateCorrection(detail, amount);
+        OccurredAtUtc = occurredAtUtc;
+        Detail = detail.Trim();
+        Amount = decimal.Round(amount, 2);
+    }
+
     private static void ValidateCorrection(string detail, decimal amount)
     {
         if (string.IsNullOrWhiteSpace(detail)) throw new ArgumentException("El detalle es obligatorio.");
@@ -127,5 +136,12 @@ public sealed class CashPayable
         PaidAmount += amount;
         Status = Balance == 0 ? PayableStatus.Paid : PayableStatus.Pending;
         Version++;
+    }
+    public void CorrectPurchaseAmount(decimal amount)
+    {
+        amount=decimal.Round(amount,2);
+        if(amount<=0)throw new ArgumentException("El monto de la rendición debe ser mayor que cero.");
+        if(amount<PaidAmount)throw new InvalidOperationException($"No se puede reducir la compra por debajo de los Bs {PaidAmount:N2} ya pagados en la rendición.");
+        Amount=amount;Status=Balance==0?PayableStatus.Paid:PayableStatus.Pending;Version++;
     }
 }

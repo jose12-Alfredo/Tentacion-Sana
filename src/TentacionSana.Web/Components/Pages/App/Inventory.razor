@@ -14,7 +14,12 @@
 </header>
 
 @if (_message is not null) { <p class="status-message">@_message</p> }
-@if (_errors.Count > 0) { <div class="error-summary">@foreach (var error in _errors) { <p>@error</p> }</div> }
+@if (_errors.Count > 0 && !_productionBlocked) { <div class="error-summary">@foreach (var error in _errors) { <p>@error</p> }</div> }
+
+@if (_productionBlocked)
+{
+    <div class="modal-backdrop" @onclick="CloseProductionError"><section class="batch-dialog danger-dialog" role="alertdialog" aria-modal="true" aria-labelledby="production-error-title" @onclick:stopPropagation><header><div><small>Inventario insuficiente</small><h2 id="production-error-title">No se puede registrar la producción</h2></div><button class="icon-button" aria-label="Cerrar" @onclick="CloseProductionError">×</button></header><div class="error-summary">@foreach (var error in _errors) { <p>@error</p> }</div><footer><a class="secondary" href="/app/inventario">Ir a Compras e inventario</a><button class="primary" @onclick="CloseProductionError">Entendido</button></footer></section></div>
+}
 
 <section class="summary-grid" aria-label="Resumen de producción">
     <article class="summary-card"><span class="summary-icon amber">◇</span><div><small>Productos con faltantes</small><strong>@_dashboard.ProductsWithShortage</strong><span>requieren producción</span></div></article>
@@ -71,9 +76,27 @@
 }
 
 <section class="card batches-card"><div class="section-heading"><div><h2>Últimos lotes generados</h2><p>Historial de producción y saldo disponible por FIFO.</p></div></div>
+    @if (_batchCostDetail is not null)
+    {
+        <section class="batch-cost-detail" aria-label="Detalle del costo del lote @_batchCostDetail.BatchNumber">
+            <header><div><h3>@_batchCostDetail.BatchNumber · @_batchCostDetail.Product</h3><p>@_batchCostDetail.ProducedUnits producidas, @_batchCostDetail.WasteUnits de merma y @_batchCostDetail.GoodUnits aprovechables.</p></div><div class="row-actions"><AuthorizeView Policy="@AppPolicies.Administration"><Authorized><button class="primary small" @onclick="OpenRepriceFromDetail">Recalcular lote</button></Authorized></AuthorizeView><button class="secondary" @onclick="CloseCostDetail">Cerrar detalle</button></div></header>
+            @if (_batchCostDetail.Lines.Count == 0) { <p class="cost-detail-note">Este lote no tiene una receta guardada para mostrar el desglose.</p> }
+            else
+            {
+                <div class="table-shell"><table><thead><tr><th>Insumo</th><th>Cantidad en la receta</th><th>Precio usado en el lote</th><th>Costo del insumo</th><th>Promedio actual</th></tr></thead><tbody>
+                    @foreach (var line in _batchCostDetail.Lines)
+                    {
+                        <tr><td><strong>@line.Supply</strong></td><td>@line.Quantity.ToString("N4") @line.Unit</td><td>@(line.UnitCost is null ? "Sin precio" : $"Bs {line.UnitCost.Value:N6} / {line.Unit}")<small>@(line.HasRecordedUnitCost ? "Guardado en este lote" : "Referencia actual; aún no recalculado")</small></td><td>@(line.TotalCost is null ? "Sin costo" : $"Bs {line.TotalCost.Value:N4}")</td><td>@(line.CurrentAverageUnitCost is null ? "Sin promedio" : $"Bs {line.CurrentAverageUnitCost.Value:N6} / {line.Unit}")</td></tr>
+                    }
+                </tbody></table></div>
+                <div class="batch-cost-total"><span>Costo total del lote <strong>Bs @(_batchCostDetail.TotalCost?.ToString("N2") ?? "—")</strong></span><span>Costo por unidad aprovechable <strong>Bs @(_batchCostDetail.UnitCost?.ToString("N2") ?? "—")</strong></span></div>
+                <p class="cost-detail-note">El costo del lote se distribuye entre las unidades aprovechables; la merma queda incluida en ese costo.</p>
+            }
+        </section>
+    }
     @if (_batches.Count == 0) { <div class="empty-state">Aún no se registraron lotes de producción.</div> }
-    else { <div class="table-shell"><table><thead><tr><th>Lote</th><th>Producto</th><th>Fecha y hora</th><th>Producido</th><th>Merma</th><th>Aprovechable</th><th>Restante</th><th>Costo unitario</th><th>Estado</th><th>Registrado por</th><AuthorizeView Policy="@AppPolicies.Administration"><Authorized><th>Acciones</th></Authorized></AuthorizeView></tr></thead><tbody>
-        @foreach (var batch in _batches) { <tr><td><strong>@batch.Number</strong></td><td>@batch.Product</td><td>@batch.ProducedAtUtc.ToLocalTime().ToString("dd/MM/yyyy HH:mm")</td><td>@(batch.GoodUnits + batch.WasteUnits)</td><td>@batch.WasteUnits</td><td>@batch.GoodUnits</td><td>@batch.Remaining</td><td>@(batch.EstimatedUnitCost is null ? "Sin costo" : $"Bs {batch.EstimatedUnitCost:N2}")</td><td><span class="badge @BatchStatusClass(batch)">@BatchStatus(batch)</span></td><td>@batch.RegisteredBy</td><AuthorizeView Policy="@AppPolicies.Administration"><Authorized><td><div class="row-actions"><button class="secondary small" @onclick="() => OpenEdit(batch)">Editar</button><button class="secondary small" @onclick="() => OpenReprice(batch)">Recalcular costo</button><button class="danger-button small" @onclick="() => OpenDelete(batch)">Eliminar</button></div></td></Authorized></AuthorizeView></tr> }
+    else { <div class="table-shell"><table><thead><tr><th>Lote</th><th>Producto</th><th>Fecha y hora</th><th>Producido</th><th>Merma</th><th>Aprovechable</th><th>Restante</th><th>Costo unitario</th><th>Estado</th><th>Registrado por</th><th>Detalle</th><AuthorizeView Policy="@AppPolicies.Administration"><Authorized><th>Acciones</th></Authorized></AuthorizeView></tr></thead><tbody>
+        @foreach (var batch in _batches) { <tr><td><strong>@batch.Number</strong></td><td>@batch.Product</td><td>@batch.ProducedAtUtc.ToLocalTime().ToString("dd/MM/yyyy HH:mm")</td><td>@(batch.GoodUnits + batch.WasteUnits)</td><td>@batch.WasteUnits</td><td>@batch.GoodUnits</td><td>@batch.Remaining</td><td>@(batch.EstimatedUnitCost is null ? "Sin costo" : $"Bs {batch.EstimatedUnitCost:N2}")</td><td><span class="badge @BatchStatusClass(batch)">@BatchStatus(batch)</span></td><td>@batch.RegisteredBy</td><td><button class="secondary small" @onclick="() => ShowCostDetailAsync(batch.Id)">Ver desglose</button></td><AuthorizeView Policy="@AppPolicies.Administration"><Authorized><td><div class="row-actions"><button class="secondary small" @onclick="() => OpenEdit(batch)">Editar</button><button class="secondary small" @onclick="() => OpenReprice(batch)">Recalcular costo</button><button class="danger-button small" @onclick="() => OpenDelete(batch)">Eliminar</button></div></td></Authorized></AuthorizeView></tr> }
     </tbody></table></div> }
 </section>
 
@@ -103,9 +126,11 @@
     private string _filter = "Todos";
     private string? _message;
     private bool _saving;
+    private bool _productionBlocked;
     private BatchItem? _editBatch;
     private BatchItem? _repriceBatch;
     private BatchItem? _deleteBatch;
+    private ProductionCostDetail? _batchCostDetail;
     private int _editProduced;
     private int _editWaste;
     private string _batchReason = "";
@@ -118,12 +143,15 @@
     private IEnumerable<ProductionNeed> FilteredNeeds => _dashboard.Products.Where(MatchesFilter);
 
     protected override async Task OnInitializedAsync() { _products = await Orders.ProductOptionsAsync(); await ReloadAsync(); }
-    private async Task ReloadAsync() { _dashboard = await StockService.GetProductionDashboardAsync(); _batches = await StockService.GetRecentBatchesAsync(10); if (_detailProduct is not null) await ShowOrdersAsync(_dashboard.Products.FirstOrDefault(x => x.ProductId == _detailProduct.ProductId)); }
+    private async Task ReloadAsync() { _dashboard = await StockService.GetProductionDashboardAsync(); _batches = await StockService.GetRecentBatchesAsync(10); if (_detailProduct is not null) await ShowOrdersAsync(_dashboard.Products.FirstOrDefault(x => x.ProductId == _detailProduct.ProductId)); if (_batchCostDetail is not null) _batchCostDetail = await StockService.GetProductionCostDetailAsync(_batchCostDetail.BatchId); }
     private bool MatchesFilter(ProductionNeed item) { if (_filter == "Todos") return true; var date = item.NearestPromisedAtUtc?.ToLocalTime().Date; return _filter switch { "Hoy" => date == DateTime.Today, "Mañana" => date == DateTime.Today.AddDays(1), "Próximos días" => date > DateTime.Today.AddDays(1), _ => true }; }
     private void SelectForProduction(ProductionNeed item) { _productId = item.ProductId; _quantity = Math.Max(1, item.Shortage); _waste = 0; }
     private void ProductChanged(ChangeEventArgs e) { _productId = Guid.TryParse(e.Value?.ToString(), out var id) ? id : Guid.Empty; }
     private async Task ShowOrdersAsync(ProductionNeed? item) { if (item is null) { CloseDetail(); return; } _detailProduct = item; _orderDemand = await StockService.GetProductionOrderDemandAsync(item.ProductId); }
     private void CloseDetail() { _detailProduct = null; _orderDemand = []; }
+    private async Task ShowCostDetailAsync(Guid batchId) { _batchCostDetail = await StockService.GetProductionCostDetailAsync(batchId); }
+    private void CloseCostDetail() => _batchCostDetail = null;
+    private void OpenRepriceFromDetail() { var batch = _batchCostDetail is null ? null : _batches.FirstOrDefault(x => x.Id == _batchCostDetail.BatchId); if (batch is not null) OpenReprice(batch); }
     private async Task RegisterProductionAsync()
     {
         _errors.Clear(); _message = null;
@@ -133,13 +161,14 @@
         _saving = true;
         var result = await StockService.RegisterProductionAsync(new ProductionCommand(_productId, DateTimeOffset.UtcNow, _quantity, _waste), await UserIdAsync());
         _saving = false;
-        if (!result.Succeeded) { _errors.AddRange(result.Errors); return; }
+        if (!result.Succeeded) { _errors.AddRange(result.Errors); _productionBlocked = result.Errors.Any(x => x.StartsWith("No se puede registrar la producción", StringComparison.Ordinal)); return; }
         await ReloadAsync();
         var batch = _batches.FirstOrDefault(x => x.Id == result.Id);
         _message = $"Producción registrada{(batch is null ? "" : $" en el lote {batch.Number}")}. {GoodUnits} unidades aprovechables; {result.AssignedUnits} asignadas a {result.AssignedOrders} pedidos.";
         if (result.Warnings is { Count: > 0 }) _message += " " + string.Join(" ", result.Warnings);
         _quantity = 1; _waste = 0;
     }
+    private void CloseProductionError() { _productionBlocked = false; }
     private async Task<Guid> UserIdAsync() { var state = await Auth.GetAuthenticationStateAsync(); return Guid.Parse(state.User.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)!.Value); }
     private static string DateText(DateTimeOffset? value) => value?.ToLocalTime().ToString("dd/MM/yyyy") ?? "Sin fecha";
     private static string StatusText(string status) => status switch { "Confirmed" => "Confirmado", "InPreparation" => "En preparación", "Ready" => "Listo", "OutForDelivery" => "En reparto", _ => status };

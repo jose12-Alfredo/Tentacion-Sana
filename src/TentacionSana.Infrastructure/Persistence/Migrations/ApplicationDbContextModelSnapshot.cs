@@ -1383,13 +1383,13 @@ namespace TentacionSana.Infrastructure.Persistence.Migrations
                         .HasPrecision(14, 2)
                         .HasColumnType("numeric(14,2)");
 
+                    b.Property<Guid?>("CashPayableId")
+                        .HasColumnType("uuid");
+
                     b.Property<string>("Category")
                         .IsRequired()
                         .HasMaxLength(80)
                         .HasColumnType("character varying(80)");
-
-                    b.Property<Guid?>("CashPayableId")
-                        .HasColumnType("uuid");
 
                     b.Property<string>("Detail")
                         .IsRequired()
@@ -1471,14 +1471,6 @@ namespace TentacionSana.Infrastructure.Persistence.Migrations
                         .HasPrecision(14, 2)
                         .HasColumnType("numeric(14,2)");
 
-                    b.Property<decimal>("PaidAmount")
-                        .HasPrecision(14, 2)
-                        .HasColumnType("numeric(14,2)");
-
-                    b.Property<int>("Version")
-                        .IsConcurrencyToken()
-                        .HasColumnType("integer");
-
                     b.Property<DateTimeOffset>("CreatedAtUtc")
                         .HasColumnType("timestamp with time zone");
 
@@ -1503,6 +1495,10 @@ namespace TentacionSana.Infrastructure.Persistence.Migrations
                         .HasMaxLength(300)
                         .HasColumnType("character varying(300)");
 
+                    b.Property<decimal>("PaidAmount")
+                        .HasPrecision(14, 2)
+                        .HasColumnType("numeric(14,2)");
+
                     b.Property<string>("PersonName")
                         .IsRequired()
                         .HasMaxLength(160)
@@ -1515,6 +1511,10 @@ namespace TentacionSana.Infrastructure.Persistence.Migrations
 
                     b.Property<Guid>("SupplyPurchaseId")
                         .HasColumnType("uuid");
+
+                    b.Property<int>("Version")
+                        .IsConcurrencyToken()
+                        .HasColumnType("integer");
 
                     b.HasKey("Id");
 
@@ -1859,6 +1859,10 @@ namespace TentacionSana.Infrastructure.Persistence.Migrations
                 {
                     b.Property<Guid>("SupplyId")
                         .HasColumnType("uuid");
+
+                    b.Property<decimal?>("AverageUnitCost")
+                        .HasPrecision(16, 6)
+                        .HasColumnType("numeric(16,6)");
 
                     b.Property<decimal>("Quantity")
                         .HasPrecision(16, 4)

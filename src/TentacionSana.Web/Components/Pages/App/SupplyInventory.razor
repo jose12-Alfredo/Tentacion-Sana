@@ -81,8 +81,25 @@
 
 <section class="stock-section">
     <header><div><small>Saldo actual</small><h2>Inventario de insumos</h2></div><span>Usa “Stock inicial / ajustar” para cargar sin costo lo que ya tienes en tu cocina.</span></header>
+    @if (_costHistory is not null)
+    {
+        <section class="cost-history" aria-label="Detalle del costo de @_costHistory.Supply">
+            <header><div><h2>@_costHistory.Supply: origen del costo</h2><p>Las entradas con precio cambian el promedio ponderado. Las salidas reducen el saldo y conservan ese promedio.</p></div><button class="secondary" @onclick="CloseCostHistory">Cerrar detalle</button></header>
+            <div class="cost-history-summary"><span>Saldo actual: <strong>@Quantity(_costHistory.CurrentStock) @_costHistory.Unit</strong></span><span>Promedio actual: <strong>@(_costHistory.CurrentAverageUnitCost is null ? "Sin costo" : $"Bs {_costHistory.CurrentAverageUnitCost:N4} / {_costHistory.Unit}")</strong></span></div>
+            @if (_costHistory.Entries.Count == 0) { <div class="empty-state">Este insumo aún no tiene compras ni movimientos de inventario.</div> }
+            else
+            {
+                <div class="table-shell"><table><thead><tr><th>Registrado</th><th>Movimiento</th><th>Presentación / motivo</th><th>Cantidad</th><th>Precio de entrada</th><th>Promedio después</th><th>Saldo después</th><th>Acción</th></tr></thead><tbody>
+                    @foreach (var entry in _costHistory.Entries)
+                    {
+                        <tr><td>@entry.RegisteredAtUtc.ToLocalTime().ToString("dd/MM/yyyy HH:mm")</td><td><strong>@entry.Kind</strong>@if (entry.PurchasedAtUtc is not null) { <small>Compra: @entry.PurchasedAtUtc.Value.ToLocalTime().ToString("dd/MM/yyyy")</small> }</td><td>@entry.Detail@if (entry.PackageQuantity is not null) { <small>@Quantity(entry.PackageQuantity.Value) paquetes · @Quantity(entry.BaseQuantityPerPackage!.Value) @_costHistory.Unit c/u · Bs @entry.PricePerPackage!.Value.ToString("N2") c/u · Total Bs @entry.TotalPrice!.Value.ToString("N2")</small> }</td><td class="@(entry.Quantity < 0 ? "shortage" : "covered")">@(entry.Quantity > 0 ? "+" : "")@Quantity(entry.Quantity) @_costHistory.Unit</td><td>@(entry.BaseUnitCost is null ? "Sin precio" : $"Bs {entry.BaseUnitCost:N4} / {_costHistory.Unit}")</td><td>@(entry.AverageUnitCostAfter is null ? "Sin costo" : $"Bs {entry.AverageUnitCostAfter:N4}")</td><td>@Quantity(entry.StockAfter) @_costHistory.Unit</td><td>@if (entry.PurchaseId is not null) { <button class="secondary" @onclick="() => EditHistoryPurchase(entry)">Corregir compra</button> } else if (entry.Kind == "Ajuste +") { <button class="secondary" @onclick="() => OpenEntryPriceEdit(entry)">Corregir precio</button> }</td></tr>
+                    }
+                </tbody></table></div>
+            }
+        </section>
+    }
     @if (_dashboard.Supplies.Count == 0) { <div class="empty-state">Crea el primer insumo para comenzar.</div> }
-    else { <div class="stock-grid">@foreach (var item in _dashboard.Supplies) { <article class="@(item.Stock < 0 ? "negative" : null)"><div><strong>@item.Name</strong><small>@item.PurchasePresentation · @Quantity(item.BaseQuantityPerPackage) @item.Unit</small></div><p>@Quantity(item.Stock) <span>@item.Unit</span></p><footer><span>@Quantity(item.PackageEquivalent) paquetes</span><div class="stock-actions"><button @onclick="() => OpenEdit(item)">Editar</button><button @onclick="() => OpenCount(item)">Stock inicial / ajustar</button></div></footer></article> }</div> }
+    else { <div class="stock-grid">@foreach (var item in _dashboard.Supplies) { <article class="@(item.Stock < 0 ? "negative" : null)"><div><strong>@item.Name</strong><small>@item.PurchasePresentation · @Quantity(item.BaseQuantityPerPackage) @item.Unit</small></div><p>@Quantity(item.Stock) <span>@item.Unit</span></p><dl class="stock-cost"><div><dt>Costo promedio</dt><dd>@(item.AverageUnitCost is null ? "Sin costo" : $"Bs {item.AverageUnitCost:N4} / {item.Unit}")</dd></div><div><dt>Valor del stock</dt><dd>@(item.InventoryValue is null ? "Sin valorar" : $"Bs {item.InventoryValue:N2}")</dd></div></dl><footer><span>@Quantity(item.PackageEquivalent) paquetes</span><div class="stock-actions"><button @onclick="() => ShowCostHistoryAsync(item.Id)">Ver ingresos y costo</button><button @onclick="() => OpenEdit(item)">Editar</button><button @onclick="() => OpenCount(item)">Stock inicial / ajustar</button></div></footer></article> }</div> }
 </section>
 
 @if (_countSupply is not null)
@@ -96,9 +113,19 @@
 }
 
 <div class="history-grid">
-    <section><header><h2>Últimas compras</h2></header>@if (_dashboard.RecentPurchases.Count == 0) { <div class="empty-state">Aún no hay compras.</div> } else { <div class="table-shell"><table><thead><tr><th>Fecha</th><th>Insumo</th><th>Compra</th><th>Entrada</th><th>Total</th></tr></thead><tbody>@foreach (var item in _dashboard.RecentPurchases) { <tr><td>@item.PurchasedAtUtc.ToLocalTime().ToString("dd/MM/yyyy")</td><td><strong>@item.Supply</strong></td><td>@Quantity(item.Packages) × @item.Presentation</td><td>@Quantity(item.BaseQuantity) @item.Unit</td><td>Bs @item.TotalPrice.ToString("N2")</td></tr> }</tbody></table></div> }</section>
+    <section><header><h2>Últimas compras</h2></header>@if (_dashboard.RecentPurchases.Count == 0) { <div class="empty-state">Aún no hay compras.</div> } else { <div class="table-shell"><table><thead><tr><th>Fecha</th><th>Insumo</th><th>Compra</th><th>Precio/paquete</th><th>Costo por unidad base</th><th>Entrada</th><th>Total</th><th></th></tr></thead><tbody>@foreach (var item in _dashboard.RecentPurchases) { <tr><td>@item.PurchasedAtUtc.ToLocalTime().ToString("dd/MM/yyyy")</td><td><strong>@item.Supply</strong></td><td>@Quantity(item.Packages) × @item.Presentation</td><td>Bs @item.UnitPrice.ToString("N2")</td><td>Bs @((item.UnitPrice / (item.BaseQuantity / item.Packages)).ToString("N4")) / @item.Unit</td><td>@Quantity(item.BaseQuantity) @item.Unit</td><td>Bs @item.TotalPrice.ToString("N2")</td><td><button class="secondary" @onclick="() => OpenPurchaseEdit(item)">Editar</button></td></tr> }</tbody></table></div> }</section>
     <section><header><h2>Movimientos de insumos</h2></header>@if (_dashboard.RecentMovements.Count == 0) { <div class="empty-state">Aún no hay movimientos.</div> } else { <div class="movement-list">@foreach (var item in _dashboard.RecentMovements.Take(12)) { <article><div><strong>@item.Supply</strong><small>@item.Kind · @item.AtUtc.ToLocalTime().ToString("dd/MM HH:mm")</small></div><span class="@(item.Quantity < 0 ? "out" : "in")">@(item.Quantity > 0 ? "+" : "")@Quantity(item.Quantity) @item.Unit</span></article> }</div> }</section>
 </div>
+
+@if (_editPurchase is not null)
+{
+    <div class="modal-backdrop" @onclick="ClosePurchaseEdit"><section class="count-dialog edit-dialog" role="dialog" aria-modal="true" @onclick:stopPropagation><header><div><small>Corregir compra</small><h2>@_editPurchase.Supply</h2></div><button @onclick="ClosePurchaseEdit">×</button></header><p>Verifica especialmente si escribiste el total en “precio por paquete”. La corrección ajustará el inventario y el egreso o rendición vinculada. Los lotes ya producidos conservan su costo hasta que un administrador lo recalcule.</p>@if (_errors.Count > 0) { <div class="modal-errors">@foreach (var error in _errors) { <span>@error</span> }</div> }<label>Fecha<input type="date" @bind="_editPurchaseDate" /></label><label>Presentación comprada<input @bind="_editPurchasePresentation" /></label><label>Contenido de cada paquete<input type="number" min="0.0001" step="0.0001" @bind="_editPurchasePackageContent" /><span class="field-unit">@_editPurchase.Unit por paquete</span></label><label>Cantidad de paquetes<input type="number" min="0.0001" step="0.0001" @bind="_editPurchasePackages" /></label><label>Costo por @_editPurchase.Unit (Bs)<input type="number" min="0.000001" step="0.000001" @bind="_editPurchaseBaseUnitCost" /></label><div class="calculation"><span>Precio calculado por paquete</span><strong>Bs @EditPurchasePackagePrice.ToString("N4")</strong><span>Entrada: @Quantity(_editPurchasePackages * _editPurchasePackageContent) @_editPurchase.Unit · Total: Bs @EditPurchaseTotal.ToString("N2")</span></div><label>Motivo de la corrección<input @bind="_editPurchaseReason" placeholder="Ej.: se registró el total como precio por paquete" /></label><footer><button class="secondary" @onclick="ClosePurchaseEdit">Cancelar</button><button class="primary" @onclick="SavePurchaseEditAsync" disabled="@(_saving || _editPurchasePackageContent <= 0 || _editPurchasePackages <= 0 || _editPurchaseBaseUnitCost <= 0 || string.IsNullOrWhiteSpace(_editPurchasePresentation) || string.IsNullOrWhiteSpace(_editPurchaseReason))">@(_saving ? "Guardando…" : "Guardar corrección")</button></footer></section></div>
+}
+
+@if (_editEntryPrice is not null)
+{
+    <div class="modal-backdrop" @onclick="CloseEntryPriceEdit"><section class="count-dialog edit-dialog" role="dialog" aria-modal="true" aria-labelledby="entry-price-title" @onclick:stopPropagation><header><div><h2 id="entry-price-title">Corregir precio del ingreso</h2></div><button aria-label="Cerrar" @onclick="CloseEntryPriceEdit">×</button></header><p>Este ingreso añadió @Quantity(_editEntryPrice.Quantity) @_costHistory?.Unit al inventario. Corrige el precio por @_costHistory?.Unit; la cantidad no cambiará.</p>@if (_errors.Count > 0) { <div class="modal-errors">@foreach (var error in _errors) { <span>@error</span> }</div> }<label>Precio por @_costHistory?.Unit (Bs)<input type="number" min="0" step="0.000001" @bind="_editEntryBaseUnitCost" /></label><label>Motivo de la corrección<input @bind="_editEntryReason" placeholder="Ej.: precio inicial ingresado por paquete en vez de por gramo" /></label><footer><button class="secondary" @onclick="CloseEntryPriceEdit">Cancelar</button><button class="primary" @onclick="SaveEntryPriceEditAsync" disabled="@(_saving || _editEntryBaseUnitCost < 0 || string.IsNullOrWhiteSpace(_editEntryReason))">@(_saving ? "Guardando…" : "Guardar corrección")</button></footer></section></div>
+}
 
 @code {
     private SupplyInventoryDashboard _dashboard = new([], [], [], [], []);
@@ -133,6 +160,19 @@
     private string _editUnit = "Gram";
     private string _editPresentation = "";
     private decimal _editPackageContent;
+    private SupplyPurchaseItem? _editPurchase;
+    private SupplyCostHistory? _costHistory;
+    private SupplyCostHistoryEntry? _editEntryPrice;
+    private decimal _editEntryBaseUnitCost;
+    private string _editEntryReason = "";
+    private DateTime _editPurchaseDate;
+    private string _editPurchasePresentation = "";
+    private decimal _editPurchasePackageContent;
+    private decimal _editPurchasePackages;
+    private decimal _editPurchaseBaseUnitCost;
+    private string _editPurchaseReason = "";
+    private decimal EditPurchasePackagePrice => _editPurchaseBaseUnitCost * _editPurchasePackageContent;
+    private decimal EditPurchaseTotal => _editPurchasePackages * EditPurchasePackagePrice;
     private int ShortageCount => _dashboard.Requirements.Count(x => x.Shortage > 0);
     private decimal EstimatedPurchase => _dashboard.Requirements.Sum(x => x.EstimatedCost ?? 0);
     private SupplyStockItem? SelectedPurchaseSupply => _dashboard.Supplies.FirstOrDefault(x => x.Id == _purchaseSupplyId);
@@ -142,7 +182,18 @@
     private string EditUnitText => _editUnit switch { "Gram" => "g", "Milliliter" => "ml", "Unit" => "unid.", _ => "" };
 
     protected override async Task OnInitializedAsync() { _products = await Orders.ProductOptionsAsync(); await ReloadAsync(); }
-    private async Task ReloadAsync() { _dashboard = await Inventory.GetSupplyDashboardAsync(); }
+    private async Task ReloadAsync()
+    {
+        _dashboard = await Inventory.GetSupplyDashboardAsync();
+        if (_costHistory is not null) _costHistory = await Inventory.GetSupplyCostHistoryAsync(_costHistory.SupplyId);
+    }
+    private async Task ShowCostHistoryAsync(Guid supplyId)
+    {
+        ResetFeedback();
+        _costHistory = await Inventory.GetSupplyCostHistoryAsync(supplyId);
+        if (_costHistory is null) _errors.Add("No se pudo cargar el historial de este insumo.");
+    }
+    private void CloseCostHistory() => _costHistory = null;
     private async Task<Guid> UserIdAsync() { var state = await Auth.GetAuthenticationStateAsync(); return Guid.Parse(state.User.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)!.Value); }
     private void ResetFeedback() { _errors.Clear(); _message = null; }
     private void PurchaseSupplyChanged() { if (SelectedPurchaseSupply is null) { _purchasePresentation = ""; _purchasePackageContent = 0; return; } _purchasePresentation = SelectedPurchaseSupply.PurchasePresentation; _purchasePackageContent = SelectedPurchaseSupply.BaseQuantityPerPackage; _purchaseUnit = SelectedPurchaseSupply.Unit switch { "g" => "Gram", "ml" => "Milliliter", _ => "Unit" }; }
@@ -180,7 +231,9 @@
     private void ApplyPurchaseLocally(Guid purchaseId,SupplyStockItem supply,DateTimeOffset purchasedAt,string presentation,decimal packages,decimal unitPrice,decimal baseQuantity,string unit)
     {
         var newStock = supply.Stock + baseQuantity;
-        var updatedSupply = supply with { Unit = unit, Stock = newStock, PackageEquivalent = newStock / supply.BaseQuantityPerPackage, LastUnitPrice = unitPrice, LastPurchaseAtUtc = purchasedAt };
+        var purchasedUnitCost = unitPrice / (_purchasePackageContent <= 0 ? supply.BaseQuantityPerPackage : _purchasePackageContent);
+        var averageUnitCost = newStock <= 0 ? supply.AverageUnitCost : supply.Stock <= 0 ? purchasedUnitCost : (supply.Stock * (supply.AverageUnitCost ?? 0) + baseQuantity * purchasedUnitCost) / newStock;
+        var updatedSupply = supply with { Unit = unit, Stock = newStock, PackageEquivalent = newStock / supply.BaseQuantityPerPackage, LastUnitPrice = unitPrice, LastPurchaseAtUtc = purchasedAt, AverageUnitCost = averageUnitCost };
         var requirements = _dashboard.Requirements.Select(item =>
         {
             if (item.SupplyId != supply.Id) return item;
@@ -326,6 +379,61 @@
             RecentPurchases = _dashboard.RecentPurchases.Select(x => x.Supply == original.Name ? x with { Supply = name } : x).ToList(),
             RecentMovements = _dashboard.RecentMovements.Select(x => x.Supply == original.Name ? x with { Supply = name, Unit = unit } : x).ToList()
         };
+    }
+    private void OpenPurchaseEdit(SupplyPurchaseItem item)
+    {
+        ResetFeedback(); _editPurchase = item; _editPurchaseDate = item.PurchasedAtUtc.ToLocalTime().Date;
+        _editPurchasePresentation = item.Presentation; _editPurchasePackages = item.Packages;
+        _editPurchasePackageContent = item.Packages == 0 ? 0 : item.BaseQuantity / item.Packages;
+        _editPurchaseBaseUnitCost = _editPurchasePackageContent == 0 ? 0 : item.UnitPrice / _editPurchasePackageContent; _editPurchaseReason = "";
+    }
+    private void EditHistoryPurchase(SupplyCostHistoryEntry entry)
+    {
+        if (_costHistory is null || entry.PurchaseId is null || entry.PackageQuantity is null ||
+            entry.PricePerPackage is null || entry.TotalPrice is null || entry.PurchasedAtUtc is null) return;
+        OpenPurchaseEdit(new SupplyPurchaseItem(entry.PurchaseId.Value, _costHistory.Supply,
+            entry.PurchasedAtUtc.Value, entry.PackageQuantity.Value, entry.PurchasePresentation ?? "",
+            entry.PackageQuantity.Value * (entry.BaseQuantityPerPackage ?? 0), _costHistory.Unit,
+            entry.PricePerPackage.Value, entry.TotalPrice.Value, ""));
+    }
+    private void OpenEntryPriceEdit(SupplyCostHistoryEntry entry)
+    {
+        ResetFeedback(); _editEntryPrice = entry; _editEntryBaseUnitCost = entry.BaseUnitCost ?? 0; _editEntryReason = "";
+    }
+    private void CloseEntryPriceEdit() { if (_saving) return; _editEntryPrice = null; _editEntryReason = ""; _errors.Clear(); }
+    private async Task SaveEntryPriceEditAsync()
+    {
+        if (_editEntryPrice is null) return;
+        ResetFeedback(); _saving = true; var saved = false;
+        try
+        {
+            var result = await Inventory.CorrectSupplyEntryPriceAsync(new(_editEntryPrice.MovementId, _editEntryBaseUnitCost, _editEntryReason), await UserIdAsync());
+            if (!result.Succeeded) { _errors.AddRange(result.Errors); return; }
+            await ReloadAsync();
+            _message = "Precio del ingreso corregido. El promedio ponderado del insumo ya se actualizó; los lotes anteriores se corrigen desde Producción.";
+            saved = true;
+        }
+        catch { _errors.Add("No se pudo corregir el precio del ingreso. Intenta nuevamente."); }
+        finally { _saving = false; }
+        if (saved) CloseEntryPriceEdit();
+    }
+    private void ClosePurchaseEdit() { if (_saving) return; _editPurchase = null; _editPurchaseReason = ""; _errors.Clear(); }
+    private async Task SavePurchaseEditAsync()
+    {
+        if (_editPurchase is null) return;
+        ResetFeedback(); _saving = true; var saved = false; var purchase = _editPurchase;
+        try
+        {
+            var purchasedAt = new DateTimeOffset(_editPurchaseDate).ToUniversalTime();
+            var result = await Inventory.UpdatePurchaseAsync(new(purchase.Id, purchasedAt, _editPurchasePresentation, _editPurchasePackageContent, _editPurchasePackages, EditPurchasePackagePrice, _editPurchaseReason), await UserIdAsync());
+            if (!result.Succeeded) { _errors.AddRange(result.Errors); return; }
+            saved = true;
+            await ReloadAsync();
+            _message = $"Compra de {purchase.Supply} corregida. El nuevo precio se usará en las próximas producciones; recalcula los lotes anteriores que deban corregirse.";
+        }
+        catch { _errors.Add("No se pudo actualizar la compra. La pantalla quedó habilitada para volver a intentarlo."); }
+        finally { _saving = false; }
+        if (saved) ClosePurchaseEdit();
     }
     private string UnitFor(Guid supplyId) => _dashboard.Supplies.FirstOrDefault(x => x.Id == supplyId)?.Unit ?? "unidad";
     private static string Quantity(decimal value) => value.ToString("0.####");

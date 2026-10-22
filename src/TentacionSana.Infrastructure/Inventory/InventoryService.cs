@@ -43,20 +43,39 @@ public sealed class InventoryService(ApplicationDbContext db, TimeProvider clock
             var recipe = await db.RecipeVersions
                 .Where(x => x.ProductId == command.ProductId && x.EffectiveFromUtc <= command.ProducedAtUtc && (x.EffectiveToUtc == null || x.EffectiveToUtc > command.ProducedAtUtc))
                 .OrderByDescending(x => x.Version).FirstOrDefaultAsync(ct);
-            var ingredients = recipe is null ? [] : await db.RecipeIngredients.Where(x => x.RecipeVersionId == recipe.Id).ToListAsync(ct);
-            var latestCosts = new Dictionary<Guid, decimal>();
-            foreach (var supplyId in ingredients.Select(x => x.SupplyId).Distinct())
+            if (recipe is null)
+                return Fail("No se puede registrar la producción porque el producto no tiene una receta vigente. Configura la receta en Compras e inventario y vuelve a intentarlo.");
+
+            var ingredients = await db.RecipeIngredients.Where(x => x.RecipeVersionId == recipe.Id).ToListAsync(ct);
+            if (ingredients.Count == 0)
+                return Fail("No se puede registrar la producción porque la receta no contiene insumos. Completa la receta en Compras e inventario y vuelve a intentarlo.");
+
+            var supplyIds = ingredients.Select(x => x.SupplyId).Distinct().ToList();
+            var supplies = await db.Supplies.AsNoTracking().Where(x => supplyIds.Contains(x.Id)).ToDictionaryAsync(x => x.Id, ct);
+            var supplyBalances = await db.SupplyBalances.Where(x => supplyIds.Contains(x.SupplyId)).ToDictionaryAsync(x => x.SupplyId, ct);
+            var missingSupplies = ingredients
+                .Select(ingredient =>
+                {
+                    var required = RecipeQuantities.Required(ingredient.RequiredQuantity, recipe.YieldQuantity, command.ProducedUnits);
+                    var available = supplyBalances.GetValueOrDefault(ingredient.SupplyId)?.Quantity ?? 0;
+                    var supply = supplies[ingredient.SupplyId];
+                    return new { supply.Name, Unit = UnitText(supply.BaseUnit), Required = required, Available = available, Missing = Math.Max(0, required - available) };
+                })
+                .Where(x => x.Missing > 0)
+                .ToList();
+            if (missingSupplies.Count > 0)
             {
-                var cost = await db.SupplyMovements.AsNoTracking()
-                    .Where(x => x.SupplyId == supplyId && x.HistoricalBaseUnitCost != null &&
-                        (x.Kind == SupplyMovementKind.Purchase || x.Kind == SupplyMovementKind.PositiveAdjustment))
-                    .OrderByDescending(x => x.OccurredAtUtc).Select(x => x.HistoricalBaseUnitCost).FirstOrDefaultAsync(ct);
-                if (cost is not null) latestCosts[supplyId] = cost.Value;
+                var errors = new List<string> { "No se puede registrar la producción porque faltan insumos de la receta." };
+                errors.AddRange(missingSupplies.Select(x => $"{x.Name}: faltan {x.Missing:0.####} {x.Unit} (necesarios: {x.Required:0.####}; disponibles: {x.Available:0.####})."));
+                errors.Add("Ve a Compras e inventario para reponer los insumos y vuelve a intentarlo.");
+                return new InventoryResult(false, null, errors);
             }
-            decimal? estimatedUnitCost = ingredients.Count > 0 && ingredients.All(x => latestCosts.ContainsKey(x.SupplyId))
-                ? decimal.Round(ingredients.Sum(x => RecipeQuantities.Required(x.RequiredQuantity, recipe!.YieldQuantity, command.ProducedUnits) * latestCosts[x.SupplyId]) / goodUnits, 2)
+            var averageCosts = supplyBalances.Where(x => x.Value.AverageUnitCost is not null)
+                .ToDictionary(x => x.Key, x => x.Value.AverageUnitCost!.Value);
+            decimal? estimatedUnitCost = ingredients.All(x => averageCosts.ContainsKey(x.SupplyId))
+                ? decimal.Round(ingredients.Sum(x => RecipeQuantities.Required(x.RequiredQuantity, recipe.YieldQuantity, command.ProducedUnits) * averageCosts[x.SupplyId]) / goodUnits, 2)
                 : null;
-            var batch = ProductionBatch.Create(number, command.ProductId, recipe?.Id, command.ProducedAtUtc, goodUnits, command.WasteUnits, estimatedUnitCost, userId);
+            var batch = ProductionBatch.Create(number, command.ProductId, recipe.Id, command.ProducedAtUtc, goodUnits, command.WasteUnits, estimatedUnitCost, userId);
             var movement = InventoryMovement.Create(command.ProductId, batch.Id, InventoryMovementKind.Production, goodUnits, null,
                 $"Producción: {command.ProducedUnits}; merma: {command.WasteUnits}; aprovechable: {goodUnits}", userId, now);
             balance.Produce(goodUnits);
@@ -64,19 +83,13 @@ public sealed class InventoryService(ApplicationDbContext db, TimeProvider clock
             db.InventoryMovements.Add(movement);
 
             var warnings = new List<string>();
-            if (recipe is null || ingredients.Count == 0) warnings.Add("El producto no tiene una receta configurada; no se descontaron insumos.");
             foreach (var ingredient in ingredients)
             {
-                var required = RecipeQuantities.Required(ingredient.RequiredQuantity, recipe!.YieldQuantity, command.ProducedUnits);
-                var supplyBalance = await SupplyBalance(ingredient.SupplyId, ct);
+                var required = RecipeQuantities.Required(ingredient.RequiredQuantity, recipe.YieldQuantity, command.ProducedUnits);
+                var supplyBalance = supplyBalances[ingredient.SupplyId];
                 supplyBalance.Consume(required);
                 db.SupplyMovements.Add(SupplyMovement.Create(ingredient.SupplyId, batch.Id, null, SupplyMovementKind.ProductionConsumption, -required,
-                    latestCosts.GetValueOrDefault(ingredient.SupplyId), $"Consumo calculado para el lote {number}", userId, now));
-                if (supplyBalance.Quantity < 0)
-                {
-                    var supply = await db.Supplies.AsNoTracking().SingleAsync(x => x.Id == ingredient.SupplyId, ct);
-                    warnings.Add($"{supply.Name} quedó con saldo negativo de {Math.Abs(supplyBalance.Quantity):0.####} {UnitText(supply.BaseUnit)}.");
-                }
+                    averageCosts.GetValueOrDefault(ingredient.SupplyId), $"Consumo calculado para el lote {number}", userId, now));
             }
 
             var reservations = await db.StockReservations.Where(x => x.ProductId == command.ProductId && x.IsActive && x.ShortageQuantity > 0).ToListAsync(ct);
@@ -156,9 +169,13 @@ public sealed class InventoryService(ApplicationDbContext db, TimeProvider clock
     {
         if (!await IsAdministrator(userId)) return Fail("Solo una persona administradora puede recalcular costos de lotes.");
         if (string.IsNullOrWhiteSpace(command.Reason)) return Fail("Indica el motivo de la recotización.");
-        await using var transaction = await db.Database.BeginTransactionAsync(IsolationLevel.Serializable, ct);
+        var executionStrategy = db.Database.CreateExecutionStrategy();
         try
         {
+            return await executionStrategy.ExecuteAsync(async () =>
+            {
+            db.ChangeTracker.Clear();
+            await using var transaction = await db.Database.BeginTransactionAsync(IsolationLevel.Serializable, ct);
             var batch = await db.ProductionBatches.SingleOrDefaultAsync(x => x.Id == command.BatchId && !x.IsVoided, ct);
             if (batch is null) return Fail("El lote no existe o fue anulado.");
             if (batch.Version != command.Version) return Fail("El lote cambió. Recarga la pantalla antes de recalcularlo.");
@@ -169,10 +186,8 @@ public sealed class InventoryService(ApplicationDbContext db, TimeProvider clock
             var costs = new Dictionary<Guid, decimal>();
             foreach (var supplyId in ingredients.Select(x => x.SupplyId).Distinct())
             {
-                var cost = await db.SupplyMovements.AsNoTracking()
-                    .Where(x => x.SupplyId == supplyId && x.HistoricalBaseUnitCost != null &&
-                        (x.Kind == SupplyMovementKind.Purchase || x.Kind == SupplyMovementKind.PositiveAdjustment))
-                    .OrderByDescending(x => x.OccurredAtUtc).Select(x => x.HistoricalBaseUnitCost).FirstOrDefaultAsync(ct);
+                var cost = await db.SupplyBalances.AsNoTracking().Where(x => x.SupplyId == supplyId)
+                    .Select(x => x.AverageUnitCost).SingleOrDefaultAsync(ct);
                 if (cost is null) return Fail("Falta el precio referencial de uno o más insumos de la receta.");
                 costs[supplyId] = cost.Value;
             }
@@ -180,6 +195,11 @@ public sealed class InventoryService(ApplicationDbContext db, TimeProvider clock
             var produced = batch.GoodUnits + batch.WasteUnits;
             var unitCost = ingredients.Sum(x => RecipeQuantities.Required(x.RequiredQuantity, recipe.YieldQuantity, produced) * costs[x.SupplyId]) / batch.GoodUnits;
             batch.Reprice(unitCost);
+
+            var productionCosts = await db.SupplyMovements.Where(x => x.ProductionBatchId == batch.Id &&
+                (x.Kind == SupplyMovementKind.ProductionConsumption || x.Kind == SupplyMovementKind.ProductionCorrection)).ToListAsync(ct);
+            foreach (var movement in productionCosts)
+                if (costs.TryGetValue(movement.SupplyId, out var cost)) movement.RepriceProductionCost(cost);
 
             var affectedAllocations = await db.InventoryMovementAllocations.Where(x => x.ProductionBatchId == batch.Id).ToListAsync(ct);
             foreach (var allocation in affectedAllocations) allocation.Reprice(batch.EstimatedUnitCost!.Value);
@@ -204,13 +224,51 @@ public sealed class InventoryService(ApplicationDbContext db, TimeProvider clock
             await db.SaveChangesAsync(ct);
             await transaction.CommitAsync(ct);
             return Ok(batch.Id);
+            });
         }
         catch (Exception ex) when (ex is ArgumentException or InvalidOperationException or DbUpdateConcurrencyException or DbUpdateException)
         {
-            await transaction.RollbackAsync(ct);
             db.ChangeTracker.Clear();
             return Fail(ex.Message);
         }
+    }
+
+    public async Task<ProductionCostDetail?> GetProductionCostDetailAsync(Guid batchId, CancellationToken ct = default)
+    {
+        var batch = await db.ProductionBatches.AsNoTracking().SingleOrDefaultAsync(x => x.Id == batchId && !x.IsVoided, ct);
+        if (batch is null) return null;
+        var product = await db.Products.AsNoTracking().Where(x => x.Id == batch.ProductId).Select(x => x.Name).SingleOrDefaultAsync(ct) ?? "Producto";
+        if (batch.RecipeVersionId is null)
+            return new(batch.Id, batch.Number, product, batch.GoodUnits + batch.WasteUnits, batch.WasteUnits,
+                batch.GoodUnits, batch.EstimatedUnitCost, batch.EstimatedTotalCost, []);
+
+        var recipe = await db.RecipeVersions.AsNoTracking().SingleOrDefaultAsync(x => x.Id == batch.RecipeVersionId, ct);
+        if (recipe is null)
+            return new(batch.Id, batch.Number, product, batch.GoodUnits + batch.WasteUnits, batch.WasteUnits,
+                batch.GoodUnits, batch.EstimatedUnitCost, batch.EstimatedTotalCost, []);
+        var ingredients = await (from ingredient in db.RecipeIngredients.AsNoTracking()
+                                 join supply in db.Supplies.AsNoTracking() on ingredient.SupplyId equals supply.Id
+                                 join balance in db.SupplyBalances.AsNoTracking() on supply.Id equals balance.SupplyId into balances
+                                 from balance in balances.DefaultIfEmpty()
+                                 where ingredient.RecipeVersionId == recipe.Id
+                                 select new { ingredient.SupplyId, supply.Name, supply.BaseUnit, ingredient.RequiredQuantity, CurrentAverage = balance == null ? (decimal?)null : balance.AverageUnitCost })
+            .ToListAsync(ct);
+        var movements = await db.SupplyMovements.AsNoTracking()
+            .Where(x => x.ProductionBatchId == batch.Id &&
+                (x.Kind == SupplyMovementKind.ProductionConsumption || x.Kind == SupplyMovementKind.ProductionCorrection))
+            .OrderByDescending(x => x.OccurredAtUtc)
+            .Select(x => new { x.SupplyId, x.HistoricalBaseUnitCost })
+            .ToListAsync(ct);
+        var lines = ingredients.Select(ingredient =>
+        {
+            var quantity = RecipeQuantities.Required(ingredient.RequiredQuantity, recipe.YieldQuantity, batch.GoodUnits + batch.WasteUnits);
+            var historicalCost = movements.FirstOrDefault(x => x.SupplyId == ingredient.SupplyId && x.HistoricalBaseUnitCost is not null)?.HistoricalBaseUnitCost;
+            var unitCost = historicalCost ?? ingredient.CurrentAverage;
+            return new ProductionCostLine(ingredient.SupplyId, ingredient.Name, UnitText(ingredient.BaseUnit), quantity,
+                unitCost, unitCost is null ? null : decimal.Round(quantity * unitCost.Value, 4), ingredient.CurrentAverage, historicalCost is not null);
+        }).ToList();
+        return new(batch.Id, batch.Number, product, batch.GoodUnits + batch.WasteUnits, batch.WasteUnits,
+            batch.GoodUnits, batch.EstimatedUnitCost, batch.EstimatedTotalCost, lines);
     }
 
     public async Task<InventoryResult> UpdateProductionBatchAsync(UpdateProductionBatchCommand command, Guid userId, CancellationToken ct = default)
@@ -355,7 +413,7 @@ public sealed class InventoryService(ApplicationDbContext db, TimeProvider clock
             var quantity = balance?.Quantity ?? 0;
             return new SupplyStockItem(supply.Id, supply.Name, UnitText(supply.BaseUnit), supply.PurchasePresentation,
                 supply.BaseQuantityPerPackage, quantity, quantity / supply.BaseQuantityPerPackage, pricedMovement?.HistoricalBaseUnitCost * supply.BaseQuantityPerPackage ?? purchase?.UnitPrice,
-                purchase?.PurchasedAtUtc, balance?.Version ?? 0);
+                purchase?.PurchasedAtUtc, balance?.Version ?? 0, balance?.AverageUnitCost);
         }).ToList();
 
         var production = await GetProductionDashboardAsync(ct);
@@ -408,6 +466,42 @@ public sealed class InventoryService(ApplicationDbContext db, TimeProvider clock
             return new SupplyMovementItem(x.Id, supply.Name, UnitText(supply.BaseUnit), MovementText(x.Kind), x.Quantity, x.Reason, x.OccurredAtUtc);
         }).ToList();
         return new(stock, requirements, recentPurchases, movements, productsWithoutRecipe);
+    }
+
+    public async Task<SupplyCostHistory?> GetSupplyCostHistoryAsync(Guid supplyId, CancellationToken ct = default)
+    {
+        var supply = await db.Supplies.AsNoTracking().SingleOrDefaultAsync(x => x.Id == supplyId && x.IsActive, ct);
+        if (supply is null) return null;
+        var balance = await db.SupplyBalances.AsNoTracking().SingleOrDefaultAsync(x => x.SupplyId == supplyId, ct);
+        var movements = await db.SupplyMovements.AsNoTracking().Where(x => x.SupplyId == supplyId)
+            .OrderBy(x => x.OccurredAtUtc).ThenBy(x => x.Id).ToListAsync(ct);
+        var purchaseIds = movements.Where(x => x.PurchaseId is not null).Select(x => x.PurchaseId!.Value).Distinct().ToList();
+        var purchases = await db.SupplyPurchases.AsNoTracking().Where(x => purchaseIds.Contains(x.Id))
+            .ToDictionaryAsync(x => x.Id, ct);
+
+        decimal stock = 0;
+        decimal? average = null;
+        var entries = new List<SupplyCostHistoryEntry>(movements.Count);
+        foreach (var movement in movements)
+        {
+            // Consumption keeps the unit cost of the remaining stock; only a priced entry changes it.
+            if (movement.Quantity > 0 && movement.HistoricalBaseUnitCost is decimal entryCost &&
+                movement.Kind is SupplyMovementKind.Purchase or SupplyMovementKind.PositiveAdjustment)
+            {
+                average = stock <= 0 ? entryCost :
+                    (stock * (average ?? 0) + movement.Quantity * entryCost) / (stock + movement.Quantity);
+                average = decimal.Round(average.Value, 6);
+            }
+            stock += movement.Quantity;
+            var purchase = movement.PurchaseId is Guid id ? purchases.GetValueOrDefault(id) : null;
+            entries.Add(new SupplyCostHistoryEntry(movement.Id, movement.PurchaseId, movement.OccurredAtUtc,
+                purchase?.PurchasedAtUtc, MovementText(movement.Kind), movement.Reason, movement.Quantity,
+                movement.HistoricalBaseUnitCost, average, stock, purchase?.PurchasePresentation, purchase?.PackageQuantity,
+                purchase?.BaseQuantityPerPackage, purchase?.UnitPrice, purchase?.TotalPrice));
+        }
+        entries.Reverse();
+        return new SupplyCostHistory(supply.Id, supply.Name, UnitText(supply.BaseUnit),
+            balance?.Quantity ?? 0, balance?.AverageUnitCost, entries);
     }
 
     public async Task<RecipeDetail?> GetRecipeAsync(Guid productId, CancellationToken ct = default)
@@ -500,7 +594,7 @@ public sealed class InventoryService(ApplicationDbContext db, TimeProvider clock
                 supply.CorrectBaseUnit(purchaseUnit, now);
             }
             var purchase = TentacionSana.Domain.Inventory.SupplyPurchase.Create(supply.Id, command.PurchasedAtUtc, command.PurchasePresentation, command.PackageQuantity, command.UnitPrice, command.BaseQuantityPerPackage, userId);
-            balance.Add(purchase.TotalBaseQuantity);
+            balance.Add(purchase.TotalBaseQuantity, purchase.UnitPrice / purchase.BaseQuantityPerPackage);
             db.SupplyPurchases.Add(purchase);
             db.SupplyMovements.Add(SupplyMovement.Create(supply.Id, null, purchase.Id, SupplyMovementKind.Purchase, purchase.TotalBaseQuantity,
                 purchase.UnitPrice / purchase.BaseQuantityPerPackage, $"Compra de {purchase.PackageQuantity:0.####} {purchase.PurchasePresentation}", userId, now));
@@ -517,6 +611,128 @@ public sealed class InventoryService(ApplicationDbContext db, TimeProvider clock
         catch (ArgumentException ex) { return Fail(ex.Message); }
         catch (DbUpdateConcurrencyException) { return Fail("El saldo cambió mientras se registraba la compra. Intenta nuevamente."); }
         catch (DbUpdateException) { return Fail("La compra no pudo guardarse. Verifica los datos e intenta nuevamente."); }
+    }
+
+    public async Task<InventoryResult> UpdatePurchaseAsync(UpdatePurchaseCommand command, Guid userId, CancellationToken ct = default)
+    {
+        if (string.IsNullOrWhiteSpace(command.Reason)) return Fail("Indica el motivo de la corrección.");
+        var executionStrategy = db.Database.CreateExecutionStrategy();
+        try
+        {
+            return await executionStrategy.ExecuteAsync(async () =>
+            {
+                db.ChangeTracker.Clear();
+                await using var transaction = await db.Database.BeginTransactionAsync(IsolationLevel.Serializable, ct);
+                var purchase = await db.SupplyPurchases.SingleOrDefaultAsync(x => x.Id == command.PurchaseId, ct);
+                if (purchase is null) return Fail("La compra no existe.");
+                var supply = await db.Supplies.SingleAsync(x => x.Id == purchase.SupplyId, ct);
+                var balance = await SupplyBalance(purchase.SupplyId, ct);
+                var movement = await db.SupplyMovements.SingleOrDefaultAsync(x => x.PurchaseId == purchase.Id && x.Kind == SupplyMovementKind.Purchase, ct);
+                if (movement is null) return Fail("La compra no tiene un movimiento de inventario válido y no puede corregirse automáticamente.");
+                var cashMovement = await db.CashMovements.SingleOrDefaultAsync(x => x.SupplyPurchaseId == purchase.Id, ct);
+                var payable = await db.CashPayables.SingleOrDefaultAsync(x => x.SupplyPurchaseId == purchase.Id, ct);
+                if ((cashMovement is null) == (payable is null)) return Fail("La compra no tiene un origen de pago único y no puede corregirse automáticamente.");
+
+                var previous = new { purchase.PurchasedAtUtc, purchase.PurchasePresentation, purchase.BaseQuantityPerPackage, purchase.PackageQuantity, purchase.UnitPrice, purchase.TotalBaseQuantity, purchase.TotalPrice };
+                var previousBaseQuantity = purchase.TotalBaseQuantity;
+                var quantityDifference = decimal.Round(command.PackageQuantity * command.BaseQuantityPerPackage, 4) - previousBaseQuantity;
+                if (balance.Quantity + quantityDifference < 0)
+                    return Fail($"No se puede reducir esta compra: dejaría el inventario de {supply.Name} con saldo negativo. El máximo que puede retirarse es {balance.Quantity:0.####} {UnitText(supply.BaseUnit)}.");
+
+                purchase.Correct(command.PurchasedAtUtc, command.PurchasePresentation, command.PackageQuantity, command.UnitPrice, command.BaseQuantityPerPackage);
+                balance.Adjust(balance.Quantity + quantityDifference);
+                movement.CorrectPurchase(purchase.TotalBaseQuantity, purchase.UnitPrice / purchase.BaseQuantityPerPackage,
+                    $"Compra corregida: {purchase.PackageQuantity:0.####} {purchase.PurchasePresentation}");
+                await RecalculateSupplyAverageAsync(purchase.SupplyId, balance, movement, ct);
+                if (cashMovement is not null)
+                    cashMovement.CorrectInventoryPurchase(purchase.PurchasedAtUtc,
+                        $"Compra de {supply.Name}: {purchase.PackageQuantity:0.####} {purchase.PurchasePresentation}", purchase.TotalPrice);
+                else
+                    payable!.CorrectPurchaseAmount(purchase.TotalPrice);
+
+                db.AuditEntries.Add(new AuditEntry
+                {
+                    Id = Guid.NewGuid(), Action = "SupplyPurchaseUpdated", EntityType = "SupplyPurchase", EntityId = purchase.Id.ToString(),
+                    UserId = userId, OccurredAtUtc = clock.GetUtcNow(), PreviousValuesJson = JsonSerializer.Serialize(previous),
+                    NewValuesJson = JsonSerializer.Serialize(new { command.PurchasedAtUtc, command.PurchasePresentation, command.BaseQuantityPerPackage, command.PackageQuantity, command.UnitPrice, purchase.TotalBaseQuantity, purchase.TotalPrice }),
+                    Reason = command.Reason.Trim()
+                });
+                await db.SaveChangesAsync(ct);
+                await transaction.CommitAsync(ct);
+                return Ok(purchase.Id);
+            });
+        }
+        catch (Exception ex) when (ex is ArgumentException or InvalidOperationException or DbUpdateConcurrencyException)
+        {
+            db.ChangeTracker.Clear();
+            return Fail(ex is DbUpdateConcurrencyException ? "El inventario o la rendición cambió durante la corrección. Vuelve a intentarlo." : ex.Message);
+        }
+        catch (DbUpdateException)
+        {
+            db.ChangeTracker.Clear();
+            return Fail("La compra no pudo actualizarse. Verifica los datos e intenta nuevamente.");
+        }
+    }
+
+    public async Task<InventoryResult> CorrectSupplyEntryPriceAsync(CorrectSupplyEntryPriceCommand command, Guid userId, CancellationToken ct = default)
+    {
+        if (command.BaseUnitCost < 0) return Fail("El costo por unidad no puede ser negativo.");
+        if (string.IsNullOrWhiteSpace(command.Reason)) return Fail("Indica el motivo de la corrección.");
+        var executionStrategy = db.Database.CreateExecutionStrategy();
+        try
+        {
+            return await executionStrategy.ExecuteAsync(async () =>
+            {
+                db.ChangeTracker.Clear();
+                await using var transaction = await db.Database.BeginTransactionAsync(IsolationLevel.Serializable, ct);
+                var movement = await db.SupplyMovements.SingleOrDefaultAsync(x => x.Id == command.MovementId && x.Kind == SupplyMovementKind.PositiveAdjustment, ct);
+                if (movement is null) return Fail("El ingreso por ajuste de stock no existe.");
+                var balance = await SupplyBalance(movement.SupplyId, ct);
+                var previousCost = movement.HistoricalBaseUnitCost;
+                movement.CorrectAdjustmentCost(command.BaseUnitCost);
+                await RecalculateSupplyAverageAsync(movement.SupplyId, balance, movement, ct);
+                db.AuditEntries.Add(new AuditEntry
+                {
+                    Id = Guid.NewGuid(), Action = "SupplyAdjustmentCostCorrected", EntityType = "SupplyMovement",
+                    EntityId = movement.Id.ToString(), UserId = userId, OccurredAtUtc = clock.GetUtcNow(),
+                    PreviousValuesJson = JsonSerializer.Serialize(new { BaseUnitCost = previousCost }),
+                    NewValuesJson = JsonSerializer.Serialize(new { BaseUnitCost = movement.HistoricalBaseUnitCost, balance.AverageUnitCost }),
+                    Reason = command.Reason.Trim()
+                });
+                await db.SaveChangesAsync(ct);
+                await transaction.CommitAsync(ct);
+                return Ok(movement.Id);
+            });
+        }
+        catch (DbUpdateConcurrencyException)
+        {
+            db.ChangeTracker.Clear();
+            return Fail("El inventario cambió durante la corrección. Vuelve a intentarlo.");
+        }
+        catch (DbUpdateException)
+        {
+            db.ChangeTracker.Clear();
+            return Fail("No se pudo corregir el precio del ingreso. Intenta nuevamente.");
+        }
+    }
+
+    private async Task RecalculateSupplyAverageAsync(Guid supplyId, SupplyBalance balance, SupplyMovement changedMovement, CancellationToken ct)
+    {
+        var history = await db.SupplyMovements.AsNoTracking().Where(x => x.SupplyId == supplyId)
+            .OrderBy(x => x.OccurredAtUtc).ThenBy(x => x.Id)
+            .Select(x => new { x.Id, x.Kind, x.Quantity, x.HistoricalBaseUnitCost }).ToListAsync(ct);
+        decimal runningQuantity = 0;
+        decimal? runningAverage = null;
+        foreach (var entry in history)
+        {
+            var quantity = entry.Id == changedMovement.Id ? changedMovement.Quantity : entry.Quantity;
+            var cost = entry.Id == changedMovement.Id ? changedMovement.HistoricalBaseUnitCost : entry.HistoricalBaseUnitCost;
+            if (quantity > 0 && cost is not null && entry.Kind is SupplyMovementKind.Purchase or SupplyMovementKind.PositiveAdjustment)
+                runningAverage = runningQuantity <= 0 ? cost.Value :
+                    (runningQuantity * (runningAverage ?? 0) + quantity * cost.Value) / (runningQuantity + quantity);
+            runningQuantity += quantity;
+        }
+        balance.SetAverageUnitCost(runningAverage);
     }
 
     public async Task<InventoryResult> SaveRecipeAsync(SaveRecipeCommand command, Guid userId, CancellationToken ct = default)
@@ -574,10 +790,11 @@ public sealed class InventoryService(ApplicationDbContext db, TimeProvider clock
             if (balance is null) { balance = TentacionSana.Domain.Inventory.SupplyBalance.Create(command.SupplyId); db.SupplyBalances.Add(balance); }
             var now = clock.GetUtcNow();
             var count = SupplyStockCount.Create(command.SupplyId, balance.Quantity, command.CountedQuantity, command.Reason, userId, now);
-            balance.Adjust(command.CountedQuantity); db.SupplyStockCounts.Add(count);
+            var adjustmentUnitCost = command.PricePerPackage / state.Supply.BaseQuantityPerPackage;
+            balance.Adjust(command.CountedQuantity, adjustmentUnitCost); db.SupplyStockCounts.Add(count);
             if (count.Difference != 0) db.SupplyMovements.Add(SupplyMovement.Create(command.SupplyId, null, null,
                 count.Difference > 0 ? SupplyMovementKind.PositiveAdjustment : SupplyMovementKind.NegativeAdjustment,
-                count.Difference, command.PricePerPackage / state.Supply.BaseQuantityPerPackage, command.Reason, userId, now));
+                count.Difference, adjustmentUnitCost, command.Reason, userId, now));
             db.AuditEntries.Add(new AuditEntry { Id = Guid.NewGuid(), Action = "SupplyStockCounted", EntityType = "SupplyStockCount", EntityId = count.Id.ToString(), UserId = userId, OccurredAtUtc = now, NewValuesJson = JsonSerializer.Serialize(new { command.SupplyId, count.ExpectedQuantity, count.CountedQuantity, count.Difference, command.PricePerPackage }), Reason = command.Reason.Trim() });
             await db.SaveChangesAsync(ct); return Ok(count.Id);
         }

@@ -48,11 +48,12 @@ public sealed class Supply
 
 public sealed class SupplyBalance
 {
-    private SupplyBalance(){} public Guid SupplyId{get;private set;} public decimal Quantity{get;private set;} public int Version{get;private set;}
+    private SupplyBalance(){} public Guid SupplyId{get;private set;} public decimal Quantity{get;private set;} public decimal? AverageUnitCost{get;private set;} public int Version{get;private set;}
     public static SupplyBalance Create(Guid supplyId)=>new(){SupplyId=supplyId,Version=1};
-    public void Add(decimal quantity){if(quantity<=0)throw new ArgumentException("La cantidad debe ser mayor que cero.");Quantity+=quantity;Version++;}
+    public void Add(decimal quantity,decimal? unitCost=null){if(quantity<=0)throw new ArgumentException("La cantidad debe ser mayor que cero.");if(unitCost<0)throw new ArgumentException("El costo no puede ser negativo.");if(unitCost is not null&&Quantity+quantity>0)AverageUnitCost=Quantity<=0?decimal.Round(unitCost.Value,6):decimal.Round(((Quantity*Math.Max(0,AverageUnitCost??0))+(quantity*unitCost.Value))/(Quantity+quantity),6);Quantity+=quantity;Version++;}
     public void Consume(decimal quantity){if(quantity<=0)throw new ArgumentException("El consumo debe ser mayor que cero.");Quantity-=quantity;Version++;}
-    public decimal Adjust(decimal counted){if(counted<0)throw new ArgumentException("El conteo físico no puede ser negativo.");var difference=counted-Quantity;Quantity=counted;Version++;return difference;}
+    public decimal Adjust(decimal counted,decimal? addedUnitCost=null){if(counted<0)throw new ArgumentException("El conteo físico no puede ser negativo.");var difference=counted-Quantity;if(difference>0&&addedUnitCost is not null)Add(difference,addedUnitCost);else{Quantity=counted;Version++;}return difference;}
+    public void SetAverageUnitCost(decimal? cost){if(cost<0)throw new ArgumentException("El costo promedio no puede ser negativo.");AverageUnitCost=cost is null?null:decimal.Round(cost.Value,6);Version++;}
 }
 
 public sealed class SupplyPurchase
@@ -67,6 +68,17 @@ public sealed class SupplyPurchase
         if(unitPrice<0)throw new ArgumentException("El precio unitario no puede ser negativo.");
         if(basePerPackage<=0)throw new ArgumentException("La presentación de compra no es válida.");
         return new(){Id=Guid.NewGuid(),SupplyId=supplyId,PurchasedAtUtc=purchasedAt,PurchasePresentation=presentation.Trim(),PackageQuantity=packages,UnitPrice=decimal.Round(unitPrice,2),BaseQuantityPerPackage=basePerPackage,TotalBaseQuantity=decimal.Round(packages*basePerPackage,4),TotalPrice=decimal.Round(packages*unitPrice,2),RegisteredByUserId=userId};
+    }
+    public decimal Correct(DateTimeOffset purchasedAt,string presentation,decimal packages,decimal unitPrice,decimal basePerPackage)
+    {
+        if(string.IsNullOrWhiteSpace(presentation)||presentation.Trim().Length>160)throw new ArgumentException("La presentación comprada es obligatoria.");
+        if(packages<=0)throw new ArgumentException("La cantidad comprada debe ser mayor que cero.");
+        if(unitPrice<0)throw new ArgumentException("El precio unitario no puede ser negativo.");
+        if(basePerPackage<=0)throw new ArgumentException("La presentación de compra no es válida.");
+        var previousQuantity=TotalBaseQuantity;
+        PurchasedAtUtc=purchasedAt;PurchasePresentation=presentation.Trim();PackageQuantity=packages;UnitPrice=decimal.Round(unitPrice,2);BaseQuantityPerPackage=basePerPackage;
+        TotalBaseQuantity=decimal.Round(packages*basePerPackage,4);TotalPrice=decimal.Round(packages*unitPrice,2);
+        return TotalBaseQuantity-previousQuantity;
     }
 }
 
@@ -90,6 +102,25 @@ public sealed class SupplyMovement
         if(signedQuantity==0)throw new ArgumentException("El movimiento no puede ser cero.");
         if(string.IsNullOrWhiteSpace(reason))throw new ArgumentException("El motivo es obligatorio.");
         return new(){Id=Guid.NewGuid(),SupplyId=supplyId,ProductionBatchId=batchId,PurchaseId=purchaseId,Kind=kind,Quantity=decimal.Round(signedQuantity,4),HistoricalBaseUnitCost=baseUnitCost,Reason=reason.Trim(),UserId=userId,OccurredAtUtc=now};
+    }
+    public void CorrectPurchase(decimal quantity,decimal baseUnitCost,string reason)
+    {
+        if(Kind!=SupplyMovementKind.Purchase||PurchaseId is null)throw new InvalidOperationException("El movimiento no corresponde a una compra.");
+        if(quantity<=0||baseUnitCost<0)throw new ArgumentException("La cantidad y el costo corregidos no son válidos.");
+        Quantity=decimal.Round(quantity,4);HistoricalBaseUnitCost=baseUnitCost;Reason=reason.Trim();
+    }
+    public void CorrectAdjustmentCost(decimal baseUnitCost)
+    {
+        if(Kind!=SupplyMovementKind.PositiveAdjustment)throw new InvalidOperationException("El movimiento no es un ingreso por ajuste de stock.");
+        if(baseUnitCost<0)throw new ArgumentException("El costo por unidad no puede ser negativo.");
+        HistoricalBaseUnitCost=decimal.Round(baseUnitCost,6);
+    }
+    public void RepriceProductionCost(decimal baseUnitCost)
+    {
+        if(Kind is not (SupplyMovementKind.ProductionConsumption or SupplyMovementKind.ProductionCorrection))
+            throw new InvalidOperationException("El movimiento no corresponde al consumo de una producciÃ³n.");
+        if(baseUnitCost<0)throw new ArgumentException("El costo no puede ser negativo.");
+        HistoricalBaseUnitCost=decimal.Round(baseUnitCost,6);
     }
 }
 
