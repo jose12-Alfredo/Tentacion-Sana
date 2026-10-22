@@ -384,9 +384,15 @@ else
         {
             var result = await Service.ReviseLineAsync(OrderId, _revisionLineId.Value, _order!.Version, new(_revisionSaleQuantity, _revisionReplacementQuantity, _revisionTastingQuantity, _revisionPrice, _revisionDiscountReason, _revisionReplacementReason, _revisionReplacementNotes, _revisionTastingReason, _revisionTastingNotes, _revisionReason, _revisionProductId), await UserId());
             if (!result.Succeeded) { _revisionErrors.AddRange(result.Errors); return; }
-            await LoadAsync(); _revisionReason = ""; _revisionMessage = "Línea del pedido actualizada correctamente.";
+            _revisionReason = ""; _revisionMessage = "Línea del pedido actualizada correctamente.";
+            try { await LoadAsync(); }
+            catch (Exception ex)
+            {
+                LoggerFactory.CreateLogger("OrderDetail").LogError(ex, "El ajuste del pedido {OrderId} se guardó, pero no se pudo recargar la vista", OrderId);
+                _revisionErrors.Add("El ajuste se guardó, pero no se pudo actualizar la pantalla. Recarga el pedido para ver los datos actuales.");
+            }
         }
-        catch (Exception ex) { LoggerFactory.CreateLogger("OrderDetail").LogError(ex, "No se pudo ajustar la línea del pedido {OrderId}", OrderId); _revisionErrors.Add("No se pudo guardar el ajuste. Recarga el pedido y vuelve a intentarlo."); }
+        catch (Exception ex) { LoggerFactory.CreateLogger("OrderDetail").LogError(ex, "No se pudo ajustar la línea del pedido {OrderId}", OrderId); _revisionErrors.Add("No se pudo guardar el ajuste. Revisa los datos del producto e intenta otra vez."); }
         finally { _saving = false; }
     }
     private async Task RemoveConfirmedLineAsync() { if (_revisionLineId is not null) await Handle(await Service.RemoveConfirmedLineAsync(OrderId, _revisionLineId.Value, _order!.Version, _revisionReason, await UserId()), false); }
