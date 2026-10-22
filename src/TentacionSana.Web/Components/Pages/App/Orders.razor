@@ -1,7 +1,7 @@
 @page "/app/pedidos"
 @page "/app/pedidos/nuevo"
 @layout AdminLayout
-@rendermode InteractiveServer
+@rendermode @(new InteractiveServerRenderMode(prerender: false))
 @attribute [Authorize(Policy = AppPolicies.ManageSales)]
 @inject IOrderManagementService Service
 @inject AuthenticationStateProvider AuthenticationStateProvider
@@ -10,7 +10,7 @@
 @implements IAsyncDisposable
 
 <PageTitle>Pedidos | Tentación Sana</PageTitle>
-<header class="orders-heading"><div><h1>Pedidos</h1><p>Controla ventas, entregas y pagos de forma práctica.</p></div><a href="/app/pedidos/nuevo" data-enhance-nav="false" class="primary-action"><span>+</span> Nuevo pedido</a></header>
+<header class="orders-heading"><div><h1>Pedidos</h1><p>Controla ventas, entregas y pagos de forma práctica.</p></div><a href="/app/pedidos/nuevo" class="primary-action"><span>+</span> Nuevo pedido</a></header>
 @if (_error is not null) { <div class="orders-error">@_error</div> }
 @if (_items is null) { <div class="orders-loading">Cargando control de pedidos…</div> }
 else
@@ -37,7 +37,7 @@ else
  </section>
  <div class="orders-workspace">
    <section class="orders-list-card">
-    <header><div><h2>@(_activeChip == "Draft" || _statusFilter == "Draft" ? "Borradores" : "Lista de pedidos")</h2><p>Mostrando @Filtered.Count de @(_activeChip == "Draft" || _statusFilter == "Draft" ? DraftCount : ListCount) registros.</p></div><a href="/app/pedidos/nuevo" data-enhance-nav="false" class="list-create-action"><span>+</span> Nuevo pedido</a></header>
+    <header><div><h2>@(_activeChip == "Draft" || _statusFilter == "Draft" ? "Borradores" : "Lista de pedidos")</h2><p>Mostrando @Filtered.Count de @(_activeChip == "Draft" || _statusFilter == "Draft" ? DraftCount : ListCount) registros.</p></div><a href="/app/pedidos/nuevo" class="list-create-action"><span>+</span> Nuevo pedido</a></header>
    @if (Filtered.Count == 0) { <div class="empty-state"><strong>No encontramos pedidos.</strong><span>Prueba con otros filtros o crea un pedido nuevo.</span></div> }
    else
    {
@@ -73,12 +73,12 @@ else
 {
  <div class="modal-backdrop" @onclick="CloseCreateDialog">
   <section class="create-panel" role="dialog" aria-modal="true" aria-labelledby="create-title" @onclick:stopPropagation>
-   <header><div><small>Nueva venta</small><h2 id="create-title">Crear pedido</h2></div><a href="/app/pedidos" data-enhance-nav="false" class="close-button" aria-label="Cerrar">×</a></header>
+   <header><div><small>Nueva venta</small><h2 id="create-title">Crear pedido</h2></div><a href="/app/pedidos" class="close-button" aria-label="Cerrar">×</a></header>
    <p>Selecciona el cliente para iniciar un borrador. La reserva de stock se crea al confirmar el pedido con productos y fecha de entrega.</p>
    @if (_error is not null) { <p class="create-error" role="alert">@_error</p> }
    @if (_customers.Count == 0) { <p class="create-empty">Aún no hay clientes activos. <a href="/app/clientes">Registra un cliente</a> para crear el pedido.</p> }
    <label>Cliente<select @bind="_customerId" disabled="@(_creating || _customers.Count == 0)"><option value="">Selecciona un cliente</option>@foreach(var c in _customers){<option value="@c.Id">@c.Name</option>}</select></label>
-   <footer><a href="/app/pedidos" data-enhance-nav="false" class="secondary-action">Cancelar</a><button type="button" class="primary-action" @onclick="CreateAsync" disabled="@_creating">@(_creating ? "Creando…" : "Crear pedido")</button></footer>
+   <footer><a href="/app/pedidos" class="secondary-action">Cancelar</a><button type="button" class="primary-action" @onclick="CreateAsync" disabled="@_creating">@(_creating ? "Creando…" : "Crear pedido")</button></footer>
   </section>
  </div>
 }

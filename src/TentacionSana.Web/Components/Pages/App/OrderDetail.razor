@@ -1,6 +1,6 @@
 @page "/app/pedidos/{OrderId:guid}"
 @layout AdminLayout
-@rendermode InteractiveServer
+@rendermode @(new InteractiveServerRenderMode(prerender: false))
 @attribute [Authorize(Policy = AppPolicies.ManageSales)]
 @inject IOrderManagementService Service
 @inject IDeliveryService DeliveryService
