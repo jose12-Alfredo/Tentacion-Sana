@@ -10,7 +10,7 @@
 @implements IAsyncDisposable
 
 <PageTitle>Pedidos | Tentación Sana</PageTitle>
-<header class="orders-heading"><div><h1>Pedidos</h1><p>Controla ventas, entregas y pagos de forma práctica.</p></div><a href="/app/pedidos/nuevo" class="primary-action"><span>+</span> Nuevo pedido</a></header>
+<header class="orders-heading"><div><h1>Pedidos</h1><p>Controla ventas, entregas y pagos de forma práctica.</p></div><a href="/app/pedidos/nuevo" class="primary-action" @onclick="OpenCreateDialog" @onclick:preventDefault><span>+</span> Nuevo pedido</a></header>
 @if (_error is not null) { <div class="orders-error">@_error</div> }
 @if (_items is null) { <div class="orders-loading">Cargando control de pedidos…</div> }
 else
@@ -37,7 +37,7 @@ else
  </section>
  <div class="orders-workspace">
    <section class="orders-list-card">
-    <header><div><h2>@(_activeChip == "Draft" || _statusFilter == "Draft" ? "Borradores" : "Lista de pedidos")</h2><p>Mostrando @Filtered.Count de @(_activeChip == "Draft" || _statusFilter == "Draft" ? DraftCount : ListCount) registros.</p></div><a href="/app/pedidos/nuevo" class="list-create-action"><span>+</span> Nuevo pedido</a></header>
+    <header><div><h2>@(_activeChip == "Draft" || _statusFilter == "Draft" ? "Borradores" : "Lista de pedidos")</h2><p>Mostrando @Filtered.Count de @(_activeChip == "Draft" || _statusFilter == "Draft" ? DraftCount : ListCount) registros.</p></div><a href="/app/pedidos/nuevo" class="list-create-action" @onclick="OpenCreateDialog" @onclick:preventDefault><span>+</span> Nuevo pedido</a></header>
    @if (Filtered.Count == 0) { <div class="empty-state"><strong>No encontramos pedidos.</strong><span>Prueba con otros filtros o crea un pedido nuevo.</span></div> }
    else
    {
@@ -73,12 +73,12 @@ else
 {
  <div class="modal-backdrop" @onclick="CloseCreateDialog">
   <section class="create-panel" role="dialog" aria-modal="true" aria-labelledby="create-title" @onclick:stopPropagation>
-   <header><div><small>Nueva venta</small><h2 id="create-title">Crear pedido</h2></div><a href="/app/pedidos" class="close-button" aria-label="Cerrar">×</a></header>
+   <header><div><small>Nueva venta</small><h2 id="create-title">Crear pedido</h2></div><a href="/app/pedidos" class="close-button" aria-label="Cerrar" @onclick="CloseCreateDialog" @onclick:preventDefault>×</a></header>
    <p>Selecciona el cliente para iniciar un borrador. La reserva de stock se crea al confirmar el pedido con productos y fecha de entrega.</p>
    @if (_error is not null) { <p class="create-error" role="alert">@_error</p> }
    @if (_customers.Count == 0) { <p class="create-empty">Aún no hay clientes activos. <a href="/app/clientes">Registra un cliente</a> para crear el pedido.</p> }
    <label>Cliente<select @bind="_customerId" disabled="@(_creating || _customers.Count == 0)"><option value="">Selecciona un cliente</option>@foreach(var c in _customers){<option value="@c.Id">@c.Name</option>}</select></label>
-   <footer><a href="/app/pedidos" class="secondary-action">Cancelar</a><button type="button" class="primary-action" @onclick="CreateAsync" disabled="@_creating">@(_creating ? "Creando…" : "Crear pedido")</button></footer>
+   <footer><a href="/app/pedidos" class="secondary-action" @onclick="CloseCreateDialog" @onclick:preventDefault>Cancelar</a><button type="button" class="primary-action" @onclick="CreateAsync" disabled="@_creating">@(_creating ? "Creando…" : "Crear pedido")</button></footer>
   </section>
  </div>
 }
@@ -95,7 +95,8 @@ else
  private int ListCount=>_items?.Count(x=>x.Status is not "Cancelled" and not "Draft")??0; private int DraftCount=>_items?.Count(x=>x.Status=="Draft")??0; private int PendingCount=>_items?.Count(x=>x.Status is not "Draft" and not "Delivered" and not "Cancelled")??0; private int DeliveredCount=>_items?.Count(x=>x.Status=="Delivered")??0; private int UnpaidCount=>_items?.Count(x=>x.PaymentStatus=="Pending"&&x.Status is not "Draft" and not "Cancelled")??0; private int PaidCount=>_items?.Count(x=>x.PaymentStatus=="Paid")??0; private decimal OutstandingTotal=>_items?.Where(x=>x.Status is not "Draft" and not "Cancelled").Sum(x=>x.Balance)??0; private int PendingSaleUnits=>_items?.Where(x=>x.Status!="Draft").Sum(x=>x.PendingSaleQuantity)??0; private int PendingReplacementUnits=>_items?.Where(x=>x.Status!="Draft").Sum(x=>x.PendingReplacementQuantity)??0; private int PendingTastingUnits=>_items?.Where(x=>x.Status!="Draft").Sum(x=>x.PendingTastingQuantity)??0; private int PendingUnits=>PendingSaleUnits+PendingReplacementUnits+PendingTastingUnits; private double BarWidth(int value)=>PendingUnits==0?0:Math.Max(3,value*100d/PendingUnits); private int TodayQrCount=>_items?.Sum(x=>x.TodayQrPayments)??0; private decimal TodayQrAmount=>_items?.Sum(x=>x.TodayQrAmount)??0; private int TodayCashCount=>_items?.Sum(x=>x.TodayCashPayments)??0; private decimal TodayCashAmount=>_items?.Sum(x=>x.TodayCashAmount)??0; private int TodayNoPaymentCount=>UnpaidCount;
  protected override void OnParametersSet(){_showCreate=new Uri(Navigation.Uri).AbsolutePath.TrimEnd('/').Equals("/app/pedidos/nuevo",StringComparison.OrdinalIgnoreCase);}
  protected override async Task OnInitializedAsync(){_items=await Service.ListAsync();_customers=await Service.CustomerOptionsAsync();}
- private void CloseCreateDialog(){if(!_creating)Navigation.NavigateTo("/app/pedidos");}
+ private void OpenCreateDialog(){_error=null;_showCreate=true;}
+ private void CloseCreateDialog(){if(_creating)return;_showCreate=false;_error=null;if(new Uri(Navigation.Uri).AbsolutePath.TrimEnd('/').Equals("/app/pedidos/nuevo",StringComparison.OrdinalIgnoreCase))Navigation.NavigateTo("/app/pedidos");}
  private async Task CreateAsync(){if(_customerId is null){_error="Selecciona un cliente antes de crear el pedido.";return;}_creating=true;_error=null;try{var r=await Service.CreateDraftAsync(_customerId.Value,await UserIdAsync());if(r.Succeeded)Navigation.NavigateTo($"/app/pedidos/{r.Id}");else _error=string.Join(" ",r.Errors);}catch{_error="No se pudo crear el pedido. Intenta nuevamente.";}finally{_creating=false;}}
  private void OpenDeleteDialog(Guid orderId){_error=null;_deleteOrderId=orderId;_showDelete=true;}
  private void OpenRemoveDialog(OrderListItem item){if(item.Status=="Draft")OpenDeleteDialog(item.Id);else OpenCancelDialog(item.Id);}
