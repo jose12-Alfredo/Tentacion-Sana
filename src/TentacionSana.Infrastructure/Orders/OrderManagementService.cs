@@ -334,6 +334,7 @@ public sealed class OrderManagementService(ApplicationDbContext db, TimeProvider
                     var standardPrice=productId==oldProductId?line.StandardUnitPrice:await db.ProductPrices.Where(x=>x.ProductId==productId&&x.EffectiveFromUtc<=now&&(x.EffectiveToUtc==null||x.EffectiveToUtc>now)).OrderByDescending(x=>x.EffectiveFromUtc).Select(x=>(decimal?)x.Amount).FirstOrDefaultAsync(ct)??0m;
                     if(c.SoldUnitPrice<standardPrice&&!await IsAdministrator(user))return Fail("El descuento requiere autorización de una persona administradora.");
                     order.ReviseLine(lineId,productId,product?.Name??line.ProductName,c.SaleQuantity,c.ReplacementQuantity,c.TastingQuantity,standardPrice,c.SoldUnitPrice,c.DiscountReason,c.ReplacementReason,c.ReplacementNotes,c.TastingReason,c.TastingNotes,c.Reason,user,now);
+                    await ReduceDeliveryAssignmentsAsync(id,lineId,c.SaleQuantity,c.ReplacementQuantity,c.TastingQuantity,user,now,ct);
                     if(productId!=oldProductId)
                     {
                         if(oldReserved>0){var oldBalance=await db.ProductStockBalances.SingleAsync(x=>x.ProductId==oldProductId,ct);oldBalance.Release(oldReserved);}
@@ -359,6 +360,37 @@ public sealed class OrderManagementService(ApplicationDbContext db, TimeProvider
         catch(Exception ex)when(ex is ArgumentException or InvalidOperationException){return Fail(ex.Message);}
         catch(DbUpdateException){return Fail("No se pudo guardar el ajuste en la base de datos. Recarga el pedido y vuelve a intentarlo.");}
     }
+    private async Task ReduceDeliveryAssignmentsAsync(Guid orderId,Guid lineId,int sale,int replacement,int tasting,Guid user,DateTimeOffset now,CancellationToken ct)
+    {
+        var deliveries=await db.Deliveries.Include(x=>x.Lines)
+            .Where(x=>x.OrderId==orderId && x.Status!=DeliveryStatus.Delivered && x.Status!=DeliveryStatus.Cancelled)
+            .OrderByDescending(x=>x.ScheduledAtUtc).ToListAsync(ct);
+        var lines=deliveries.SelectMany(x=>x.Lines.Where(line=>line.OrderLineId==lineId).Select(line=>(Delivery:x,Line:line))).ToList();
+        var delivered=await db.DeliveryLines.AsNoTracking()
+            .Where(x=>x.OrderLineId==lineId)
+            .GroupBy(x=>x.OrderLineId)
+            .Select(g=>new {Sale=g.Sum(x=>x.DeliveredSaleQuantity),Replacement=g.Sum(x=>x.DeliveredReplacementQuantity),Tasting=g.Sum(x=>x.DeliveredTastingQuantity)})
+            .SingleOrDefaultAsync(ct);
+        if(sale<(delivered?.Sale??0) || replacement<(delivered?.Replacement??0) || tasting<(delivered?.Tasting??0))
+            throw new InvalidOperationException("La cantidad del pedido no puede ser menor que la ya entregada.");
+
+        var excessSale=Math.Max(0,lines.Sum(x=>x.Line.PendingSaleQuantity)-(sale-(delivered?.Sale??0)));
+        var excessReplacement=Math.Max(0,lines.Sum(x=>x.Line.PendingReplacementQuantity)-(replacement-(delivered?.Replacement??0)));
+        var excessTasting=Math.Max(0,lines.Sum(x=>x.Line.PendingTastingQuantity)-(tasting-(delivered?.Tasting??0)));
+        foreach(var (delivery,line) in lines)
+        {
+            var takeSale=Math.Min(excessSale,line.PendingSaleQuantity);
+            var takeReplacement=Math.Min(excessReplacement,line.PendingReplacementQuantity);
+            var takeTasting=Math.Min(excessTasting,line.PendingTastingQuantity);
+            if(takeSale+takeReplacement+takeTasting==0)continue;
+            line.ReducePendingTo(line.PendingSaleQuantity-takeSale,line.PendingReplacementQuantity-takeReplacement,line.PendingTastingQuantity-takeTasting);
+            delivery.ReviseAssignment(user,now);
+            excessSale-=takeSale;
+            excessReplacement-=takeReplacement;
+            excessTasting-=takeTasting;
+        }
+    }
+
     public async Task<OrderOperationResult> RemoveConfirmedLineAsync(Guid id,Guid lineId,int version,string reason,Guid user,CancellationToken ct=default)
     {
         var order=await Load(id,ct);
