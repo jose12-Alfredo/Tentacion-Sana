@@ -166,9 +166,17 @@ public sealed class ReceivablesService(
         }
         if (upload.Error is not null || string.IsNullOrWhiteSpace(upload.PublicId)) return PaymentFailure(upload.Error?.Message ?? "No se pudo guardar el respaldo del pago.");
 
-        await using var transaction = await db.Database.BeginTransactionAsync(cancellationToken);
+        var executionStrategy = db.Database.CreateExecutionStrategy();
         try
         {
+            return await executionStrategy.ExecuteAsync(async () =>
+            {
+            db.ChangeTracker.Clear();
+            var priorPayment = await db.IdempotencyRecords.AsNoTracking().SingleOrDefaultAsync(
+                x => x.Operation == "RegisterPayerPayment" && x.Key == command.IdempotencyKey, cancellationToken);
+            if (priorPayment is not null && Guid.TryParse(priorPayment.ResponseJson, out var priorId))
+                return await ExistingPaymentResultAsync(priorId, command.ResponsiblePartyId, cancellationToken);
+            await using var transaction = await db.Database.BeginTransactionAsync(cancellationToken);
             var orderIds = requested.Select(x => x.OrderId).ToList();
             var receivables = await db.Receivables.Where(x => orderIds.Contains(x.OrderId) && db.Orders.Any(order => order.Id == x.OrderId && order.ArchivedAtUtc == null)).ToListAsync(cancellationToken);
             if (receivables.Count != orderIds.Count) throw new InvalidOperationException("Una cuenta seleccionada ya no existe.");
@@ -193,15 +201,16 @@ public sealed class ReceivablesService(
             var orderNumbers = accountRows.ToDictionary(x => x.OrderId, x => x.OrderNumber);
             return new(true, payment.Id, previousBalance, payment.Amount, previousBalance - payment.Amount,
                 requested.Select(x => new AppliedPaymentOrder(x.OrderId, orderNumbers[x.OrderId], x.Amount)).ToList(), []);
+            });
         }
         catch (DbUpdateConcurrencyException)
         {
-            await transaction.RollbackAsync(cancellationToken); db.ChangeTracker.Clear();
+            db.ChangeTracker.Clear();
             return PaymentFailure("La informaci\u00F3n cambi\u00F3; recarga e intenta nuevamente.");
         }
         catch (DbUpdateException)
         {
-            await transaction.RollbackAsync(cancellationToken); db.ChangeTracker.Clear();
+            db.ChangeTracker.Clear();
             var retry = await db.IdempotencyRecords.AsNoTracking().SingleOrDefaultAsync(x => x.Operation == "RegisterPayerPayment" && x.Key == command.IdempotencyKey, cancellationToken);
             return retry is not null && Guid.TryParse(retry.ResponseJson, out var id)
                 ? await ExistingPaymentResultAsync(id, command.ResponsiblePartyId, cancellationToken)
@@ -209,7 +218,7 @@ public sealed class ReceivablesService(
         }
         catch (Exception exception) when (exception is ArgumentException or InvalidOperationException)
         {
-            await transaction.RollbackAsync(cancellationToken); return PaymentFailure(exception.Message);
+            db.ChangeTracker.Clear(); return PaymentFailure(exception.Message);
         }
     }
 
