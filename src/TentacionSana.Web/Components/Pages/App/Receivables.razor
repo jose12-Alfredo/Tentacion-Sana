@@ -109,7 +109,10 @@ else
                     <div class="manual-allocations">@foreach (var allocation in _manualAllocations) { <label><span><strong>#@allocation.OrderNumber</strong><small>Saldo @Money(allocation.Balance)</small></span><input type="number" min="0" max="@allocation.Balance" step="0.01" @bind="allocation.Amount" /></label> }<p>Aplicado: <strong>@Money(_manualAllocations.Sum(x => x.Amount))</strong> de @Money(_paymentAmount)</p></div>
                 }
                 else { <p class="allocation-note">El pago se aplicar&aacute; primero a los saldos exigibles con mayor antig&uuml;edad.</p> }
-                <div class="modal-actions"><button class="secondary" @onclick="ClosePayment">Cancelar</button><button @onclick="SavePaymentAsync" disabled="@_saving">@(_saving ? "Registrando\u2026" : "Registrar pago")</button></div>
+                <div class="modal-actions payment-actions">
+                    @if (_message is not null && _isError) { <p class="payment-form-error" role="alert">@_message</p> }
+                    <button class="secondary" @onclick="ClosePayment">Cancelar</button><button @onclick="SavePaymentAsync" disabled="@_saving">@(_saving ? "Registrando\u2026" : "Registrar pago")</button>
+                </div>
             }
         </section>
     </div>
@@ -234,6 +237,7 @@ else
     {
         if (_paymentPayer is null || _saving) return;
         if (_paymentEvidence is null) { SetMessage("Debes adjuntar un respaldo para registrar el pago.", true); return; }
+        if (_paymentEvidence.Size is 0 or > 10 * 1024 * 1024 || _paymentEvidence.ContentType.ToLowerInvariant() is not ("image/jpeg" or "image/png" or "image/webp")) { SetMessage("El respaldo debe ser una imagen JPG, PNG o WebP de hasta 10 MB.", true); return; }
         if (_paymentAmount <= 0 || _paymentAmount > _paymentPayer.Balance) { SetMessage("Ingresa un monto v\u00E1lido que no supere el saldo.", true); return; }
         _saving = true; ClearMessage();
         try

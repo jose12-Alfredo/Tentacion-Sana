@@ -16,6 +16,8 @@
 .report-panel{max-height:calc(100dvh - 2rem);overflow-y:auto;overscroll-behavior:contain}
 .report-panel .scope-list{max-height:none;overflow:visible}
 .report-panel>.modal-actions{position:sticky;bottom:0;z-index:2;margin-top:1rem;background:#fff}
+.payment-panel>.payment-actions{position:sticky;bottom:0;z-index:2;flex-wrap:wrap;background:#fff}
+.payment-form-error{flex:1 0 100%;margin:0;padding:.7rem .85rem;border:1px solid #efbdc0;border-radius:.45rem;background:#fff0f0;color:#9b1c1c;font-size:.78rem;font-weight:700;line-height:1.4}
 @media(max-width:760px){.report-panel{max-height:94dvh}}
 @media(prefers-reduced-motion:reduce){*{scroll-behavior:auto!important}}
 .evidence-view-button{cursor:pointer;padding:.35rem .2rem;border:0;background:none;color:#246b45;text-decoration:underline;font-weight:700}
