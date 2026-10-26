@@ -13,7 +13,7 @@ public static class DeliveryStockAllocator
         if (quantity < 1 || quantity > target.Quantity || !target.IsActive)
             throw new InvalidOperationException("La cantidad entregada supera lo pendiente del pedido.");
         if (quantity > balance.PhysicalQuantity)
-            throw new InvalidOperationException("No hay existencias físicas suficientes para confirmar la entrega.");
+            throw new InvalidOperationException($"Faltan {quantity - balance.PhysicalQuantity} unidades de producto para confirmar la entrega: se intentan entregar {quantity} y hay {balance.PhysicalQuantity} en inventario.");
 
         var candidates = otherReservations
             .Where(x => x.Id != target.Id && x.IsActive && x.ProductId == target.ProductId && x.ReservedQuantity > 0)

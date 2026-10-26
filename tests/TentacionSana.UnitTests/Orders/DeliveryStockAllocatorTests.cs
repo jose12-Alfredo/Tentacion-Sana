@@ -38,8 +38,9 @@ public sealed class DeliveryStockAllocatorTests
         var second = CreateReservation(productId, 30);
         first.Allocate(balance.Reserve(first.Quantity));
 
-        Assert.Throws<InvalidOperationException>(() =>
+        var error = Assert.Throws<InvalidOperationException>(() =>
             DeliveryStockAllocator.Consume(balance, second, [first], 30));
+        Assert.Contains("Faltan 10 unidades", error.Message);
 
         Assert.Equal(20, balance.PhysicalQuantity);
         Assert.Equal(20, balance.ReservedQuantity);

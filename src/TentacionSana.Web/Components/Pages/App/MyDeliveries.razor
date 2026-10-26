@@ -136,6 +136,15 @@ else
                                         </article>
                                     }
                                 </div>
+                                @if (StockShortages is { Count: > 0 } shortages)
+                                {
+                                    <div class="delivery-stock-warning" role="alert">
+                                        @foreach (var shortage in shortages)
+                                        {
+                                            <p><strong>Faltan @shortage.Missing unidades de @shortage.Product.</strong> Quieres registrar @shortage.Requested y el inventario tiene @shortage.Physical. Registra la producción faltante o confirma solo las unidades realmente entregadas.</p>
+                                        }
+                                    </div>
+                                }
                                 <label>Recibió<input @bind="_receiver" placeholder="Nombre de quien recibe" /></label>
                                 <label class="file-field">Evidencia de entrega <small>JPG, PNG o WebP; máximo 10 MB</small><InputFile OnChange="SelectEvidence" accept="image/jpeg,image/png,image/webp" /></label>
 
@@ -220,6 +229,12 @@ else
     }
     private static string DeliveryDateClass(DeliveryItem item) => !IsCompleted(item) && item.ScheduledAtUtc.ToLocalTime().Date < DateTime.Today ? "late" : string.Empty;
     private IReadOnlyList<StockItem> _stock = [];
+    private IReadOnlyList<StockShortage> StockShortages => _detail is null ? [] : _detail.Lines
+        .GroupBy(line => line.ProductId)
+        .Select(group => new { Product = group.First().Product, ProductId = group.Key, Requested = group.Sum(line => Complete(line.Id).Sale + Complete(line.Id).Replacement + Complete(line.Id).Tasting) })
+        .Select(item => new StockShortage(item.Product, item.Requested, _stock.FirstOrDefault(stock => stock.ProductId == item.ProductId)?.Physical ?? 0))
+        .Where(item => item.Missing > 0)
+        .ToList();
     private DeliveryDetail? _detail;
     private DeliveryRouteDetail? _route;
     private Dictionary<Guid, string> _pointImages = [];
@@ -365,6 +380,7 @@ else
     private async Task CompleteAsync()
     {
         if (_detail is null) return;
+        if (StockShortages.Count > 0) { var shortage = StockShortages[0]; SetMessage($"Faltan {shortage.Missing} unidades de {shortage.Product}: quieres registrar {shortage.Requested} y el inventario tiene {shortage.Physical}.", true); return; }
         if (string.IsNullOrWhiteSpace(_receiver)) { SetMessage("Indica quién recibió el pedido.", true); return; }
         if (_receivedPayment && _paymentAmount <= 0) { SetMessage("Indica el monto recibido.", true); return; }
         if (_receivedPayment && _paymentEvidence is null) { SetMessage("Debes adjuntar un respaldo para registrar este pago.", true); return; }
@@ -434,5 +450,6 @@ else
         catch (Microsoft.JSInterop.JSDisconnectedException) { }
     }
     private sealed record CompletionInput(int Sale, int Replacement, int Tasting);
+    private sealed record StockShortage(string Product, int Requested, int Physical) { public int Missing => Requested - Physical; }
     private sealed record RouteMapPoint(string OrderId, long OrderNumber, string Customer, string? DeliveryPoint, string? Address, string? Reference, string? Location, double? Latitude, double? Longitude, int Physical, decimal Balance, string? MapUrl, string? ImageUrl, int SelectedPosition) { public bool CanSelect => false; }
 }

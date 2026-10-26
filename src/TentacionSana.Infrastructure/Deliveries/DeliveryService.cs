@@ -823,7 +823,7 @@ public sealed class DeliveryService(ApplicationDbContext db, TimeProvider clock,
                                deliveryLine.AssignedSaleQuantity, deliveryLine.AssignedReplacementQuantity, deliveryLine.AssignedTastingQuantity,
                                deliveryLine.AssignedQuantity, deliveryLine.DeliveredSaleQuantity, deliveryLine.DeliveredReplacementQuantity,
                                deliveryLine.DeliveredTastingQuantity, deliveryLine.DeliveredQuantity, deliveryLine.PendingQuantity,
-                               deliveryLine.PendingSaleQuantity, deliveryLine.PendingReplacementQuantity, deliveryLine.PendingTastingQuantity))
+                               deliveryLine.PendingSaleQuantity, deliveryLine.PendingReplacementQuantity, deliveryLine.PendingTastingQuantity, orderLine.ProductId))
             .ToListAsync(cancellationToken);
         var evidence = await db.DeliveryEvidence.AsNoTracking().Where(x => x.DeliveryId == header.Id && x.IsActive).OrderByDescending(x => x.UploadedAtUtc).Select(x => new EvidenceItem(x.Id, x.FileName, x.UploadedAtUtc)).ToListAsync(cancellationToken);
         var history = await db.DeliveryStatusHistory.AsNoTracking().Where(x => x.DeliveryId == header.Id).OrderByDescending(x => x.ChangedAtUtc).Select(x => new DeliveryHistoryItem(x.ChangedAtUtc, x.NewStatus.ToString(), x.Reason)).ToListAsync(cancellationToken);

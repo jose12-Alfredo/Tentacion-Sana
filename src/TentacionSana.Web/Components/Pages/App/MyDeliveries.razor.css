@@ -70,3 +70,6 @@
 .assigned-deliveries .card-heading .row-action:focus-visible{outline:3px solid #7abf72;outline-offset:2px}
 .assigned-deliveries .card-heading .row-action:disabled{opacity:.6;cursor:wait}
 .assigned-deliveries .detail{scroll-margin-top:1rem}
+.delivery-stock-warning{padding:.75rem .85rem;border:1px solid #e7ba80;border-radius:.6rem;background:#fff7e8;color:#794918;font-size:.74rem;line-height:1.45}
+.delivery-stock-warning p{margin:0}
+.delivery-stock-warning p+p{margin-top:.5rem}
