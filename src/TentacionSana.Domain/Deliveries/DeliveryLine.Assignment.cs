@@ -12,4 +12,14 @@ public sealed partial class DeliveryLine
         AssignedTastingQuantity = DeliveredTastingQuantity + tasting;
         AssignedQuantity = AssignedSaleQuantity + AssignedReplacementQuantity + AssignedTastingQuantity;
     }
+
+    public void CorrectDeliveredBreakdown(int sale, int replacement, int tasting)
+    {
+        if (sale < 0 || replacement < 0 || tasting < 0 || sale + replacement + tasting != DeliveredQuantity ||
+            AssignedQuantity != DeliveredQuantity)
+            throw new InvalidOperationException("Solo se puede reclasificar una entrega completa conservando sus unidades físicas.");
+        AssignedSaleQuantity = DeliveredSaleQuantity = sale;
+        AssignedReplacementQuantity = DeliveredReplacementQuantity = replacement;
+        AssignedTastingQuantity = DeliveredTastingQuantity = tasting;
+    }
 }

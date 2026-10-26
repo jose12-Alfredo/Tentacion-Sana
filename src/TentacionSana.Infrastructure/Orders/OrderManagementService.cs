@@ -360,6 +360,89 @@ public sealed class OrderManagementService(ApplicationDbContext db, TimeProvider
         catch(Exception ex)when(ex is ArgumentException or InvalidOperationException){return Fail(ex.Message);}
         catch(DbUpdateException){return Fail("No se pudo guardar el ajuste en la base de datos. Recarga el pedido y vuelve a intentarlo.");}
     }
+    public async Task<OrderOperationResult> CorrectDeliveredLineAsync(Guid id, Guid lineId, int version, ConfirmedLineCommand command, Guid user, CancellationToken ct = default)
+    {
+        if (!await IsAdministrator(user)) return Fail("Solo administración puede corregir un pedido entregado.");
+        var strategy = db.Database.CreateExecutionStrategy();
+        try
+        {
+            return await strategy.ExecuteAsync(async () =>
+            {
+                db.ChangeTracker.Clear();
+                await using var transaction = await db.Database.BeginTransactionAsync(ct);
+                var order = await Load(id, ct);
+                if (order is null) return Fail("El pedido no existe.");
+                if (order.Version != version) return Conflict();
+                if (order.Status != OrderStatus.Delivered) return Fail("El pedido aún no está entregado.");
+                var line = order.Lines.SingleOrDefault(x => x.Id == lineId && x.IsActive);
+                if (line is null) return Fail("La línea ya no existe.");
+                if (command.ProductId is { } productId && productId != line.ProductId)
+                    return Fail("No se puede cambiar el producto de una entrega ya realizada.");
+                if (command.SaleQuantity + command.ReplacementQuantity + command.TastingQuantity != line.Quantity)
+                    return Fail("La corrección debe conservar las unidades físicas entregadas. Para devoluciones o entregas adicionales se necesita un movimiento de inventario.");
+
+                var deliveryLines = await db.DeliveryLines
+                    .Where(x => x.OrderLineId == lineId).OrderBy(x => x.Id).ToListAsync(ct);
+                if (deliveryLines.Sum(x => x.DeliveredQuantity) != line.Quantity ||
+                    deliveryLines.Any(x => x.AssignedQuantity != x.DeliveredQuantity))
+                    return Fail("El detalle de entrega no coincide con las unidades del pedido. Revisa la entrega antes de corregirla.");
+
+                var receivable = await db.Receivables.SingleOrDefaultAsync(x => x.OrderId == id, ct);
+                var now = clock.GetUtcNow();
+                var breakdownChanged = line.SaleQuantity != command.SaleQuantity ||
+                    line.ReplacementQuantity != command.ReplacementQuantity || line.TastingQuantity != command.TastingQuantity;
+                order.CorrectDeliveredLine(lineId, command.SaleQuantity, command.ReplacementQuantity,
+                    command.TastingQuantity, command.SoldUnitPrice, command.DiscountReason,
+                    command.ReplacementReason, command.ReplacementNotes, command.TastingReason,
+                    command.TastingNotes, command.Reason, user, now);
+
+                var remainingSale = command.SaleQuantity;
+                var remainingReplacement = command.ReplacementQuantity;
+                foreach (var deliveryLine in deliveryLines)
+                {
+                    var sale = Math.Min(remainingSale, deliveryLine.DeliveredQuantity);
+                    var replacement = Math.Min(remainingReplacement, deliveryLine.DeliveredQuantity - sale);
+                    var tasting = deliveryLine.DeliveredQuantity - sale - replacement;
+                    deliveryLine.CorrectDeliveredBreakdown(sale, replacement, tasting);
+                    remainingSale -= sale;
+                    remainingReplacement -= replacement;
+                }
+                if (remainingSale != 0 || remainingReplacement != 0 || deliveryLines.Sum(x => x.DeliveredTastingQuantity) != command.TastingQuantity)
+                    throw new InvalidOperationException("No se pudo distribuir la corrección entre las entregas.");
+
+                var newTotal = order.Lines.Where(x => x.IsActive).Sum(x => x.LineTotal) + order.DeliveryFee;
+                var correctedInvoice = newTotal;
+                if (receivable is null && correctedInvoice > 0)
+                {
+                    receivable = Receivable.Create(id, order.CustomerId, order.PaymentResponsiblePartyId);
+                    db.Receivables.Add(receivable);
+                }
+                receivable?.CorrectInvoice(correctedInvoice);
+                var deliveries = await db.Deliveries.Include(x => x.Lines).Where(x => x.OrderId == id).ToListAsync(ct);
+                var sales = await db.Sales.Where(x => x.OrderId == id).ToListAsync(ct);
+                foreach (var delivery in deliveries)
+                {
+                    var amount = delivery.Lines.Sum(x => x.DeliveredSaleQuantity * order.Lines.Single(lineItem => lineItem.Id == x.OrderLineId).SoldUnitPrice);
+                    var sale = sales.SingleOrDefault(x => x.DeliveryId == delivery.Id);
+                    if (sale is null && amount > 0) db.Sales.Add(Sale.Create(id, delivery.Id, amount, null, now));
+                    else if (sale is not null)
+                    {
+                        sale.CorrectAmount(amount);
+                        if (breakdownChanged) sale.Reprice(null);
+                    }
+                }
+                db.OrderChangeHistory.Add(order.ChangeHistory[^1]);
+                Audit("DeliveredOrderLineCorrected", id, user, now, command.Reason);
+                await db.SaveChangesAsync(ct);
+                await transaction.CommitAsync(ct);
+                return Ok(id);
+            });
+        }
+        catch (DbUpdateConcurrencyException) { db.ChangeTracker.Clear(); return Conflict(); }
+        catch (DbUpdateException) { db.ChangeTracker.Clear(); return Fail("No se pudo guardar la corrección. Recarga el pedido e intenta nuevamente."); }
+        catch (Exception ex) when (ex is ArgumentException or InvalidOperationException) { db.ChangeTracker.Clear(); return Fail(ex.Message); }
+    }
+
     private async Task ReconcileDeliveryAssignmentsAsync(Guid orderId,Guid lineId,int sale,int replacement,int tasting,Guid user,DateTimeOffset now,CancellationToken ct)
     {
         var deliveries=await db.Deliveries.Include(x=>x.Lines)

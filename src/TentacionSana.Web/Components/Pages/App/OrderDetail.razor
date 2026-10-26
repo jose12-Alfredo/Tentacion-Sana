@@ -7,6 +7,7 @@
 @inject IDeliveryEvidenceService DeliveryEvidenceService
 @inject IDeliveryPointImageService PointImageService
 @inject AuthenticationStateProvider AuthenticationStateProvider
+@inject IAuthorizationService AuthorizationService
 @inject ILoggerFactory LoggerFactory
 
 <PageTitle>Pedido | Tentación Sana</PageTitle>
@@ -111,13 +112,14 @@ else
                 @if (CanEditConfirmedOrder && SelectedRevisionLine is not null)
                 {
                     <section class="line-editor" aria-label="Editar producto del pedido">
-                        <header><div><h3>Editar @SelectedRevisionLine.Product</h3><p>Cambia las cantidades y guarda esta línea. La reserva se ajustará al nuevo total físico.</p></div><button type="button" class="line-editor-close" @onclick="CloseLineEditor" aria-label="Cerrar edición">Cerrar</button></header>
+                        <header><div><h3>Editar @SelectedRevisionLine.Product</h3><p>@(_order.Status == "Delivered" ? "Corrige venta, degustación y precio. La cantidad física debe seguir igual; la cuenta por cobrar se actualizará al guardar." : "Cambia las cantidades y guarda esta línea. La reserva se ajustará al nuevo total físico.")</p></div><button type="button" class="line-editor-close" @onclick="CloseLineEditor" aria-label="Cerrar edición">Cerrar</button></header>
                         <div class="line-editor-quantities">
                             <label>Unidades para venta<input type="number" min="0" @bind="_revisionSaleQuantity" @bind:event="oninput" /></label>
                             <label>Unidades para reposición<input type="number" min="0" @bind="_revisionReplacementQuantity" @bind:event="oninput" /></label>
                             <label>Unidades para degustación<input type="number" min="0" @bind="_revisionTastingQuantity" @bind:event="oninput" /></label>
                         </div>
                         <p class="line-editor-preview">Antes: <strong>@SelectedRevisionLine.SaleQuantity venta + @SelectedRevisionLine.ReplacementQuantity reposición + @SelectedRevisionLine.TastingQuantity degustación = @SelectedRevisionLine.Quantity unidades</strong><br />Ahora: <strong>@_revisionSaleQuantity venta + @_revisionReplacementQuantity reposición + @_revisionTastingQuantity degustación = @RevisionPhysicalTotal unidades</strong>@if (RevisionPhysicalTotal < SelectedRevisionLine.Quantity) { <span> · Se liberarán hasta @(SelectedRevisionLine.Quantity - RevisionPhysicalTotal) unidades de la reserva.</span> }</p>
+                        @if (_order.Status == "Delivered") { <p class="line-editor-preview">Nuevo total a cobrar: <strong>Bs @(CorrectedOrderTotal.ToString("N2"))</strong> · Nuevo saldo: <strong>Bs @(Math.Max(0, CorrectedOrderTotal - _order.Paid).ToString("N2"))</strong>@if (_order.Paid > CorrectedOrderTotal) { <span> · El excedente pagado quedará como crédito para revisar.</span> }</p> }
                         <div class="line-editor-details">
                             @if (_revisionReplacementQuantity > 0) { <label>Motivo de reposición <span class="required">*</span><select @bind="_revisionReplacementReason"><option value="">Selecciona un motivo</option>@foreach (var reason in ReplacementReasons) { <option value="@reason">@reason</option> }</select></label><label>Observación de reposición<input @bind="_revisionReplacementNotes" placeholder="Opcional" /></label> }
                             @if (_revisionTastingQuantity > 0) { <label>Motivo o destino de degustación <span class="required">*</span><select @bind="_revisionTastingReason"><option value="">Selecciona un motivo</option>@foreach (var reason in TastingReasons) { <option value="@reason">@reason</option> }</select></label><label>Observación de degustación<input @bind="_revisionTastingNotes" placeholder="Opcional" /></label> }
@@ -125,9 +127,9 @@ else
                             @if (_revisionPrice < RevisionStandardPrice) { <label>Motivo del descuento <span class="required">*</span><input @bind="_revisionDiscountReason" /></label> }
                             <label class="line-editor-reason">Motivo del cambio <span class="required">*</span><input @bind="_lineRevisionReason" placeholder="Ej.: se redujo la venta y se entregó una muestra" /></label>
                         </div>
-                        <details class="line-editor-product-change"><summary>Cambiar también el producto</summary><label>Producto<select @bind="_revisionProductId" @bind:after="RevisionProductChanged">@if (!_products.Any(x => x.Id == SelectedRevisionLine.ProductId)) { <option value="@SelectedRevisionLine.ProductId">@SelectedRevisionLine.Product (producto anterior)</option> }@foreach (var product in _products) { <option value="@product.Id">@product.Name</option> }</select></label></details>
+                        @if (_order.Status != "Delivered") { <details class="line-editor-product-change"><summary>Cambiar también el producto</summary><label>Producto<select @bind="_revisionProductId" @bind:after="RevisionProductChanged">@if (!_products.Any(x => x.Id == SelectedRevisionLine.ProductId)) { <option value="@SelectedRevisionLine.ProductId">@SelectedRevisionLine.Product (producto anterior)</option> }@foreach (var product in _products) { <option value="@product.Id">@product.Name</option> }</select></label></details> }
                         @if (_revisionErrors.Count > 0) { <div class="action-feedback" role="alert">@foreach (var error in _revisionErrors) { <p>@error</p> }</div> }
-                        <footer><button type="button" class="line-editor-remove" @onclick="RemoveConfirmedLineAsync" disabled="@_saving">Retirar línea</button><button type="button" class="line-editor-cancel" @onclick="CloseLineEditor">Cancelar</button><button type="button" @onclick="ReviseLineAsync" disabled="@_saving">@(_saving ? "Guardando…" : "Guardar cambio del producto")</button></footer>
+                        <footer>@if (_order.Status != "Delivered") { <button type="button" class="line-editor-remove" @onclick="RemoveConfirmedLineAsync" disabled="@_saving">Retirar línea</button> }<button type="button" class="line-editor-cancel" @onclick="CloseLineEditor">Cancelar</button><button type="button" @onclick="ReviseLineAsync" disabled="@_saving">@(_saving ? "Guardando…" : "Guardar cambio del producto")</button></footer>
                     </section>
                 }
                 @if (_revisionMessage is not null) { <p class="line-feedback line-feedback-success" role="status">@_revisionMessage</p> }
@@ -275,9 +277,11 @@ else
     private static readonly string[] TastingReasons = ["Degustación en punto de venta", "Muestra comercial", "Evento", "Influencer", "Promoción", "Prueba interna", "Otro"];
 
     private bool IsDraft => _order?.Status == "Draft";
-    private bool CanEditConfirmedOrder => _order?.Status is "Confirmed" or "InPreparation" or "Ready" or "OutForDelivery";
+    private bool _canCorrectDelivered;
+    private bool CanEditConfirmedOrder => _order?.Status is "Confirmed" or "InPreparation" or "Ready" or "OutForDelivery" || (_order?.Status == "Delivered" && _canCorrectDelivered);
     private OrderLineDetail? SelectedRevisionLine => _order?.Lines.FirstOrDefault(x => x.Id == _revisionLineId);
     private int RevisionPhysicalTotal => _revisionSaleQuantity + _revisionReplacementQuantity + _revisionTastingQuantity;
+    private decimal CorrectedOrderTotal => OrderTotal - (SelectedRevisionLine?.SaleQuantity * SelectedRevisionLine?.SoldUnitPrice ?? 0m) + _revisionSaleQuantity * _revisionPrice;
     private decimal RevisionStandardPrice => _revisionProductId == SelectedRevisionLine?.ProductId
         ? SelectedRevisionLine?.StandardUnitPrice ?? 0
         : _products.FirstOrDefault(x => x.Id == _revisionProductId)?.CurrentPrice ?? 0;
@@ -299,7 +303,7 @@ else
     private int LinePhysicalTotal => _line.SaleQuantity + _line.ReplacementQuantity + _line.TastingQuantity;
     private decimal LineSubtotal => _line.SaleQuantity * _line.SoldPrice;
 
-    protected override async Task OnParametersSetAsync() { _customers = await Service.CustomerOptionsAsync(); _products = await Service.ProductOptionsAsync(); await LoadAsync(); }
+    protected override async Task OnParametersSetAsync() { var state = await AuthenticationStateProvider.GetAuthenticationStateAsync(); _canCorrectDelivered = (await AuthorizationService.AuthorizeAsync(state.User, AppPolicies.Administration)).Succeeded; _customers = await Service.CustomerOptionsAsync(); _products = await Service.ProductOptionsAsync(); await LoadAsync(); }
     private async Task LoadAsync(CancellationToken ct = default) { _order = await Service.GetAsync(OrderId, ct); _payments = await DeliveryService.PaymentsAsync(OrderId, ct); _deliveryEvidence = await DeliveryService.GetOrderEvidenceAsync(OrderId, ct); if (_order is null) return; _form = new() { CustomerId = _order.CustomerId, DeliveryPointId = _order.DeliveryPointId, ContactId = _order.ContactId, PayerId = _order.PaymentResponsiblePartyId, PromisedLocal = _order.PromisedAtUtc?.ToLocalTime().DateTime, Notes = _order.Notes, DeliveryFee = _order.DeliveryFee }; _pointImageUrl = _order.DeliveryPointId is null ? null : await PointImageService.GetUrlAsync(_order.DeliveryPointId.Value, ct); if (_paymentAmount <= 0) _paymentAmount = _order.Balance; }
     private Task CustomerChanged() { _form.DeliveryPointId = null; _form.ContactId = null; _form.PayerId = null; _pointImageUrl = null; return Task.CompletedTask; }
     private async Task PointChanged() { _form.ContactId = SelectedPoint?.ContactId; _form.PayerId = SelectedPoint?.PayerId; _pointImageUrl = _form.DeliveryPointId is null ? null : await PointImageService.GetUrlAsync(_form.DeliveryPointId.Value); }
@@ -455,6 +459,7 @@ else
         if (_revisionLineId is null) { _revisionErrors.Add("Selecciona la línea del pedido que deseas modificar."); return; }
         if (_revisionProductId == Guid.Empty) { _revisionErrors.Add("Selecciona el nuevo producto para la línea."); return; }
         if (_revisionSaleQuantity < 0 || _revisionReplacementQuantity < 0 || _revisionTastingQuantity < 0 || RevisionPhysicalTotal is < 1 or > 10000) { _revisionErrors.Add("El total físico debe estar entre 1 y 10000 unidades; ninguna cantidad puede ser negativa."); return; }
+        if (_order?.Status == "Delivered" && RevisionPhysicalTotal != SelectedRevisionLine?.Quantity) { _revisionErrors.Add("En un pedido entregado, la suma de venta, reposición y degustación debe conservar las unidades físicas entregadas."); return; }
         if (_revisionReplacementQuantity > 0 && string.IsNullOrWhiteSpace(_revisionReplacementReason)) { _revisionErrors.Add("Selecciona el motivo de reposición."); return; }
         if (_revisionTastingQuantity > 0 && string.IsNullOrWhiteSpace(_revisionTastingReason)) { _revisionErrors.Add("Selecciona el motivo o destino de degustación."); return; }
         if (_revisionPrice < RevisionStandardPrice && string.IsNullOrWhiteSpace(_revisionDiscountReason)) { _revisionErrors.Add("Escribe el motivo del descuento."); return; }
@@ -463,9 +468,12 @@ else
         _saving = true;
         try
         {
-            var result = await Service.ReviseLineAsync(OrderId, _revisionLineId.Value, _order!.Version, new(_revisionSaleQuantity, _revisionReplacementQuantity, _revisionTastingQuantity, _revisionPrice, _revisionDiscountReason, _revisionReplacementReason, _revisionReplacementNotes, _revisionTastingReason, _revisionTastingNotes, _lineRevisionReason, _revisionProductId), await UserId());
+            var command = new ConfirmedLineCommand(_revisionSaleQuantity, _revisionReplacementQuantity, _revisionTastingQuantity, _revisionPrice, _revisionDiscountReason, _revisionReplacementReason, _revisionReplacementNotes, _revisionTastingReason, _revisionTastingNotes, _lineRevisionReason, _revisionProductId);
+            var result = _order!.Status == "Delivered"
+                ? await Service.CorrectDeliveredLineAsync(OrderId, _revisionLineId.Value, _order.Version, command, await UserId())
+                : await Service.ReviseLineAsync(OrderId, _revisionLineId.Value, _order.Version, command, await UserId());
             if (!result.Succeeded) { _revisionErrors.AddRange(result.Errors); return; }
-            _revisionMessage = "Producto actualizado. La reserva refleja las nuevas cantidades.";
+            _revisionMessage = _order.Status == "Delivered" ? "Pedido y cuenta por cobrar corregidos." : "Producto actualizado. La reserva refleja las nuevas cantidades.";
             try { await LoadAsync(); CloseLineEditor(); }
             catch (Exception ex)
             {

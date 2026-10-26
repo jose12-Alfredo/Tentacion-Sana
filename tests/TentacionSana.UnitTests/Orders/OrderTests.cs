@@ -1,4 +1,5 @@
 using TentacionSana.Domain.Orders;
+using TentacionSana.Domain.Deliveries;
 
 namespace TentacionSana.UnitTests.Orders;
 
@@ -34,6 +35,43 @@ public sealed class OrderTests
 
         Assert.Equal(OrderStatus.Delivered, order.Status);
         Assert.Equal(OrderStatus.Ready, order.StatusHistory[^1].PreviousStatus);
+    }
+
+    [Fact]
+    public void DeliveredOrderCorrectionReclassifiesSaleAndKeepsPhysicalQuantity()
+    {
+        var order = Order.CreateDraft(Guid.NewGuid(), null, UserId, Now);
+        order.Configure(order.CustomerId, null, null, null, Now.AddDays(1), null, UserId, Now);
+        var line = order.AddLine(Guid.NewGuid(), "Producto", 15, 0, 1, 20m, 15m, "Mayorista", null, null, "Muestra comercial", null, UserId, Now);
+        order.Confirm(OrderSnapshot.Create(order.Id, "Cliente", null, null, null, null, null, Now), UserId, Now);
+        order.AdvanceTo(OrderStatus.InPreparation, "Preparando", UserId, Now);
+        order.AdvanceTo(OrderStatus.Ready, "Listo", UserId, Now);
+        order.MarkDelivered(UserId, Now);
+
+        order.CorrectDeliveredLine(line.Id, 14, 0, 2, 15m, "Mayorista", null, null, "Muestra comercial", null,
+            "Una venta fue una muestra", UserId, Now.AddMinutes(1));
+
+        Assert.Equal(16, line.Quantity);
+        Assert.Equal(14, line.SaleQuantity);
+        Assert.Equal(2, line.TastingQuantity);
+        Assert.Equal(210m, line.LineTotal);
+        Assert.Equal("DeliveredLineCorrected", order.ChangeHistory[^1].Field);
+        Assert.Throws<InvalidOperationException>(() => order.CorrectDeliveredLine(line.Id, 13, 0, 2, 15m,
+            "Mayorista", null, null, "Muestra comercial", null, "Cantidad equivocada", UserId, Now));
+    }
+
+    [Fact]
+    public void CorrectedInvoiceChangesBalanceWithoutChangingRegisteredPayment()
+    {
+        var receivable = Receivable.Create(Guid.NewGuid(), Guid.NewGuid(), null);
+        receivable.AddSale(225m);
+        receivable.ApplyPayment(100m);
+
+        receivable.CorrectInvoice(210m);
+
+        Assert.Equal(210m, receivable.InvoicedAmount);
+        Assert.Equal(100m, receivable.PaidAmount);
+        Assert.Equal(110m, receivable.Balance);
     }
 
     private static readonly Guid UserId = Guid.NewGuid();

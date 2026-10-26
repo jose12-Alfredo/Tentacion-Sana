@@ -161,6 +161,24 @@ public sealed class Order
     public void ReviseLine(Guid lineId, int quantity, decimal standardPrice, decimal soldPrice, string? discountReason, string reason, Guid userId, DateTimeOffset now) =>
         ReviseLine(lineId, Lines.Single(x => x.Id == lineId).ProductId, Lines.Single(x => x.Id == lineId).ProductName, quantity, 0, 0, standardPrice, soldPrice, discountReason, null, null, null, null, reason, userId, now);
 
+    public void CorrectDeliveredLine(Guid lineId, int saleQuantity, int replacementQuantity, int tastingQuantity, decimal soldPrice,
+        string? discountReason, string? replacementReason, string? replacementNotes, string? tastingReason, string? tastingNotes,
+        string reason, Guid userId, DateTimeOffset now)
+    {
+        if (Status != OrderStatus.Delivered) throw new InvalidOperationException("Solo se pueden corregir pedidos entregados con esta operación.");
+        if (string.IsNullOrWhiteSpace(reason)) throw new ArgumentException("El motivo de la corrección es obligatorio.");
+        var line = Lines.SingleOrDefault(x => x.Id == lineId && x.IsActive) ?? throw new ArgumentException("La línea no existe.");
+        if (saleQuantity + replacementQuantity + tastingQuantity != line.Quantity)
+            throw new InvalidOperationException("La corrección comercial debe conservar la cantidad física entregada.");
+        var previous = $"venta {line.SaleQuantity}, reposición {line.ReplacementQuantity}, degustación {line.TastingQuantity}, precio {line.SoldUnitPrice:0.00}";
+        line.Update(saleQuantity, replacementQuantity, tastingQuantity, line.StandardUnitPrice, soldPrice, discountReason,
+            replacementReason, replacementNotes, tastingReason, tastingNotes);
+        ChangeHistory.Add(OrderChangeHistory.Create(Id, "DeliveredLineCorrected", previous,
+            $"venta {saleQuantity}, reposición {replacementQuantity}, degustación {tastingQuantity}, precio {line.SoldUnitPrice:0.00}",
+            userId, reason, now));
+        Touch(userId, now);
+    }
+
     public void RemoveConfirmedLine(Guid lineId,string reason,Guid userId,DateTimeOffset now)
     {
         EnsureModifiable(reason);var line=Lines.SingleOrDefault(x=>x.Id==lineId&&x.IsActive)??throw new ArgumentException("La línea no existe o ya fue retirada.");line.Deactivate();var reservation=Reservations.SingleOrDefault(x=>x.OrderLineId==lineId&&x.IsActive);reservation?.Release(now);ChangeHistory.Add(OrderChangeHistory.Create(Id,"LineRemoved",$"{line.ProductName}: {line.Quantity} x {line.SoldUnitPrice:0.00}",null,userId,reason,now));Touch(userId,now);
