@@ -6,6 +6,7 @@
 @inject IDeliveryService DeliveryService
 @inject AuthenticationStateProvider Auth
 @inject IJSRuntime JS
+@inject ILogger<Receivables> Logger
 
 <PageTitle>Cuentas por cobrar | Tentaci&oacute;n Sana</PageTitle>
 
@@ -200,6 +201,7 @@ else
     private string? _message; private bool _isError, _saving;
     private PayerAccountItem? _paymentPayer, _reportPayer; private PayerAccountHistory? _history;
     private decimal _paymentAmount; private string _paymentMethod = "Qr", _paymentNotes = string.Empty; private DateTime _paymentDate = DateTime.Today;
+    private string _paymentRequestKey = string.Empty;
     private bool _requiresSettlement, _applyAutomatically = true; private IBrowserFile? _paymentEvidence; private readonly List<AllocationInput> _manualAllocations = [];
     private PayerPaymentResult? _paymentResult;
     private string _reportType = "Current"; private bool _includeDeliveryEvidence = true, _includePaymentEvidence = true, _includePartialPayments = true, _includePaidOrders; private Guid? _reportPaymentId;
@@ -230,7 +232,7 @@ else
     private bool MatchesSearch(PayerAccountItem payer, ReceivableOrderItem order) { var query = _search.Trim(); return query.Length == 0 || payer.Name.Contains(query, StringComparison.OrdinalIgnoreCase) || order.Customer.Contains(query, StringComparison.OrdinalIgnoreCase) || order.Branch.Contains(query, StringComparison.OrdinalIgnoreCase) || order.OrderNumber.ToString().Contains(query, StringComparison.OrdinalIgnoreCase); }
     private void ChangeCustomer(ChangeEventArgs args) { _customer = args.Value?.ToString() ?? "All"; if (_branch != "All" && !BranchOptions.Contains(_branch)) _branch = "All"; }
 
-    private void OpenPayment(PayerAccountItem payer) { _paymentPayer = payer; _paymentAmount = payer.Balance; _paymentMethod = "Qr"; _paymentDate = DateTime.Today; _paymentNotes = string.Empty; _paymentEvidence = null; _requiresSettlement = false; _applyAutomatically = true; _paymentResult = null; _manualAllocations.Clear(); _manualAllocations.AddRange(payer.Orders.Where(x => x.Balance > 0).Select(x => new AllocationInput(x.OrderId, x.OrderNumber, x.Balance))); ClearMessage(); }
+    private void OpenPayment(PayerAccountItem payer) { _paymentPayer = payer; _paymentAmount = payer.Balance; _paymentMethod = "Qr"; _paymentDate = DateTime.Today; _paymentNotes = string.Empty; _paymentEvidence = null; _requiresSettlement = false; _applyAutomatically = true; _paymentResult = null; _paymentRequestKey = Guid.NewGuid().ToString("N"); _manualAllocations.Clear(); _manualAllocations.AddRange(payer.Orders.Where(x => x.Balance > 0).Select(x => new AllocationInput(x.OrderId, x.OrderNumber, x.Balance))); ClearMessage(); }
     private void ClosePayment() { _paymentPayer = null; _paymentResult = null; }
     private void SelectPaymentEvidence(InputFileChangeEventArgs e) => _paymentEvidence = e.File;
     private async Task SavePaymentAsync()
@@ -245,10 +247,17 @@ else
             var userId = await CurrentUserIdAsync();
             await using var content = _paymentEvidence.OpenReadStream(10 * 1024 * 1024);
             var paidAt = new DateTimeOffset(DateTime.SpecifyKind(_paymentDate, DateTimeKind.Local)).ToUniversalTime();
-            var result = await AccountService.RegisterPaymentAsync(new(_paymentPayer.ResponsiblePartyId, Guid.NewGuid().ToString("N"), _paymentAmount, _paymentMethod, paidAt, _paymentNotes, _requiresSettlement, _applyAutomatically,
+            var result = await AccountService.RegisterPaymentAsync(new(_paymentPayer.ResponsiblePartyId, _paymentRequestKey, _paymentAmount, _paymentMethod, paidAt, _paymentNotes, _requiresSettlement, _applyAutomatically,
                 _manualAllocations.Where(x => x.Amount > 0).Select(x => new ManualPaymentAllocation(x.OrderId, x.Amount)).ToList(), content, _paymentEvidence.Name, _paymentEvidence.ContentType, _paymentEvidence.Size), userId);
             if (!result.Succeeded) { SetMessage(string.Join(" ", result.Errors), true); return; }
-            _paymentResult = result; _reportPaymentId = result.PaymentId; await ReloadAsync();
+            _paymentResult = result; _reportPaymentId = result.PaymentId;
+            try { await ReloadAsync(); }
+            catch (Exception ex) { Logger.LogWarning(ex, "El pago {PaymentId} se registró, pero no se pudo actualizar el resumen", result.PaymentId); }
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError(ex, "No se pudo registrar el pago del responsable {ResponsiblePartyId}", _paymentPayer.ResponsiblePartyId);
+            SetMessage("No se pudo completar el pago. Comprueba la conexión y vuelve a intentarlo; este formulario evitará duplicar el mismo pago.", true);
         }
         finally { _saving = false; }
     }

@@ -31,6 +31,10 @@ public sealed class ReceivablesService(
         LoggerMessage.Define<string, long>(LogLevel.Error,
             new EventId(1, nameof(UnexpectedEvidenceDownloadError)),
             "Unexpected error downloading evidence {FileName} for order {OrderNumber}.");
+    private static readonly Action<ILogger, Guid, Exception?> PaymentEvidenceUploadError =
+        LoggerMessage.Define<Guid>(LogLevel.Error,
+            new EventId(2, nameof(PaymentEvidenceUploadError)),
+            "No se pudo subir el respaldo del pago del responsable {ResponsiblePartyId}.");
 
     public async Task<ReceivablesOverview> GetOverviewAsync(CancellationToken cancellationToken = default)
     {
@@ -145,12 +149,21 @@ public sealed class ReceivablesService(
         if (string.IsNullOrWhiteSpace(settings.CloudName) || string.IsNullOrWhiteSpace(settings.ApiKey) || string.IsNullOrWhiteSpace(settings.ApiSecret))
             return PaymentFailure("Cloudinary no est\u00E1 configurado.");
         var cloudinary = CreateCloudinary(settings);
-        var upload = await cloudinary.UploadAsync(new ImageUploadParams
+        ImageUploadResult upload;
+        try
         {
-            File = new FileDescription(Path.GetFileName(command.EvidenceFileName), command.EvidenceContent),
-            Folder = $"tentacion-sana/pagos/{command.ResponsiblePartyId:N}", Type = "authenticated",
-            UniqueFilename = true, Overwrite = false, UseFilename = true
-        }, cancellationToken);
+            upload = await cloudinary.UploadAsync(new ImageUploadParams
+            {
+                File = new FileDescription(Path.GetFileName(command.EvidenceFileName), command.EvidenceContent),
+                Folder = $"tentacion-sana/pagos/{command.ResponsiblePartyId:N}", Type = "authenticated",
+                UniqueFilename = true, Overwrite = false, UseFilename = true
+            }, cancellationToken);
+        }
+        catch (Exception ex) when (ex is HttpRequestException or IOException or TaskCanceledException)
+        {
+            PaymentEvidenceUploadError(logger, command.ResponsiblePartyId, ex);
+            return PaymentFailure("No se pudo subir el comprobante. Comprueba la conexión e intenta nuevamente.");
+        }
         if (upload.Error is not null || string.IsNullOrWhiteSpace(upload.PublicId)) return PaymentFailure(upload.Error?.Message ?? "No se pudo guardar el respaldo del pago.");
 
         await using var transaction = await db.Database.BeginTransactionAsync(cancellationToken);
