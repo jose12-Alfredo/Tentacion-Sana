@@ -1,6 +1,10 @@
 const mapStates = new Map();
 let leafletPromise;
 
+export function focusDeliveryDetail(elementId) {
+    document.getElementById(elementId)?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+}
+
 export function waitForDeliveryMapStyles() {
     const loaded = [...document.styleSheets].some(sheet => sheet.href?.includes('leaflet@1.9.4/dist/leaflet.css'));
     if (loaded) return Promise.resolve();

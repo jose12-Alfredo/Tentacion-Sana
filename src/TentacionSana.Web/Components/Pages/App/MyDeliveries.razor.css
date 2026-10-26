@@ -65,3 +65,8 @@
 .route-photo-overlay{position:fixed;inset:0;z-index:1100;display:grid;place-items:center;padding:1rem;background:#102316a6}
 .route-photo-dialog{display:flex;flex-direction:column;width:min(90vw,920px);max-height:calc(100vh - 2rem);padding:1rem;border-radius:14px;background:#fff;box-shadow:0 20px 50px #0004}
 .route-photo-dialog>div{display:flex;align-items:center;justify-content:space-between;gap:1rem;margin-bottom:.8rem}.route-photo-dialog h2{margin:0;font-size:1.1rem}.route-photo-dialog button{cursor:pointer;padding:.45rem .7rem;border:1px solid #b8ccb9;border-radius:8px;background:#fff;color:#246b45;font-weight:700}.route-photo-dialog img{display:block;max-width:100%;max-height:calc(100vh - 7rem);margin:auto;object-fit:contain}
+.assigned-deliveries .card-heading{cursor:default}
+.assigned-deliveries .card-heading .row-action{font-family:inherit;cursor:pointer}
+.assigned-deliveries .card-heading .row-action:focus-visible{outline:3px solid #7abf72;outline-offset:2px}
+.assigned-deliveries .card-heading .row-action:disabled{opacity:.6;cursor:wait}
+.assigned-deliveries .detail{scroll-margin-top:1rem}

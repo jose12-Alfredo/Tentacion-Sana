@@ -334,7 +334,7 @@ public sealed class OrderManagementService(ApplicationDbContext db, TimeProvider
                     var standardPrice=productId==oldProductId?line.StandardUnitPrice:await db.ProductPrices.Where(x=>x.ProductId==productId&&x.EffectiveFromUtc<=now&&(x.EffectiveToUtc==null||x.EffectiveToUtc>now)).OrderByDescending(x=>x.EffectiveFromUtc).Select(x=>(decimal?)x.Amount).FirstOrDefaultAsync(ct)??0m;
                     if(c.SoldUnitPrice<standardPrice&&!await IsAdministrator(user))return Fail("El descuento requiere autorización de una persona administradora.");
                     order.ReviseLine(lineId,productId,product?.Name??line.ProductName,c.SaleQuantity,c.ReplacementQuantity,c.TastingQuantity,standardPrice,c.SoldUnitPrice,c.DiscountReason,c.ReplacementReason,c.ReplacementNotes,c.TastingReason,c.TastingNotes,c.Reason,user,now);
-                    await ReduceDeliveryAssignmentsAsync(id,lineId,c.SaleQuantity,c.ReplacementQuantity,c.TastingQuantity,user,now,ct);
+                    await ReconcileDeliveryAssignmentsAsync(id,lineId,c.SaleQuantity,c.ReplacementQuantity,c.TastingQuantity,user,now,ct);
                     if(productId!=oldProductId)
                     {
                         if(oldReserved>0){var oldBalance=await db.ProductStockBalances.SingleAsync(x=>x.ProductId==oldProductId,ct);oldBalance.Release(oldReserved);}
@@ -360,7 +360,7 @@ public sealed class OrderManagementService(ApplicationDbContext db, TimeProvider
         catch(Exception ex)when(ex is ArgumentException or InvalidOperationException){return Fail(ex.Message);}
         catch(DbUpdateException){return Fail("No se pudo guardar el ajuste en la base de datos. Recarga el pedido y vuelve a intentarlo.");}
     }
-    private async Task ReduceDeliveryAssignmentsAsync(Guid orderId,Guid lineId,int sale,int replacement,int tasting,Guid user,DateTimeOffset now,CancellationToken ct)
+    private async Task ReconcileDeliveryAssignmentsAsync(Guid orderId,Guid lineId,int sale,int replacement,int tasting,Guid user,DateTimeOffset now,CancellationToken ct)
     {
         var deliveries=await db.Deliveries.Include(x=>x.Lines)
             .Where(x=>x.OrderId==orderId && x.Status!=DeliveryStatus.Delivered && x.Status!=DeliveryStatus.Cancelled)
@@ -383,11 +383,23 @@ public sealed class OrderManagementService(ApplicationDbContext db, TimeProvider
             var takeReplacement=Math.Min(excessReplacement,line.PendingReplacementQuantity);
             var takeTasting=Math.Min(excessTasting,line.PendingTastingQuantity);
             if(takeSale+takeReplacement+takeTasting==0)continue;
-            line.ReducePendingTo(line.PendingSaleQuantity-takeSale,line.PendingReplacementQuantity-takeReplacement,line.PendingTastingQuantity-takeTasting);
+            line.SetPendingQuantities(line.PendingSaleQuantity-takeSale,line.PendingReplacementQuantity-takeReplacement,line.PendingTastingQuantity-takeTasting);
             delivery.ReviseAssignment(user,now);
             excessSale-=takeSale;
             excessReplacement-=takeReplacement;
             excessTasting-=takeTasting;
+        }
+        var target=lines.FirstOrDefault(x=>x.Delivery.Status is DeliveryStatus.InRoute or DeliveryStatus.Assigned or DeliveryStatus.Scheduled or DeliveryStatus.Partial);
+        if(target.Line is not null)
+        {
+            var missingSale=Math.Max(0,sale-(delivered?.Sale??0)-lines.Sum(x=>x.Line.PendingSaleQuantity));
+            var missingReplacement=Math.Max(0,replacement-(delivered?.Replacement??0)-lines.Sum(x=>x.Line.PendingReplacementQuantity));
+            var missingTasting=Math.Max(0,tasting-(delivered?.Tasting??0)-lines.Sum(x=>x.Line.PendingTastingQuantity));
+            if(missingSale+missingReplacement+missingTasting>0)
+            {
+                target.Line.SetPendingQuantities(target.Line.PendingSaleQuantity+missingSale,target.Line.PendingReplacementQuantity+missingReplacement,target.Line.PendingTastingQuantity+missingTasting);
+                target.Delivery.ReviseAssignment(user,now);
+            }
         }
     }
 

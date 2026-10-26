@@ -8,6 +8,7 @@
 @inject IDeliveryPointImageService PointImages
 @inject AuthenticationStateProvider Auth
 @inject Microsoft.JSInterop.IJSRuntime JS
+@inject ILogger<MyDeliveries> Logger
 @implements IAsyncDisposable
 
 <PageTitle>Mi ruta de hoy | Tentación Sana</PageTitle>
@@ -70,7 +71,7 @@ else
             }
             var routeStop = _route?.Stops.FirstOrDefault(x => x.DeliveryId == item.Id);
             <article class="card @StatusClass(item.Status)">
-                <button class="card-heading" @onclick="() => OpenAsync(item.Id)">
+                <div class="card-heading" role="group" aria-label="Entrega del pedido @item.OrderNumber">
                     <span class="stop-label @(IsCompleted(item) ? "completed" : null)">@(IsCompleted(item) ? "Completada" : item.RoutePosition is { } position ? $"Parada {position}" : "Sin parada")</span>
                     <strong class="delivery-order">#@item.OrderNumber</strong>
                     <span class="delivery-customer">
@@ -88,11 +89,11 @@ else
                     <span class="delivery-date @DeliveryDateClass(item)"><strong>@DeliveryDateLabel(item)</strong><small>@item.ScheduledAtUtc.ToLocalTime().ToString("HH:mm")</small></span>
                     <span class="delivery-balance"><strong>Saldo @Money(item.Balance)</strong><small>Total @Money(item.Total) · Cobrado @Money(item.Paid)</small>@if (item.DeliveryFee > 0) { <small class="fee-breakdown">Productos @Money(item.Total - item.DeliveryFee) + envío @Money(item.DeliveryFee)</small> }</span>
                     <span class="delivery-states"><span class="delivery-status @StatusClass(item.Status)">@StatusText(item.Status)</span><span class="payment-status @PaymentStatusClass(item)">@PaymentStatusText(item)</span></span>
-                    <span class="delivery-action"><span class="row-action">@(IsCompleted(item) ? "Ver detalle" : item.Status == "InRoute" ? "Continuar entrega" : "Iniciar entrega") <b aria-hidden="true">›</b></span><small>@(item.DeliveryEvidenceCount + item.PaymentEvidenceCount) evidencia(s)</small></span>
-                </button>
+                    <span class="delivery-action"><button type="button" class="row-action" @onclick="() => OpenAsync(item.Id)" disabled="@(_openingDeliveryId == item.Id)" aria-expanded="@(_detail?.Id == item.Id)" aria-controls="@($"delivery-detail-{item.Id}")">@(_openingDeliveryId == item.Id ? "Cargando…" : IsCompleted(item) ? "Ver detalle" : item.Status == "InRoute" ? "Continuar entrega" : "Iniciar entrega") <b aria-hidden="true">›</b></button><small>@(item.DeliveryEvidenceCount + item.PaymentEvidenceCount) evidencia(s)</small></span>
+                </div>
                 @if (_detail?.Id == item.Id)
                 {
-                    <div class="detail">
+                    <div class="detail" id="@($"delivery-detail-{item.Id}")">
                         <section class="destination-card">
                             <div><span>DESTINO</span><strong>@_detail.Customer</strong><small>@(_detail.Address ?? "Sin dirección")</small></div>
                             <div class="delivery-quick-actions">
@@ -230,6 +231,7 @@ else
     private string _paymentMethod = "Qr", _paymentNotes = string.Empty;
     private string? _message;
     private bool _isError, _saving, _savingOutput, _savingRoute;
+    private Guid? _openingDeliveryId, _focusDeliveryId;
     private Guid _userId;
     private Guid _outputProductId;
     private int _outputQuantity = 1;
@@ -253,10 +255,21 @@ else
     private string? ItemImage(DeliveryItem item) => item.DeliveryPointId is { } id && _pointImages.TryGetValue(id, out var url) ? url : null;
     protected override async Task OnAfterRenderAsync(bool firstRender)
     {
+        if (_focusDeliveryId is { } focusId)
+        {
+            _focusDeliveryId = null;
+            try
+            {
+                _mapModule ??= await JS.InvokeAsync<Microsoft.JSInterop.IJSObjectReference>("import", "./js/delivery-route-map.js?v=7");
+                await _mapModule.InvokeVoidAsync("focusDeliveryDetail", $"delivery-detail-{focusId}");
+            }
+            catch (Microsoft.JSInterop.JSDisconnectedException) { }
+            catch (Microsoft.JSInterop.JSException ex) { Logger.LogWarning(ex, "No se pudo desplazar al detalle de la entrega"); }
+        }
         if (MapDeliveries.Count == 0) return;
         try
         {
-            _mapModule ??= await JS.InvokeAsync<Microsoft.JSInterop.IJSObjectReference>("import", "./js/delivery-route-map.js?v=6");
+            _mapModule ??= await JS.InvokeAsync<Microsoft.JSInterop.IJSObjectReference>("import", "./js/delivery-route-map.js?v=7");
             _mapReference ??= Microsoft.JSInterop.DotNetObjectReference.Create(this);
             await _mapModule.InvokeVoidAsync("waitForDeliveryMapStyles");
             await _mapModule.InvokeVoidAsync("renderDeliveryRouteMap", "my-deliveries-route-map", BuildMapPoints(), _mapReference);
@@ -266,14 +279,29 @@ else
     }
     private async Task OpenAsync(Guid id)
     {
-        _detail = await Service.GetAsync(id, _userId);
-        _complete.Clear();
-        if (_detail is not null)
+        if (_openingDeliveryId is not null) return;
+        _openingDeliveryId = id;
+        _message = null;
+        try
         {
+            _detail = await Service.GetAsync(id, _userId);
+            _complete.Clear();
+            if (_detail is null)
+            {
+                SetMessage("No se pudo abrir esta entrega. Recarga la página e inténtalo de nuevo.", true);
+                return;
+            }
             foreach (var line in _detail.Lines) _complete[line.Id] = new(line.PendingSaleQuantity, line.PendingReplacementQuantity, line.PendingTastingQuantity);
             _receiver = _detail.ContactName ?? string.Empty;
             _receivedPayment = false; _paymentAmount = 0; _paymentMethod = "Qr"; _paymentNotes = string.Empty; _evidence = null; _paymentEvidence = null; _incidentEvidence = null;
+            _focusDeliveryId = id;
         }
+        catch (Exception ex)
+        {
+            Logger.LogError(ex, "No se pudo abrir la entrega {DeliveryId}", id);
+            SetMessage("No se pudo cargar la entrega. Recarga la página e inténtalo de nuevo.", true);
+        }
+        finally { _openingDeliveryId = null; }
     }
     private CompletionInput Complete(Guid id) => _complete.TryGetValue(id, out var current) ? current : new(0, 0, 0);
     private async Task MoveStopAsync(Guid deliveryId, int direction)

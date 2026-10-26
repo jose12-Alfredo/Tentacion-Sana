@@ -2,10 +2,9 @@ namespace TentacionSana.Domain.Deliveries;
 
 public sealed partial class DeliveryLine
 {
-    public void ReducePendingTo(int sale, int replacement, int tasting)
+    public void SetPendingQuantities(int sale, int replacement, int tasting)
     {
-        if (sale < 0 || replacement < 0 || tasting < 0 ||
-            sale > PendingSaleQuantity || replacement > PendingReplacementQuantity || tasting > PendingTastingQuantity)
+        if (sale < 0 || replacement < 0 || tasting < 0 || sale + replacement + tasting > 10000)
             throw new ArgumentException("La cantidad pendiente ajustada no es válida.");
 
         AssignedSaleQuantity = DeliveredSaleQuantity + sale;
