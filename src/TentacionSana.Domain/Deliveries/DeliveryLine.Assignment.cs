@@ -15,11 +15,12 @@ public sealed partial class DeliveryLine
 
     public void CorrectDeliveredBreakdown(int sale, int replacement, int tasting)
     {
-        if (sale < 0 || replacement < 0 || tasting < 0 || sale + replacement + tasting != DeliveredQuantity ||
+        if (sale < 0 || replacement < 0 || tasting < 0 || sale + replacement + tasting < DeliveredQuantity ||
             AssignedQuantity != DeliveredQuantity)
-            throw new InvalidOperationException("Solo se puede reclasificar una entrega completa conservando sus unidades físicas.");
+            throw new InvalidOperationException("La corrección requiere una entrega completa y no puede reducir sus unidades físicas.");
         AssignedSaleQuantity = DeliveredSaleQuantity = sale;
         AssignedReplacementQuantity = DeliveredReplacementQuantity = replacement;
         AssignedTastingQuantity = DeliveredTastingQuantity = tasting;
+        AssignedQuantity = DeliveredQuantity = sale + replacement + tasting;
     }
 }

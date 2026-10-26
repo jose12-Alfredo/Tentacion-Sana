@@ -378,8 +378,12 @@ public sealed class OrderManagementService(ApplicationDbContext db, TimeProvider
                 if (line is null) return Fail("La línea ya no existe.");
                 if (command.ProductId is { } productId && productId != line.ProductId)
                     return Fail("No se puede cambiar el producto de una entrega ya realizada.");
-                if (command.SaleQuantity + command.ReplacementQuantity + command.TastingQuantity != line.Quantity)
-                    return Fail("La corrección debe conservar las unidades físicas entregadas. Para devoluciones o entregas adicionales se necesita un movimiento de inventario.");
+                var correctedQuantity = command.SaleQuantity + command.ReplacementQuantity + command.TastingQuantity;
+                var additionalQuantity = correctedQuantity - line.Quantity;
+                if (additionalQuantity < 0)
+                    return Fail("Para reducir unidades físicas ya entregadas, primero se necesita registrar la devolución.");
+                if (additionalQuantity > 0 && !command.AdditionalUnitsAlreadyDelivered)
+                    return Fail("Confirma que las unidades adicionales ya fueron entregadas. Si todavía faltan por entregar, registra una nueva entrega.");
 
                 var deliveryLines = await db.DeliveryLines
                     .Where(x => x.OrderLineId == lineId).OrderBy(x => x.Id).ToListAsync(ct);
@@ -389,8 +393,54 @@ public sealed class OrderManagementService(ApplicationDbContext db, TimeProvider
 
                 var receivable = await db.Receivables.SingleOrDefaultAsync(x => x.OrderId == id, ct);
                 var now = clock.GetUtcNow();
+                var oldSale = line.SaleQuantity;
+                var oldReplacement = line.ReplacementQuantity;
+                var oldTasting = line.TastingQuantity;
                 var breakdownChanged = line.SaleQuantity != command.SaleQuantity ||
                     line.ReplacementQuantity != command.ReplacementQuantity || line.TastingQuantity != command.TastingQuantity;
+                if (additionalQuantity > 0)
+                {
+                    var balance = await db.ProductStockBalances.SingleOrDefaultAsync(x => x.ProductId == line.ProductId, ct);
+                    if (balance is null || balance.AvailableQuantity < additionalQuantity)
+                        return Fail($"No hay stock libre suficiente para registrar las {additionalQuantity} unidades adicionales como entregadas.");
+                    var batches = await db.ProductionBatches
+                        .Where(x => x.ProductId == line.ProductId && x.RemainingUnits > 0 && !x.IsVoided)
+                        .OrderBy(x => x.ProducedAtUtc).ThenBy(x => x.Number).ToListAsync(ct);
+                    if (batches.Sum(x => x.RemainingUnits) < additionalQuantity)
+                        return Fail($"Los lotes disponibles no respaldan las {additionalQuantity} unidades adicionales.");
+                    balance.Remove(additionalQuantity);
+                    var unrecorded = additionalQuantity;
+                    var components = new[]
+                    {
+                        (Count: Math.Max(0, command.SaleQuantity - oldSale), Kind: InventoryMovementKind.DeliveredSale),
+                        (Count: Math.Max(0, command.ReplacementQuantity - oldReplacement), Kind: InventoryMovementKind.Replacement),
+                        (Count: Math.Max(0, command.TastingQuantity - oldTasting), Kind: InventoryMovementKind.Tasting)
+                    };
+                    foreach (var component in components)
+                    {
+                        var quantity = Math.Min(unrecorded, component.Count);
+                        if (quantity == 0) continue;
+                        var movement = InventoryMovement.Create(line.ProductId, null, component.Kind, -quantity, null,
+                            $"Corrección de entrega del pedido #{order.Number}: {command.Reason}", user, now);
+                        db.InventoryMovements.Add(movement);
+                        var remaining = quantity;
+                        decimal historicalCost = 0;
+                        var hasKnownCost = true;
+                        foreach (var batch in batches.Where(x => x.RemainingUnits > 0))
+                        {
+                            var take = Math.Min(remaining, batch.RemainingUnits);
+                            batch.Consume(take);
+                            db.InventoryMovementAllocations.Add(InventoryMovementAllocation.Create(movement.Id, batch.Id, take, batch.EstimatedUnitCost));
+                            if (batch.EstimatedUnitCost is { } unitCost) historicalCost += take * unitCost;
+                            else hasKnownCost = false;
+                            remaining -= take;
+                            if (remaining == 0) break;
+                        }
+                        if (hasKnownCost) movement.Reprice(historicalCost / quantity);
+                        unrecorded -= quantity;
+                    }
+                    if (unrecorded != 0) throw new InvalidOperationException("No se pudo distribuir la salida adicional de inventario.");
+                }
                 order.CorrectDeliveredLine(lineId, command.SaleQuantity, command.ReplacementQuantity,
                     command.TastingQuantity, command.SoldUnitPrice, command.DiscountReason,
                     command.ReplacementReason, command.ReplacementNotes, command.TastingReason,
@@ -398,11 +448,13 @@ public sealed class OrderManagementService(ApplicationDbContext db, TimeProvider
 
                 var remainingSale = command.SaleQuantity;
                 var remainingReplacement = command.ReplacementQuantity;
-                foreach (var deliveryLine in deliveryLines)
+                for (var index = 0; index < deliveryLines.Count; index++)
                 {
-                    var sale = Math.Min(remainingSale, deliveryLine.DeliveredQuantity);
-                    var replacement = Math.Min(remainingReplacement, deliveryLine.DeliveredQuantity - sale);
-                    var tasting = deliveryLine.DeliveredQuantity - sale - replacement;
+                    var deliveryLine = deliveryLines[index];
+                    var deliveryQuantity = deliveryLine.DeliveredQuantity + (index == deliveryLines.Count - 1 ? additionalQuantity : 0);
+                    var sale = Math.Min(remainingSale, deliveryQuantity);
+                    var replacement = Math.Min(remainingReplacement, deliveryQuantity - sale);
+                    var tasting = deliveryQuantity - sale - replacement;
                     deliveryLine.CorrectDeliveredBreakdown(sale, replacement, tasting);
                     remainingSale -= sale;
                     remainingReplacement -= replacement;
@@ -422,6 +474,11 @@ public sealed class OrderManagementService(ApplicationDbContext db, TimeProvider
                 var sales = await db.Sales.Where(x => x.OrderId == id).ToListAsync(ct);
                 foreach (var delivery in deliveries)
                 {
+                    if (deliveryLines.Any(x => x.DeliveryId == delivery.Id))
+                    {
+                        delivery.ReviseAssignment(user, now);
+                        db.DeliveryStatusHistory.Add(delivery.History[^1]);
+                    }
                     var amount = delivery.Lines.Sum(x => x.DeliveredSaleQuantity * order.Lines.Single(lineItem => lineItem.Id == x.OrderLineId).SoldUnitPrice);
                     var sale = sales.SingleOrDefault(x => x.DeliveryId == delivery.Id);
                     if (sale is null && amount > 0) db.Sales.Add(Sale.Create(id, delivery.Id, amount, null, now));

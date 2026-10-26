@@ -56,6 +56,10 @@ public sealed class OrderTests
         Assert.Equal(2, line.TastingQuantity);
         Assert.Equal(210m, line.LineTotal);
         Assert.Equal("DeliveredLineCorrected", order.ChangeHistory[^1].Field);
+        order.CorrectDeliveredLine(line.Id, 18, 0, 1, 15m, "Mayorista", null, null, "Muestra comercial", null,
+            "Tres ventas ya entregadas no estaban registradas", UserId, Now.AddMinutes(2));
+        Assert.Equal(19, line.Quantity);
+        Assert.Equal(270m, line.LineTotal);
         Assert.Throws<InvalidOperationException>(() => order.CorrectDeliveredLine(line.Id, 13, 0, 2, 15m,
             "Mayorista", null, null, "Muestra comercial", null, "Cantidad equivocada", UserId, Now));
     }

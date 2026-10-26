@@ -112,13 +112,14 @@ else
                 @if (CanEditConfirmedOrder && SelectedRevisionLine is not null)
                 {
                     <section class="line-editor" aria-label="Editar producto del pedido">
-                        <header><div><h3>Editar @SelectedRevisionLine.Product</h3><p>@(_order.Status == "Delivered" ? "Corrige venta, degustación y precio. La cantidad física debe seguir igual; la cuenta por cobrar se actualizará al guardar." : "Cambia las cantidades y guarda esta línea. La reserva se ajustará al nuevo total físico.")</p></div><button type="button" class="line-editor-close" @onclick="CloseLineEditor" aria-label="Cerrar edición">Cerrar</button></header>
+                        <header><div><h3>Editar @SelectedRevisionLine.Product</h3><p>@(_order.Status == "Delivered" ? "Corrige venta, degustación y precio. La cuenta por cobrar se actualizará al guardar." : "Cambia las cantidades y guarda esta línea. La reserva se ajustará al nuevo total físico.")</p></div><button type="button" class="line-editor-close" @onclick="CloseLineEditor" aria-label="Cerrar edición">Cerrar</button></header>
                         <div class="line-editor-quantities">
                             <label>Unidades para venta<input type="number" min="0" @bind="_revisionSaleQuantity" @bind:event="oninput" /></label>
                             <label>Unidades para reposición<input type="number" min="0" @bind="_revisionReplacementQuantity" @bind:event="oninput" /></label>
                             <label>Unidades para degustación<input type="number" min="0" @bind="_revisionTastingQuantity" @bind:event="oninput" /></label>
                         </div>
-                        <p class="line-editor-preview">Antes: <strong>@SelectedRevisionLine.SaleQuantity venta + @SelectedRevisionLine.ReplacementQuantity reposición + @SelectedRevisionLine.TastingQuantity degustación = @SelectedRevisionLine.Quantity unidades</strong><br />Ahora: <strong>@_revisionSaleQuantity venta + @_revisionReplacementQuantity reposición + @_revisionTastingQuantity degustación = @RevisionPhysicalTotal unidades</strong>@if (RevisionPhysicalTotal < SelectedRevisionLine.Quantity) { <span> · Se liberarán hasta @(SelectedRevisionLine.Quantity - RevisionPhysicalTotal) unidades de la reserva.</span> }</p>
+                        <p class="line-editor-preview">Antes: <strong>@SelectedRevisionLine.SaleQuantity venta + @SelectedRevisionLine.ReplacementQuantity reposición + @SelectedRevisionLine.TastingQuantity degustación = @SelectedRevisionLine.Quantity unidades</strong><br />Ahora: <strong>@_revisionSaleQuantity venta + @_revisionReplacementQuantity reposición + @_revisionTastingQuantity degustación = @RevisionPhysicalTotal unidades</strong>@if (_order.Status != "Delivered" && RevisionPhysicalTotal < SelectedRevisionLine.Quantity) { <span> · Se liberarán hasta @(SelectedRevisionLine.Quantity - RevisionPhysicalTotal) unidades de la reserva.</span> }</p>
+                        @if (_order.Status == "Delivered" && RevisionPhysicalTotal > SelectedRevisionLine.Quantity) { <label class="line-editor-reason"><input type="checkbox" @bind="_additionalUnitsAlreadyDelivered" /> Confirmo que las @(RevisionPhysicalTotal - SelectedRevisionLine.Quantity) unidades adicionales ya se entregaron. Se descontarán del stock disponible.</label> }
                         @if (_order.Status == "Delivered") { <p class="line-editor-preview">Nuevo total a cobrar: <strong>Bs @(CorrectedOrderTotal.ToString("N2"))</strong> · Nuevo saldo: <strong>Bs @(Math.Max(0, CorrectedOrderTotal - _order.Paid).ToString("N2"))</strong>@if (_order.Paid > CorrectedOrderTotal) { <span> · El excedente pagado quedará como crédito para revisar.</span> }</p> }
                         <div class="line-editor-details">
                             @if (_revisionReplacementQuantity > 0) { <label>Motivo de reposición <span class="required">*</span><select @bind="_revisionReplacementReason"><option value="">Selecciona un motivo</option>@foreach (var reason in ReplacementReasons) { <option value="@reason">@reason</option> }</select></label><label>Observación de reposición<input @bind="_revisionReplacementNotes" placeholder="Opcional" /></label> }
@@ -271,6 +272,7 @@ else
     private Guid? _revisionLineId;
     private Guid _revisionProductId;
     private int _revisionSaleQuantity = 1, _revisionReplacementQuantity, _revisionTastingQuantity;
+    private bool _additionalUnitsAlreadyDelivered;
     private decimal _revisionPrice;
     private string? _revisionDiscountReason, _revisionReplacementReason, _revisionReplacementNotes, _revisionTastingReason, _revisionTastingNotes;
     private static readonly string[] ReplacementReasons = ["Producto dañado", "Producto vencido", "Problema de conservación", "Error de entrega", "Producto defectuoso", "Acuerdo comercial", "Otro"];
@@ -430,6 +432,7 @@ else
     private void OpenLineEditor(Guid lineId)
     {
         _revisionLineId = lineId;
+        _additionalUnitsAlreadyDelivered = false;
         var line = SelectedRevisionLine;
         if (line is null) return;
         _revisionProductId = line.ProductId;
@@ -459,7 +462,8 @@ else
         if (_revisionLineId is null) { _revisionErrors.Add("Selecciona la línea del pedido que deseas modificar."); return; }
         if (_revisionProductId == Guid.Empty) { _revisionErrors.Add("Selecciona el nuevo producto para la línea."); return; }
         if (_revisionSaleQuantity < 0 || _revisionReplacementQuantity < 0 || _revisionTastingQuantity < 0 || RevisionPhysicalTotal is < 1 or > 10000) { _revisionErrors.Add("El total físico debe estar entre 1 y 10000 unidades; ninguna cantidad puede ser negativa."); return; }
-        if (_order?.Status == "Delivered" && RevisionPhysicalTotal != SelectedRevisionLine?.Quantity) { _revisionErrors.Add("En un pedido entregado, la suma de venta, reposición y degustación debe conservar las unidades físicas entregadas."); return; }
+        if (_order?.Status == "Delivered" && RevisionPhysicalTotal < SelectedRevisionLine?.Quantity) { _revisionErrors.Add("Para reducir unidades físicas entregadas se debe registrar la devolución."); return; }
+        if (_order?.Status == "Delivered" && RevisionPhysicalTotal > SelectedRevisionLine?.Quantity && !_additionalUnitsAlreadyDelivered) { _revisionErrors.Add("Confirma que las unidades adicionales ya fueron entregadas. Si aún faltan por entregar, registra una nueva entrega."); return; }
         if (_revisionReplacementQuantity > 0 && string.IsNullOrWhiteSpace(_revisionReplacementReason)) { _revisionErrors.Add("Selecciona el motivo de reposición."); return; }
         if (_revisionTastingQuantity > 0 && string.IsNullOrWhiteSpace(_revisionTastingReason)) { _revisionErrors.Add("Selecciona el motivo o destino de degustación."); return; }
         if (_revisionPrice < RevisionStandardPrice && string.IsNullOrWhiteSpace(_revisionDiscountReason)) { _revisionErrors.Add("Escribe el motivo del descuento."); return; }
@@ -468,7 +472,7 @@ else
         _saving = true;
         try
         {
-            var command = new ConfirmedLineCommand(_revisionSaleQuantity, _revisionReplacementQuantity, _revisionTastingQuantity, _revisionPrice, _revisionDiscountReason, _revisionReplacementReason, _revisionReplacementNotes, _revisionTastingReason, _revisionTastingNotes, _lineRevisionReason, _revisionProductId);
+            var command = new ConfirmedLineCommand(_revisionSaleQuantity, _revisionReplacementQuantity, _revisionTastingQuantity, _revisionPrice, _revisionDiscountReason, _revisionReplacementReason, _revisionReplacementNotes, _revisionTastingReason, _revisionTastingNotes, _lineRevisionReason, _revisionProductId, _additionalUnitsAlreadyDelivered);
             var result = _order!.Status == "Delivered"
                 ? await Service.CorrectDeliveredLineAsync(OrderId, _revisionLineId.Value, _order.Version, command, await UserId())
                 : await Service.ReviseLineAsync(OrderId, _revisionLineId.Value, _order.Version, command, await UserId());

@@ -168,8 +168,8 @@ public sealed class Order
         if (Status != OrderStatus.Delivered) throw new InvalidOperationException("Solo se pueden corregir pedidos entregados con esta operación.");
         if (string.IsNullOrWhiteSpace(reason)) throw new ArgumentException("El motivo de la corrección es obligatorio.");
         var line = Lines.SingleOrDefault(x => x.Id == lineId && x.IsActive) ?? throw new ArgumentException("La línea no existe.");
-        if (saleQuantity + replacementQuantity + tastingQuantity != line.Quantity)
-            throw new InvalidOperationException("La corrección comercial debe conservar la cantidad física entregada.");
+        if (saleQuantity + replacementQuantity + tastingQuantity < line.Quantity)
+            throw new InvalidOperationException("Para reducir unidades físicas entregadas se necesita registrar la devolución.");
         var previous = $"venta {line.SaleQuantity}, reposición {line.ReplacementQuantity}, degustación {line.TastingQuantity}, precio {line.SoldUnitPrice:0.00}";
         line.Update(saleQuantity, replacementQuantity, tastingQuantity, line.StandardUnitPrice, soldPrice, discountReason,
             replacementReason, replacementNotes, tastingReason, tastingNotes);
