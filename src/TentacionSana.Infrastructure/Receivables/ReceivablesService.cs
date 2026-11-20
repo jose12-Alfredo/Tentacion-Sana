@@ -119,31 +119,15 @@ public sealed class ReceivablesService(
         if (command.Amount > previousBalance) return PaymentFailure("El pago supera el saldo pendiente del responsable.");
 
         List<ManualPaymentAllocation> requested;
-        if (command.ApplyAutomatically)
+        try
         {
-            requested = [];
-            var remaining = decimal.Round(command.Amount, 2);
-            foreach (var row in accountRows)
-            {
-                var amount = Math.Min(row.Balance, remaining);
-                if (amount > 0) requested.Add(new ManualPaymentAllocation(row.OrderId, amount));
-                remaining -= amount;
-                if (remaining == 0) break;
-            }
+            var selectable = accountRows.Select(x => new ReceivableOrderItem(x.OrderId, x.OrderNumber, x.Customer, x.Branch,
+                x.DeliveredAtUtc, x.Total, x.Paid, x.Balance, x.Version, 0, "Unpaid", 0, 0)).ToList();
+            var selectedIds = command.SelectedOrderIds ?? accountRows.Select(x => x.OrderId).ToList();
+            requested = PaymentDistribution.Build(selectable, selectedIds, command.Amount,
+                command.ApplyAutomatically, command.Allocations).ToList();
         }
-        else
-        {
-            requested = command.Allocations.Where(x => x.Amount > 0).ToList();
-            if (requested.Count == 0 || requested.Select(x => x.OrderId).Distinct().Count() != requested.Count)
-                return PaymentFailure("Selecciona al menos un pedido y no repitas aplicaciones.");
-            if (decimal.Round(requested.Sum(x => x.Amount), 2) != decimal.Round(command.Amount, 2))
-                return PaymentFailure("La suma aplicada a pedidos debe coincidir con el pago recibido.");
-            foreach (var item in requested)
-            {
-                var row = accountRows.SingleOrDefault(x => x.OrderId == item.OrderId);
-                if (row is null || item.Amount > row.Balance) return PaymentFailure("Una aplicaci\u00F3n supera el saldo disponible del pedido.");
-            }
-        }
+        catch (ArgumentException ex) { return PaymentFailure(ex.Message); }
 
         var settings = cloudinaryOptions.Value;
         if (string.IsNullOrWhiteSpace(settings.CloudName) || string.IsNullOrWhiteSpace(settings.ApiKey) || string.IsNullOrWhiteSpace(settings.ApiSecret))
@@ -183,6 +167,8 @@ public sealed class ReceivablesService(
             foreach (var item in requested)
             {
                 var receivable = receivables.Single(x => x.OrderId == item.OrderId);
+                if ((receivable.PayerId ?? receivable.CustomerId) != command.ResponsiblePartyId)
+                    throw new InvalidOperationException("El responsable de un pedido cambió. Actualiza la cuenta antes de registrar el pago.");
                 receivable.ApplyPayment(item.Amount);
             }
             var now = clock.GetUtcNow();
@@ -413,11 +399,13 @@ public sealed class ReceivablesService(
         return new(true, payment.Id, current + payment.Amount, payment.Amount, current, applications, []);
     }
 
-    private static string? ValidatePayment(RegisterPayerPaymentCommand command)
+    private string? ValidatePayment(RegisterPayerPaymentCommand command)
     {
         if (command.ResponsiblePartyId == Guid.Empty) return "El responsable de pago es obligatorio.";
         if (string.IsNullOrWhiteSpace(command.IdempotencyKey)) return "La clave de idempotencia es obligatoria.";
         if (command.Amount <= 0) return "El monto debe ser mayor que cero.";
+        if (decimal.Round(command.Amount, 2) != command.Amount) return "El monto admite como máximo dos decimales.";
+        if (command.PaymentDateUtc == default || command.PaymentDateUtc > clock.GetUtcNow()) return "Indica la fecha real del pago; no puede ser futura.";
         if (command.Method is not ("Cash" or "Qr")) return "El m\u00E9todo debe ser efectivo o QR.";
         if (command.EvidenceLength <= 0 || command.EvidenceLength > MaximumEvidenceBytes || !AllowedEvidenceTypes.Contains(command.EvidenceContentType.ToLowerInvariant())) return "El respaldo debe ser JPG, PNG o WebP de hasta 10 MB.";
         return null;

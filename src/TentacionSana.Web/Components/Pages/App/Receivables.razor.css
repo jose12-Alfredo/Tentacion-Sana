@@ -24,3 +24,10 @@
 .receivables-photo-overlay{position:fixed;inset:0;z-index:1200;display:grid;place-items:center;padding:1rem;background:#102316a6}
 .receivables-photo-dialog{display:flex;flex-direction:column;width:min(90vw,920px);max-height:calc(100vh - 2rem);padding:1rem;border-radius:14px;background:#fff;box-shadow:0 20px 50px #0004}
 .receivables-photo-dialog>div{display:flex;align-items:center;justify-content:space-between;gap:1rem;margin-bottom:.8rem}.receivables-photo-dialog h2{margin:0;font-size:1.1rem}.receivables-photo-dialog button{cursor:pointer;padding:.45rem .7rem;border:1px solid #b8ccb9;border-radius:8px;background:#fff;color:#246b45;font-weight:700}.receivables-photo-dialog img{display:block;max-width:100%;max-height:calc(100vh - 7rem);margin:auto;object-fit:contain}
+.payment-panel{width:min(58rem,100%)}
+.payment-edit-fields{border:0;padding:0;margin:0;min-width:0}
+.payment-scope>p{margin:0;color:#4c5968;font-size:.85rem;line-height:1.5}
+.payment-branch{padding:.75rem 0;border-top:1px solid #dfe4df}
+.payment-order-choice{display:flex;align-items:center;gap:.65rem;padding:.65rem 0 .65rem 1.4rem;cursor:pointer}
+.payment-order-choice span{display:grid;gap:.25rem;min-width:0}.payment-order-choice small{color:#4c5968;line-height:1.5}.payment-order-choice input,.payment-branch input[type=checkbox]{width:1.1rem;height:1.1rem;flex-shrink:0}
+.payment-panel button:disabled{opacity:.5;cursor:not-allowed}.payment-panel button:focus-visible,.payment-panel input:focus-visible{outline:3px solid #267537;outline-offset:3px}.manual-allocations strong{font-variant-numeric:tabular-nums}.payment-success ul{text-align:left;line-height:1.8}

@@ -56,7 +56,8 @@ public sealed record RegisterPayerPaymentCommand(
     Stream EvidenceContent,
     string EvidenceFileName,
     string EvidenceContentType,
-    long EvidenceLength);
+    long EvidenceLength,
+    IReadOnlyList<Guid>? SelectedOrderIds = null);
 
 public sealed record AppliedPaymentOrder(Guid OrderId, long OrderNumber, decimal Amount);
 
