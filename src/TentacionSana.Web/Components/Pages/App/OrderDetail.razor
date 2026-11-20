@@ -192,7 +192,8 @@ else
                         </div>
                         @if (_order.Status != "Delivered") { <details class="line-editor-product-change"><summary>Cambiar también el producto</summary><label>Producto<select @bind="_revisionProductId" @bind:after="RevisionProductChanged">@if (!_products.Any(x => x.Id == SelectedRevisionLine.ProductId)) { <option value="@SelectedRevisionLine.ProductId">@SelectedRevisionLine.Product (producto anterior)</option> }@foreach (var product in _products) { <option value="@product.Id">@product.Name</option> }</select></label></details> }
                         @if (_revisionErrors.Count > 0) { <div class="action-feedback" role="alert">@foreach (var error in _revisionErrors) { <p>@error</p> }</div> }
-                        <footer>@if (_order.Status != "Delivered") { <button type="button" class="line-editor-remove" @onclick="RemoveConfirmedLineAsync" disabled="@_saving">Retirar línea</button> }<button type="button" class="line-editor-cancel" @onclick="CloseLineEditor">Cancelar</button><button type="button" @onclick="ReviseLineAsync" disabled="@_saving">@(_saving ? "Guardando…" : "Guardar cambio del producto")</button></footer>
+                        @if (_revisionNeedsRefresh && !_revisionProductChangedExternally) { <button type="button" class="line-editor-cancel" @onclick="RefreshRevisionAsync" disabled="@_saving">@(_saving ? "Actualizando…" : "Actualizar pedido y conservar mi edición")</button> }
+                        <footer>@if (_order.Status != "Delivered") { <button type="button" class="line-editor-remove" @onclick="RemoveConfirmedLineAsync" disabled="@(_saving || _revisionNeedsRefresh)">Retirar línea</button> }<button type="button" class="line-editor-cancel" @onclick="CloseLineEditor" disabled="@_saving">Cancelar</button><button type="button" @onclick="ReviseLineAsync" disabled="@(_saving || _revisionNeedsRefresh)">@(_saving ? "Guardando…" : "Guardar cambio del producto")</button></footer>
                     </section>
                 }
                 @if (_revisionMessage is not null) { <p class="line-feedback line-feedback-success" role="status">@_revisionMessage</p> }
@@ -349,6 +350,8 @@ else
     private DateTime? _completedLocal;
     private string _historicalReceiver = "";
     private Guid? _revisionLineId;
+    private bool _revisionNeedsRefresh;
+    private bool _revisionProductChangedExternally;
     private Guid _revisionProductId;
     private int _revisionSaleQuantity = 1, _revisionReplacementQuantity, _revisionTastingQuantity;
     private bool _additionalUnitsAlreadyDelivered;
@@ -606,6 +609,8 @@ else
     private void OpenLineEditor(Guid lineId)
     {
         CloseDeliveryForm(); CloseDateCorrection(); _chooseRevisionLine = false;
+        _revisionNeedsRefresh = false;
+        _revisionProductChangedExternally = false;
         _revisionLineId = lineId;
         _additionalUnitsAlreadyDelivered = false;
         var line = SelectedRevisionLine;
@@ -626,14 +631,52 @@ else
     }
     private void CloseLineEditor()
     {
+        _revisionNeedsRefresh = false;
+        _revisionProductChangedExternally = false;
         _revisionLineId = null;
         _revisionErrors.Clear();
         _lineRevisionReason = "";
     }
     private Task RevisionProductChanged() { var product = _products.FirstOrDefault(x => x.Id == _revisionProductId); if (product is not null) { _revisionPrice = product.CurrentPrice; _revisionDiscountReason = null; } _revisionMessage = null; return Task.CompletedTask; }
+    private void ShowRevisionErrors(OrderOperationResult result)
+    {
+        _revisionErrors.AddRange(result.Errors);
+        _revisionNeedsRefresh = result.ErrorCode == "ConcurrencyConflict";
+    }
+    private async Task RefreshRevisionAsync()
+    {
+        if (_saving || _revisionLineId is null || _revisionProductChangedExternally) return;
+        var previousProductId = SelectedRevisionLine?.ProductId;
+        _saving = true; _revisionErrors.Clear();
+        try
+        {
+            await LoadAsync();
+            if (SelectedRevisionLine is null || !CanEditConfirmedOrder)
+            {
+                CloseLineEditor();
+                _errors.Add("La línea ya no está disponible para editar en el estado actual del pedido. Revisa los datos actualizados.");
+                return;
+            }
+            if (SelectedRevisionLine.ProductId != previousProductId)
+            {
+                _revisionProductChangedExternally = true;
+                _revisionErrors.Add("El producto de esta línea cambió. Conservamos lo que escribiste, pero debes cerrar y abrir la edición del producto actual antes de guardar.");
+                return;
+            }
+            _revisionNeedsRefresh = false;
+            _revisionMessage = "Pedido actualizado. Conservamos tus cantidades, precio y motivo. Revisa los valores actuales y vuelve a guardar.";
+        }
+        catch (Exception ex)
+        {
+            LoggerFactory.CreateLogger("OrderDetail").LogError(ex, "No se pudo actualizar la edición del pedido {OrderId}", OrderId);
+            _revisionErrors.Add("No se pudo actualizar el pedido. Tu edición sigue aquí; intenta actualizarlo nuevamente.");
+        }
+        finally { _saving = false; }
+    }
     private async Task ReviseLineAsync()
     {
         _revisionErrors.Clear(); _revisionMessage = null;
+        if (_revisionNeedsRefresh) { _revisionErrors.Add("Actualiza el pedido conservando tu edición antes de volver a guardar."); return; }
         if (_revisionLineId is null) { _revisionErrors.Add("Selecciona la línea del pedido que deseas modificar."); return; }
         if (_revisionProductId == Guid.Empty) { _revisionErrors.Add("Selecciona el nuevo producto para la línea."); return; }
         if (_revisionSaleQuantity < 0 || _revisionReplacementQuantity < 0 || _revisionTastingQuantity < 0 || RevisionPhysicalTotal is < 1 or > 10000) { _revisionErrors.Add("El total físico debe estar entre 1 y 10000 unidades; ninguna cantidad puede ser negativa."); return; }
@@ -651,7 +694,7 @@ else
             var result = _order!.Status == "Delivered"
                 ? await Service.CorrectDeliveredLineAsync(OrderId, _revisionLineId.Value, _order.Version, command, await UserId())
                 : await Service.ReviseLineAsync(OrderId, _revisionLineId.Value, _order.Version, command, await UserId());
-            if (!result.Succeeded) { _revisionErrors.AddRange(result.Errors); return; }
+            if (!result.Succeeded) { ShowRevisionErrors(result); return; }
             _revisionMessage = _order.Status == "Delivered" ? "Pedido y cuenta por cobrar corregidos." : "Producto actualizado. La reserva refleja las nuevas cantidades.";
             try { await LoadAsync(); CloseLineEditor(); }
             catch (Exception ex)
@@ -667,6 +710,7 @@ else
     private async Task RemoveConfirmedLineAsync()
     {
         _revisionErrors.Clear(); _revisionMessage = null;
+        if (_revisionNeedsRefresh) { _revisionErrors.Add("Actualiza el pedido antes de retirar la línea."); return; }
         if (_revisionLineId is null) return;
         if (string.IsNullOrWhiteSpace(_lineRevisionReason)) { _revisionErrors.Add("Escribe el motivo para retirar la línea."); return; }
         if (_saving) return;
@@ -674,7 +718,7 @@ else
         try
         {
             var result = await Service.RemoveConfirmedLineAsync(OrderId, _revisionLineId.Value, _order!.Version, _lineRevisionReason, await UserId());
-            if (!result.Succeeded) { _revisionErrors.AddRange(result.Errors); return; }
+            if (!result.Succeeded) { ShowRevisionErrors(result); return; }
             _revisionMessage = "Línea retirada y reserva liberada.";
             await LoadAsync();
             CloseLineEditor();

@@ -525,6 +525,7 @@ public sealed class OrderManagementService(ApplicationDbContext db, TimeProvider
             if(takeSale+takeReplacement+takeTasting==0)continue;
             line.SetPendingQuantities(line.PendingSaleQuantity-takeSale,line.PendingReplacementQuantity-takeReplacement,line.PendingTastingQuantity-takeTasting);
             delivery.ReviseAssignment(user,now);
+            db.DeliveryStatusHistory.Add(delivery.History[^1]);
             excessSale-=takeSale;
             excessReplacement-=takeReplacement;
             excessTasting-=takeTasting;
@@ -539,6 +540,7 @@ public sealed class OrderManagementService(ApplicationDbContext db, TimeProvider
             {
                 target.Line.SetPendingQuantities(target.Line.PendingSaleQuantity+missingSale,target.Line.PendingReplacementQuantity+missingReplacement,target.Line.PendingTastingQuantity+missingTasting);
                 target.Delivery.ReviseAssignment(user,now);
+                db.DeliveryStatusHistory.Add(target.Delivery.History[^1]);
             }
         }
     }
@@ -616,9 +618,9 @@ public sealed class OrderManagementService(ApplicationDbContext db, TimeProvider
     private async Task<OrderSnapshot> Snapshot(Order order,DateTimeOffset now,CancellationToken ct){var customer=await db.Customers.SingleAsync(x=>x.Id==order.CustomerId,ct);var point=order.DeliveryPointId is null?null:await db.DeliveryPoints.SingleAsync(x=>x.Id==order.DeliveryPointId,ct);var contact=order.ContactId is null?null:await db.CustomerContacts.SingleAsync(x=>x.Id==order.ContactId,ct);var payer=order.PaymentResponsiblePartyId is null?null:await db.PaymentResponsibleParties.SingleAsync(x=>x.Id==order.PaymentResponsiblePartyId,ct);var linesJson=JsonSerializer.Serialize(order.Lines.Where(x=>x.IsActive).Select(x=>new{x.ProductId,x.ProductName,x.SaleQuantity,x.ReplacementQuantity,x.TastingQuantity,x.Quantity,x.StandardUnitPrice,x.SoldUnitPrice,x.DiscountReason,x.ReplacementReason,x.ReplacementNotes,x.TastingReason,x.TastingNotes}));return OrderSnapshot.Create(order.Id,customer.Name,point?.Label,point?.Address,contact?.Name,contact?.Phone,payer?.Name,now,point?.Reference,point?.Location,linesJson);}
     private async Task<bool> CanModifyProgressed(Order order,Guid user)=>order.Status==OrderStatus.Confirmed||await IsAdministrator(user);
     private async Task<bool> IsAdministrator(Guid user){var actor=await users.FindByIdAsync(user.ToString());return actor is not null&&(await users.IsInRoleAsync(actor,AppRoles.Administrator)||await db.UserRoles.AnyAsync(x=>x.UserId==user&&db.RoleClaims.Any(c=>c.RoleId==x.RoleId&&c.ClaimType==AppPermissions.ClaimType&&c.ClaimValue==AppPermissions.Administration)));}
-    private async Task<OrderOperationResult> Save(Order o,string action,Guid user,CancellationToken ct,string? reason=null){Audit(action,o.Id,user,clock.GetUtcNow(),reason);try{await db.SaveChangesAsync(ct);return Ok(o.Id);}catch(DbUpdateConcurrencyException){return Conflict();}}
+    private async Task<OrderOperationResult> Save(Order o,string action,Guid user,CancellationToken ct,string? reason=null){Audit(action,o.Id,user,clock.GetUtcNow(),reason);try{await db.SaveChangesAsync(ct);return Ok(o.Id);}catch(DbUpdateConcurrencyException){db.ChangeTracker.Clear();return Conflict();}}
     private void Audit(string action,Guid id,Guid user,DateTimeOffset now,string? reason=null)=>db.AuditEntries.Add(new AuditEntry{Id=Guid.NewGuid(),UserId=user,Action=action,EntityType="Order",EntityId=id.ToString(),Reason=reason,OccurredAtUtc=now});
-    private static OrderOperationResult Ok(Guid id)=>new(true,id,[]); private static OrderOperationResult Fail(string e)=>new(false,null,[e]); private static OrderOperationResult Conflict()=>Fail("El pedido fue modificado por otra sesión. Recarga antes de continuar.");
+    private static OrderOperationResult Ok(Guid id)=>new(true,id,[]); private static OrderOperationResult Fail(string e)=>new(false,null,[e]); private static OrderOperationResult Conflict()=>new(false,null,["El pedido fue modificado por otra sesión. Actualiza el pedido antes de continuar."],"ConcurrencyConflict");
     private static string PaymentStatus(decimal paid,decimal balance,int paymentCount)=>paymentCount==0?"Pending":balance>0?"Partial":"Paid";
     private static string? PaymentMethod(IEnumerable<string> methods){var distinct=methods.Distinct().ToList();return distinct.Count switch{0=>null,1=>distinct[0],_=>"Mixed"};}
     private static string PaymentMethodText(string method)=>method switch{"Qr"=>"QR","Cash"=>"efectivo","Transfer"=>"transferencia",_=>method};
