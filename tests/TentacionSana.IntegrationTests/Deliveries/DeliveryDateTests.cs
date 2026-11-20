@@ -140,7 +140,7 @@ public sealed class DeliveryDateTests
         Assert.Equal(new DateTime(2026, 10, 28), DeliveryDates.LocalDate(new(2026, 10, 29, 2, 0, 0, TimeSpan.Zero)));
     }
 
-    private sealed class Fixture : IAsyncDisposable
+    internal sealed class Fixture : IAsyncDisposable
     {
         public required ApplicationDbContext Db { get; init; }
         public required DeliveryService Service { get; init; }

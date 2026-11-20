@@ -690,7 +690,24 @@ else
     private async Task OpenDeliveryEvidence(Guid evidenceId) { var result = await DeliveryEvidenceService.GetSignedUrlAsync(evidenceId, await UserId()); if (result.Succeeded) _deliveryEvidenceUrl = result.Url; else { _errors.Clear(); _errors.AddRange(result.Errors); } }
     private void ClosePhoto() { _paymentEvidenceUrl = null; _deliveryEvidenceUrl = null; }
     private async Task RegisterPaymentAsync() { _errors.Clear(); if (_paymentEvidence is null) { _errors.Add("Debes adjuntar un respaldo para registrar este pago."); return; } await using var content = _paymentEvidence.OpenReadStream(10 * 1024 * 1024); var paymentDate = new DateTimeOffset(DateTime.SpecifyKind(_paymentDate, DateTimeKind.Local)).ToUniversalTime(); var result = await DeliveryService.RegisterPaymentAsync(new(OrderId, _order!.ReceivableVersion, Guid.NewGuid().ToString("N"), _paymentAmount, _paymentMethod, null, false, _order.Status != "Delivered", paymentDate, _paymentNotes, content, _paymentEvidence.Name, _paymentEvidence.ContentType, _paymentEvidence.Size), await UserId()); if (!result.Succeeded) _errors.AddRange(result.Errors); else { _paymentEvidence = null; _paymentAmount = 0; await LoadAsync(); } }
-    private async Task ReturnDeliveryToPendingAsync() { _errors.Clear(); var result = await DeliveryService.ReturnOrderToPendingAsync(OrderId, await UserId()); if (!result.Succeeded) _errors.AddRange(result.Errors); else await LoadAsync(); }
+    private async Task ReturnDeliveryToPendingAsync()
+    {
+        if (_saving) return;
+        _saving = true; _errors.Clear(); _message = null;
+        try
+        {
+            var result = await DeliveryService.ReturnOrderToPendingAsync(OrderId, await UserId());
+            if (!result.Succeeded) { _errors.AddRange(result.Errors); return; }
+            _message = "Pedido devuelto a pendiente de salida. Ya puedes ajustar sus cantidades.";
+            await LoadAsync();
+        }
+        catch (Exception ex)
+        {
+            LoggerFactory.CreateLogger("OrderDetail").LogError(ex, "No se pudo devolver el pedido {OrderId} a pendiente de salida", OrderId);
+            _errors.Add("No se pudo confirmar el cambio de estado. Recarga el pedido para comprobarlo antes de intentar otra vez.");
+        }
+        finally { _saving = false; }
+    }
     private async Task Handle(OrderOperationResult result, bool resetLine = true) { _errors.Clear(); if (!result.Succeeded) { _errors.AddRange(result.Errors); return; } if (resetLine) _line = new(); await LoadAsync(); }
     private async Task<Guid> UserId() { var state = await AuthenticationStateProvider.GetAuthenticationStateAsync(); return Guid.Parse(state.User.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)!.Value); }
     private static DateTimeOffset? UtcDate(DateTime? date) => date is null ? null : new DateTimeOffset(DateTime.SpecifyKind(date.Value, DateTimeKind.Local)).ToUniversalTime();

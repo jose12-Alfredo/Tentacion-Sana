@@ -132,7 +132,16 @@ public sealed class DeliveryService(ApplicationDbContext db, TimeProvider clock,
 
     public async Task<DeliveryResult> ReturnOrderToPendingAsync(Guid orderId, Guid userId, CancellationToken cancellationToken = default)
     {
-        if (!await CanCoordinateRoutesAsync(userId, cancellationToken)) return Fail("Solo el equipo de ventas o administraciÃ³n puede devolver una entrega a pendiente.");
+        return await db.Database.CreateExecutionStrategy().ExecuteAsync(async () =>
+        {
+            db.ChangeTracker.Clear();
+            return await ReturnOrderToPendingTransactionalAsync(orderId, userId, cancellationToken);
+        });
+    }
+
+    private async Task<DeliveryResult> ReturnOrderToPendingTransactionalAsync(Guid orderId, Guid userId, CancellationToken cancellationToken)
+    {
+        if (!await CanCoordinateRoutesAsync(userId, cancellationToken)) return Fail("Solo el equipo de ventas o administración puede devolver una entrega a pendiente.");
         await using var transaction = await db.Database.BeginTransactionAsync(cancellationToken);
         try
         {
@@ -140,11 +149,12 @@ public sealed class DeliveryService(ApplicationDbContext db, TimeProvider clock,
                 .Where(x => x.OrderId == orderId && (x.Status == DeliveryStatus.InRoute || x.Status == DeliveryStatus.Assigned))
                 .OrderByDescending(x => x.ScheduledAtUtc).FirstOrDefaultAsync(cancellationToken);
             if (delivery is null) return Fail("El pedido no tiene una entrega asignada o en reparto.");
-            if (delivery.Lines.Any(x => x.DeliveredQuantity > 0)) return Fail("No se puede volver atrÃ¡s porque la entrega ya tiene cantidades confirmadas.");
+            if (delivery.Lines.Any(x => x.DeliveredQuantity > 0)) return Fail("No se puede volver atrás porque la entrega ya tiene cantidades confirmadas.");
 
             var route = await db.DeliveryRoutes.Include(x => x.Stops)
                 .SingleOrDefaultAsync(x => x.Stops.Any(stop => stop.DeliveryId == delivery.Id), cancellationToken);
             var order = await db.Orders.Include(x => x.StatusHistory).SingleAsync(x => x.Id == orderId, cancellationToken);
+            if (delivery.Status == DeliveryStatus.Assigned && order.Status == OrderStatus.Ready && route is null) return Ok(delivery.Id);
             var now = clock.GetUtcNow();
             if (delivery.Status == DeliveryStatus.InRoute)
             {
@@ -159,7 +169,15 @@ public sealed class DeliveryService(ApplicationDbContext db, TimeProvider clock,
             if (route is not null)
             {
                 if (route.Stops.Count == 1) db.DeliveryRoutes.Remove(route);
-                else route.RemoveStop(delivery.Id);
+                else
+                {
+                    // Libera las posiciones originales antes de compactarlas. Así la
+                    // restricción única de ruta/posición no bloquea retirar una parada.
+                    var offset = route.Stops.Max(x => x.Position) + route.Stops.Count + 1;
+                    foreach (var stop in route.Stops) db.Entry(stop).Property(x => x.Position).CurrentValue += offset;
+                    await db.SaveChangesAsync(cancellationToken);
+                    route.RemoveStop(delivery.Id);
+                }
             }
             Audit("DeliveryReturnedToPending", delivery.Id, userId, now);
             await db.SaveChangesAsync(cancellationToken);
