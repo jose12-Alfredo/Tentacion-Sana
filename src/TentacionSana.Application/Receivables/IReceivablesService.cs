@@ -24,7 +24,8 @@ public sealed record PayerAccountItem(
     decimal Total,
     decimal Paid,
     decimal Balance,
-    IReadOnlyList<ReceivableOrderItem> Orders);
+    IReadOnlyList<ReceivableOrderItem> Orders,
+    string AccountKind = "Central");
 
 public sealed record ReceivableOrderItem(
     Guid OrderId,

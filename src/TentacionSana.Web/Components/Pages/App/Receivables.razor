@@ -4,9 +4,11 @@
 @attribute [Authorize(Policy=AppPolicies.ManageFinance)]
 @inject IReceivablesService AccountService
 @inject IDeliveryService DeliveryService
+@inject IDeliveryEvidenceService DeliveryEvidenceService
 @inject AuthenticationStateProvider Auth
 @inject IJSRuntime JS
 @inject ILogger<Receivables> Logger
+@implements IAsyncDisposable
 
 <PageTitle>Cuentas por cobrar | Tentaci&oacute;n Sana</PageTitle>
 
@@ -25,7 +27,7 @@ else
 {
     var filteredMetrics = CurrentFilterMetrics;
     <section class="finance-metrics" aria-label="Resumen de cuentas por cobrar">
-        <article><span class="metric-icon money">$</span><div><strong>@Money(filteredMetrics.TotalPending)</strong><small>Total pendiente por cobrar</small></div></article>
+        <article><span class="metric-icon money">$</span><div><strong>@Money(filteredMetrics.TotalPending)</strong><small>@(_accountType == "All" && _accountId == "All" ? "Pendiente consolidado de las cuentas visibles" : "Pendiente de las cuentas seleccionadas")</small></div></article>
         <article><span class="metric-icon people">R</span><div><strong>@filteredMetrics.ResponsiblePartiesWithDebt</strong><small>Responsables con deuda</small></div></article>
         <article><span class="metric-icon partial">&#189;</span><div><strong>@filteredMetrics.PartiallyPaidOrders</strong><small>Pedidos con pago parcial</small></div></article>
         <article><span class="metric-icon overdue">!</span><div><strong>@filteredMetrics.OverdueOrders</strong><small>Pedidos vencidos</small></div></article>
@@ -37,6 +39,16 @@ else
         <label><span>Sucursal</span><select @bind="_branch"><option value="All">Todas las sucursales</option>@foreach (var branch in BranchOptions) { <option value="@branch">@branch</option> }</select></label>
         <label><span>Estado</span><select @bind="_status"><option value="All">Todos</option><option value="Unpaid">Sin pago</option><option value="Partial">Parcial</option><option value="Paid">Pagado</option><option value="Overdue">Vencido</option></select></label>
         <label><span>Antig&uuml;edad</span><select @bind="_age"><option value="All">Todas</option><option value="0-3">0-3 d&iacute;as</option><option value="4-7">4-7 d&iacute;as</option><option value="8+">+7 d&iacute;as</option></select></label>
+    </section>
+    <section class="account-controls" aria-label="Cuentas de cobro">
+        <div class="account-tabs" role="group" aria-label="Tipo de cuenta">
+            @foreach (var type in new[] { ("All", "Todos"), ("Central", "Central"), ("Franchise", "Franquicias"), ("Independent", "Otras cuentas") })
+            {
+                <button type="button" aria-pressed="@(_accountType == type.Item1 ? "true" : "false")" @onclick="() => ChangeAccountType(type.Item1)">@type.Item2</button>
+            }
+        </div>
+        <label>Cuenta de cobro<select @bind="_accountId"><option value="All">Todas las cuentas del tipo seleccionado</option>@foreach (var account in AccountOptions) { <option value="@account.ResponsiblePartyId">@account.Name</option> }</select></label>
+        <p>Central y cada franquicia tienen saldos y cobros separados. «Todos» muestra el consolidado. <a href="/app/clientes">Configurar puntos y responsables</a></p>
     </section>
 
     @if (!FilteredPayers.Any())
@@ -54,7 +66,7 @@ else
                         <div class="payer-identity"><span class="payer-mark" aria-hidden="true">R</span><div><h2>@payer.Name</h2><p>@string.Join(" \u00B7 ", payer.Customers)</p>@if (!string.IsNullOrWhiteSpace(payer.ContactName)) { <small>@payer.ContactName &middot; @payer.Phone</small> } else { <small>@payer.Phone</small> }</div></div>
                         <div class="payer-count"><strong>@visibleOrders.Count</strong><span>@(visibleOrders.Count == 1 ? "pedido" : "pedidos")</span></div>
                         <div class="payer-balance"><span>@(HasActiveFilters ? "SALDO FILTRADO" : "SALDO TOTAL")</span><strong>@Money(visibleOrders.Sum(x => x.Balance))</strong></div>
-                        <span class="expand-label">Ver pedidos</span>
+                        <span class="expand-label">@AccountTypeText(payer.AccountKind)</span>
                     </summary>
 
                     <div class="payer-actions">
@@ -72,7 +84,7 @@ else
                                 <strong data-label="Pedido">#@order.OrderNumber</strong><span data-label="Sucursal">@order.Branch</span><span data-label="Entrega">@(order.DeliveredAtUtc?.ToLocalTime().ToString("dd/MM/yyyy") ?? "Sin fecha")</span>
                                 <span data-label="Total">@Money(order.Total)</span><span data-label="Pagado">@Money(order.Paid)</span><strong data-label="Saldo" class="balance-value">@Money(order.Balance)</strong>
                                 <span data-label="Antig&uuml;edad" class="age @AgeClass(order)">@order.AgeDays d&iacute;as</span><span data-label="Estado"><b class="status-pill @order.Status.ToLowerInvariant()">@StatusText(order.Status)</b></span>
-                                <span data-label="Evidencias" class="evidence-count">Entrega: @order.DeliveryEvidenceCount &middot; Pagos: @order.PaymentEvidenceCount</span>
+                                <span data-label="Evidencias" class="evidence-count">@if (order.DeliveryEvidenceCount > 0) { <button type="button" class="evidence-view-button" @onclick="() => OpenDeliveryBoletasAsync(order)">@(order.DeliveryEvidenceCount == 1 ? "Ver boleta" : $"Ver boletas ({order.DeliveryEvidenceCount})")</button> } else { <span>Sin boleta</span> }<small>Pagos: @order.PaymentEvidenceCount</small></span>
                             </div>
                         }
                         <div class="order-row totals"><strong>Totales</strong><span></span><span></span><strong>@Money(visibleOrders.Sum(x => x.Total))</strong><strong>@Money(visibleOrders.Sum(x => x.Paid))</strong><strong>@Money(visibleOrders.Sum(x => x.Balance))</strong><span></span><span></span><span></span></div>
@@ -107,7 +119,7 @@ else
                             <label class="scope-branch-title"><input type="checkbox" checked="@group.All(x => _selectedPaymentOrderIds.Contains(x.OrderId))" @onchange="e => SelectPaymentOrders(group.Select(x => x.OrderId), CheckboxValue(e))" /><span><strong>@group.Key.Customer · @group.Key.Branch</strong><small>@group.Count() pedidos · @Money(group.Sum(x => x.Balance))</small></span></label>
                             @foreach (var order in group)
                             {
-                                <label class="payment-order-choice"><input type="checkbox" checked="@_selectedPaymentOrderIds.Contains(order.OrderId)" @onchange="e => SelectPaymentOrders([order.OrderId], CheckboxValue(e))" /><span><strong>#@order.OrderNumber · @Money(order.Balance) pendiente</strong><small>Entrega: @(order.DeliveredAtUtc is { } delivered ? DeliveryDates.LocalDate(delivered).ToString("dd/MM/yyyy") : "Sin fecha") · Total @Money(order.Total) · Pagado @Money(order.Paid)</small></span></label>
+                                <div class="payment-order-with-evidence"><label class="payment-order-choice"><input type="checkbox" checked="@_selectedPaymentOrderIds.Contains(order.OrderId)" @onchange="e => SelectPaymentOrders([order.OrderId], CheckboxValue(e))" /><span><strong>#@order.OrderNumber · @Money(order.Balance) pendiente</strong><small>Entrega: @(order.DeliveredAtUtc is { } delivered ? DeliveryDates.LocalDate(delivered).ToString("dd/MM/yyyy") : "Sin fecha") · Total @Money(order.Total) · Pagado @Money(order.Paid)</small></span></label>@if (order.DeliveryEvidenceCount > 0) { <button type="button" class="evidence-view-button" @onclick="() => OpenDeliveryBoletasAsync(order)">@(order.DeliveryEvidenceCount == 1 ? "Ver boleta" : $"Ver boletas ({order.DeliveryEvidenceCount})")</button> } else { <small>Sin boleta</small> }</div>
                             }
                         </div>
                     }
@@ -213,7 +225,89 @@ else
     </section></div>
 }
 
+@if (_boletaOrder is { } boletaOrder)
+{
+    <div class="receivables-photo-overlay" @onclick="CloseBoletas" @onkeydown="BoletaKeyDown" tabindex="-1">
+        <section id="receivable-boleta-dialog" class="receivables-photo-dialog boleta-dialog" role="dialog" aria-modal="true" aria-labelledby="boleta-title" @onclick:stopPropagation>
+            <div><div><h2 id="boleta-title">Boleta · Pedido #@boletaOrder.OrderNumber</h2><p>@boletaOrder.Customer · @boletaOrder.Branch</p></div><button type="button" @onclick="CloseBoletas">Cerrar</button></div>
+            @if (_boletaLoading) { <p role="status">Cargando boleta…</p> }
+            @if (_boletaError is not null) { <p role="alert">@_boletaError</p><button type="button" @onclick="() => OpenDeliveryBoletasAsync(boletaOrder)">Reintentar</button> }
+            @if (_boletaUrl is not null)
+            {
+                <div class="boleta-image-area @(_boletaZoom ? "zoomed" : null)"><img src="@_boletaUrl" alt="Boleta del pedido @boletaOrder.OrderNumber, @boletaOrder.Branch" @onerror="BoletaImageFailed" /></div>
+                <div class="boleta-tools"><button type="button" @onclick="() => _boletaZoom = !_boletaZoom">@(_boletaZoom ? "Ajustar imagen" : "Ampliar")</button><a href="@_boletaUrl" target="_blank" rel="noopener noreferrer">Abrir imagen</a></div>
+            }
+            @if (_boletas.Count > 1)
+            {
+                <nav class="boleta-tools" aria-label="Fotos de entrega"><button type="button" disabled="@(_boletaLoading || _boletaIndex == 0)" @onclick="() => ShowBoletaAsync(_boletaIndex - 1)">Anterior</button><span>@(_boletaIndex + 1) de @_boletas.Count</span><button type="button" disabled="@(_boletaLoading || _boletaIndex == _boletas.Count - 1)" @onclick="() => ShowBoletaAsync(_boletaIndex + 1)">Siguiente</button></nav>
+            }
+        </section>
+    </div>
+}
+
 @code {
+    private IJSObjectReference? _boletaModule;
+    private bool _boletaFocusActive;
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        var active = _boletaOrder is not null;
+        if (active == _boletaFocusActive) return;
+        try
+        {
+            _boletaModule ??= await JS.InvokeAsync<IJSObjectReference>("import", "./js/receivable-boletas.js");
+            await _boletaModule.InvokeVoidAsync("setActive", active);
+            _boletaFocusActive = active;
+        }
+        catch (JSDisconnectedException) { }
+    }
+    public async ValueTask DisposeAsync()
+    {
+        if (_boletaModule is null) return;
+        try { await _boletaModule.InvokeVoidAsync("setActive", false); await _boletaModule.DisposeAsync(); }
+        catch (JSDisconnectedException) { }
+    }
+    private ReceivableOrderItem? _boletaOrder;
+    private IReadOnlyList<EvidenceItem> _boletas = [];
+    private int _boletaIndex, _boletaRequest;
+    private bool _boletaLoading, _boletaZoom;
+    private string? _boletaUrl, _boletaError;
+    private void CloseBoletas() { _boletaRequest++; _boletaOrder = null; _boletaUrl = null; _boletaError = null; _boletas = []; _boletaZoom = false; }
+    private void BoletaKeyDown(KeyboardEventArgs e) { if (e.Key == "Escape") CloseBoletas(); }
+    private void BoletaImageFailed() { _boletaUrl = null; _boletaError = "No se pudo cargar la imagen. Puedes volver a intentarlo."; }
+    private async Task OpenDeliveryBoletasAsync(ReceivableOrderItem order)
+    {
+        var request = ++_boletaRequest;
+        _boletaOrder = order; _boletaLoading = true; _boletaUrl = null; _boletaError = null; _boletas = []; _boletaIndex = 0; _boletaZoom = false;
+        try
+        {
+            var evidence = await DeliveryService.GetOrderEvidenceAsync(order.OrderId);
+            if (request != _boletaRequest) return;
+            _boletas = evidence;
+            if (evidence.Count == 0) { _boletaError = "Este pedido no tiene boletas disponibles."; return; }
+            await ShowBoletaAsync(0);
+        }
+        catch (Exception ex) { if (request == _boletaRequest) { Logger.LogWarning(ex, "No se pudieron cargar las boletas del pedido {OrderId}", order.OrderId); _boletaError = "No se pudieron cargar las boletas. Intenta nuevamente."; } }
+        finally { if (request == _boletaRequest) _boletaLoading = false; }
+    }
+    private async Task ShowBoletaAsync(int index)
+    {
+        if (index < 0 || index >= _boletas.Count) return;
+        var request = _boletaRequest;
+        _boletaLoading = true; _boletaUrl = null; _boletaError = null; _boletaZoom = false; _boletaIndex = index;
+        try
+        {
+            var result = await DeliveryEvidenceService.GetSignedUrlAsync(_boletas[index].Id, await CurrentUserIdAsync());
+            if (request != _boletaRequest) return;
+            if (result.Succeeded) _boletaUrl = result.Url; else _boletaError = string.Join(" ", result.Errors);
+        }
+        catch (Exception ex) { if (request == _boletaRequest) { Logger.LogWarning(ex, "No se pudo abrir una boleta"); _boletaError = "No se pudo abrir la boleta. Intenta nuevamente."; } }
+        finally { if (request == _boletaRequest) _boletaLoading = false; }
+    }
+    private string _accountType = "All", _accountId = "All";
+    private bool MatchesAccount(PayerAccountItem payer) => (_accountType == "All" || payer.AccountKind == _accountType) && (_accountId == "All" || payer.ResponsiblePartyId.ToString() == _accountId);
+    private IEnumerable<PayerAccountItem> AccountOptions => (_overview?.ResponsibleParties ?? []).Where(x => (_accountType == "All" || x.AccountKind == _accountType) && (_customer == "All" || x.Customers.Contains(_customer))).OrderBy(x => x.Name);
+    private void ChangeAccountType(string value) { _accountType = value; _accountId = "All"; }
+    private static string AccountTypeText(string value) => value switch { "Central" => "Central", "Franchise" => "Franquicia", _ => "Cuenta independiente" };
     private string? _historyPhotoUrl;
     private async Task ViewPaymentPhotoAsync(Guid evidenceId) { var result = await DeliveryService.GetPaymentEvidenceUrlAsync(evidenceId, await CurrentUserIdAsync()); if (result.Succeeded) _historyPhotoUrl = result.Url; else SetMessage(string.Join(" ", result.Errors), true); }
     private void CloseHistoryPhoto() => _historyPhotoUrl = null;
@@ -261,9 +355,10 @@ else
     private IReadOnlyList<string> CustomerOptions => (_overview?.ResponsibleParties ?? []).SelectMany(x => x.Orders).Select(x => x.Customer).Distinct().OrderBy(x => x).ToList();
     private IReadOnlyList<string> BranchOptions => (_overview?.ResponsibleParties ?? []).SelectMany(x => x.Orders)
         .Where(x => _customer == "All" || x.Customer == _customer).Select(x => x.Branch).Distinct().OrderBy(x => x).ToList();
-    private bool HasActiveFilters => !string.IsNullOrWhiteSpace(_search) || _customer != "All" || _branch != "All" || _status != "All" || _age != "All";
+    private bool HasActiveFilters => !string.IsNullOrWhiteSpace(_search) || _customer != "All" || _branch != "All" || _status != "All" || _age != "All" || _accountType != "All" || _accountId != "All";
     private IEnumerable<PayerAccountItem> FilteredPayers => (_overview?.ResponsibleParties ?? []).Where(p => FilteredOrders(p).Any()).OrderByDescending(p => FilteredOrders(p).Sum(x => x.Balance));
     private IEnumerable<ReceivableOrderItem> FilteredOrders(PayerAccountItem payer) => payer.Orders.Where(order =>
+        MatchesAccount(payer) &&
         MatchesSearch(payer, order) &&
         (_customer == "All" || order.Customer == _customer) &&
         (_branch == "All" || order.Branch == _branch) &&
@@ -281,7 +376,7 @@ else
     protected override async Task OnInitializedAsync() => await ReloadAsync();
     private async Task ReloadAsync() => _overview = await AccountService.GetOverviewAsync();
     private bool MatchesSearch(PayerAccountItem payer, ReceivableOrderItem order) { var query = _search.Trim(); return query.Length == 0 || payer.Name.Contains(query, StringComparison.OrdinalIgnoreCase) || order.Customer.Contains(query, StringComparison.OrdinalIgnoreCase) || order.Branch.Contains(query, StringComparison.OrdinalIgnoreCase) || order.OrderNumber.ToString().Contains(query, StringComparison.OrdinalIgnoreCase); }
-    private void ChangeCustomer(ChangeEventArgs args) { _customer = args.Value?.ToString() ?? "All"; if (_branch != "All" && !BranchOptions.Contains(_branch)) _branch = "All"; }
+    private void ChangeCustomer(ChangeEventArgs args) { _customer = args.Value?.ToString() ?? "All"; if (_branch != "All" && !BranchOptions.Contains(_branch)) _branch = "All"; _accountId = "All"; }
 
     private void OpenPayment(PayerAccountItem payer) { _paymentPayer = payer; _paymentMethod = "Qr"; _paymentDate = DeliveryDates.LocalDate(DateTimeOffset.UtcNow); _paymentNotes = string.Empty; _paymentEvidence = null; _requiresSettlement = false; _applyAutomatically = true; _paymentResult = null; _paymentRequestKey = Guid.NewGuid().ToString("N"); _manualAllocations.Clear(); _manualAllocations.AddRange(payer.Orders.Where(x => x.Balance > 0).Select(x => new AllocationInput(x.OrderId, x.OrderNumber, x.Balance))); _selectedPaymentOrderIds.Clear(); SelectPaymentOrders(FilteredOrders(payer).Where(x => x.Balance > 0).Select(x => x.OrderId), true); ClearMessage(); }
     private void ClosePayment() { if (_saving) return; _paymentPayer = null; _paymentResult = null; }

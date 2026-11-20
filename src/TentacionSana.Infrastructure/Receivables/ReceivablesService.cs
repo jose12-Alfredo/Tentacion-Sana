@@ -52,7 +52,7 @@ public sealed class ReceivablesService(
             ? new Dictionary<Guid, int>()
             : await db.PaymentAllocations.AsNoTracking()
                 .Where(x => orderIds.Contains(x.OrderId) && db.PaymentEvidence.Any(e => e.PaymentId == x.PaymentId))
-                .GroupBy(x => x.OrderId).ToDictionaryAsync(x => x.Key, x => x.Count(), cancellationToken);
+                .GroupBy(x => x.OrderId).Select(x => new { OrderId = x.Key, Count = x.Count() }).ToDictionaryAsync(x => x.OrderId, x => x.Count, cancellationToken);
 
         var now = clock.GetUtcNow();
         var groups = rows.GroupBy(x => x.ResponsiblePartyId)
@@ -70,7 +70,7 @@ public sealed class ReceivablesService(
                     }).ToList();
                 return new PayerAccountItem(group.Key, first.PayerName, first.ContactName, first.Phone,
                     group.Select(x => x.Customer).Distinct().OrderBy(x => x).ToList(),
-                    group.Sum(x => x.Total), group.Sum(x => x.Paid), group.Sum(x => x.Balance), orders);
+                    group.Sum(x => x.Total), group.Sum(x => x.Paid), group.Sum(x => x.Balance), orders, first.AccountKind);
             }).OrderByDescending(x => x.Balance).ThenBy(x => x.Name).ToList();
 
         return new ReceivablesOverview(
@@ -288,6 +288,7 @@ public sealed class ReceivablesService(
             OrderNumber = db.Orders.Where(x => x.Id == receivable.OrderId).Select(x => x.Number).First(),
             receivable.CustomerId,
             ResponsiblePartyId = receivable.PayerId ?? receivable.CustomerId,
+            PayerKind = receivable.PayerId == null ? "CentralCompany" : db.PaymentResponsibleParties.Where(x => x.Id == receivable.PayerId).Select(x => x.Kind.ToString()).First(),
             PayerName = receivable.PayerId == null ? db.Customers.Where(x => x.Id == receivable.CustomerId).Select(x => x.Name).First() : db.PaymentResponsibleParties.Where(x => x.Id == receivable.PayerId).Select(x => x.Label ?? x.Name).First(),
             Phone = receivable.PayerId == null ? db.Customers.Where(x => x.Id == receivable.CustomerId).Select(x => x.Phone ?? "").First() : db.PaymentResponsibleParties.Where(x => x.Id == receivable.PayerId).Select(x => x.Phone).First(),
             ContactName = receivable.PayerId == null ? null : db.PaymentResponsibleParties.Where(x => x.Id == receivable.PayerId).Select(x => x.ContactId == null ? null : db.CustomerContacts.Where(c => c.Id == x.ContactId).Select(c => c.Name).FirstOrDefault()).FirstOrDefault(),
@@ -299,7 +300,8 @@ public sealed class ReceivablesService(
             Balance = receivable.InvoicedAmount > receivable.PaidAmount ? receivable.InvoicedAmount - receivable.PaidAmount : 0,
             receivable.Version
         }).ToListAsync(cancellationToken);
-        return raw.Select(x => new AccountRow(x.OrderId, x.OrderNumber, x.CustomerId, x.ResponsiblePartyId, x.PayerName, x.ContactName, x.Phone, x.Customer, x.Branch, x.DeliveredAtUtc, x.Total, x.Paid, x.Balance, x.Version)).ToList();
+        return raw.Select(x => new AccountRow(x.OrderId, x.OrderNumber, x.CustomerId, x.ResponsiblePartyId, x.PayerName, x.ContactName, x.Phone, x.Customer, x.Branch, x.DeliveredAtUtc, x.Total, x.Paid, x.Balance, x.Version,
+            x.PayerKind == "Franchisee" ? "Franchise" : x.PayerKind is "CentralCompany" or "Customer" ? "Central" : "Independent")).ToList();
     }
 
     private async Task<(List<AccountStatementEvidence> Items, List<string> Errors)> LoadReportEvidenceAsync(IReadOnlyList<ReceivableOrderItem> orders, GenerateAccountStatementCommand command, CancellationToken cancellationToken)
@@ -423,6 +425,6 @@ public sealed class ReceivablesService(
     private static PayerPaymentResult PaymentFailure(params string[] errors) => new(false, null, 0, 0, 0, [], errors);
     private static AccountStatementResult StatementFailure(params string[] errors) => new(false, null, null, null, null, errors);
 
-    private sealed record AccountRow(Guid OrderId, long OrderNumber, Guid CustomerId, Guid ResponsiblePartyId, string PayerName, string? ContactName, string Phone, string Customer, string Branch, DateTimeOffset? DeliveredAtUtc, decimal Total, decimal Paid, decimal Balance, int Version);
+    private sealed record AccountRow(Guid OrderId, long OrderNumber, Guid CustomerId, Guid ResponsiblePartyId, string PayerName, string? ContactName, string Phone, string Customer, string Branch, DateTimeOffset? DeliveredAtUtc, decimal Total, decimal Paid, decimal Balance, int Version, string AccountKind);
     private sealed record EvidenceSource(Guid OrderId, string PublicId, string Format, string FileName, DateTimeOffset AtUtc, string Type, int SortOrder);
 }

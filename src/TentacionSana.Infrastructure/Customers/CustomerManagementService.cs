@@ -137,11 +137,13 @@ public sealed class CustomerManagementService(ApplicationDbContext db, TimeProvi
         {
             ValidateRelations(customer, command);
             var now = timeProvider.GetUtcNow();
-            var item = customer.AddDeliveryPoint(Parse<DeliveryPointKind>(command.Kind), command.Label, command.Address, command.Reference, command.Location, command.ContactId, command.PaymentResponsiblePartyId, now, command.Notes);
-            db.DeliveryPoints.Add(item); AddAudit(userId, "AddDeliveryPoint", item.Id, null, command, now);
+            var kind = Parse<DeliveryPointKind>(command.Kind);
+            var payerId = ResolvePointPayer(customer, kind, command, now);
+            var item = customer.AddDeliveryPoint(kind, command.Label, command.Address, command.Reference, command.Location, command.ContactId, payerId, now, command.Notes);
+            db.DeliveryPoints.Add(item); AddAudit(userId, "AddDeliveryPoint", item.Id, null, command with { PaymentResponsiblePartyId = payerId }, now);
             await db.SaveChangesAsync(ct); return Success(item.Id);
         }
-        catch (Exception ex) when (ex is ArgumentException or InvalidOperationException) { return Failure(ex.Message); }
+        catch (Exception ex) when (ex is ArgumentException or InvalidOperationException) { db.ChangeTracker.Clear(); return Failure(ex.Message); }
     }
 
     public async Task<CustomerOperationResult> UpdateDeliveryPointAsync(Guid customerId, Guid pointId, DeliveryPointEditCommand command, Guid userId, CancellationToken ct = default)
@@ -152,11 +154,13 @@ public sealed class CustomerManagementService(ApplicationDbContext db, TimeProvi
         {
             ValidateRelations(customer, command);
             var previous = new { point.Kind, point.Label, point.Address, point.Reference, point.Location, point.ContactId, point.PaymentResponsiblePartyId, point.IsActive };
-            point.Update(Parse<DeliveryPointKind>(command.Kind), command.Label, command.Address, command.Reference, command.Location, command.Notes, command.ContactId, command.PaymentResponsiblePartyId, command.IsActive);
-            AddAudit(userId, "UpdateDeliveryPoint", point.Id, previous, command, timeProvider.GetUtcNow());
+            var kind = Parse<DeliveryPointKind>(command.Kind);
+            var payerId = ResolvePointPayer(customer, kind, command, timeProvider.GetUtcNow());
+            point.Update(kind, command.Label, command.Address, command.Reference, command.Location, command.Notes, command.ContactId, payerId, command.IsActive);
+            AddAudit(userId, "UpdateDeliveryPoint", point.Id, previous, command with { PaymentResponsiblePartyId = payerId }, timeProvider.GetUtcNow());
             await db.SaveChangesAsync(ct); return Success(point.Id);
         }
-        catch (Exception ex) when (ex is ArgumentException or InvalidOperationException) { return Failure(ex.Message); }
+        catch (Exception ex) when (ex is ArgumentException or InvalidOperationException) { db.ChangeTracker.Clear(); return Failure(ex.Message); }
     }
 
     public async Task<CustomerDetail?> GetCustomerAsync(Guid id, CancellationToken ct = default)
@@ -169,6 +173,14 @@ public sealed class CustomerManagementService(ApplicationDbContext db, TimeProvi
     }
 
     private Task<Customer?> Load(Guid id, CancellationToken ct) => db.Customers.AsSplitQuery().Include(x => x.Contacts).Include(x => x.PaymentResponsibleParties).Include(x => x.DeliveryPoints).SingleOrDefaultAsync(x => x.Id == id && x.ArchivedAtUtc == null, ct);
+    private Guid? ResolvePointPayer(Customer customer, DeliveryPointKind kind, DeliveryPointEditCommand command, DateTimeOffset now)
+    {
+        if (kind is not (DeliveryPointKind.Franchise or DeliveryPointKind.Branch or DeliveryPointKind.MainLocation) && command.PaymentResponsiblePartyId is null) return null;
+        var existing = customer.PaymentResponsibleParties.Select(x => x.Id).ToHashSet();
+        var payer = customer.ResolvePointPayer(kind, command.Label, command.PaymentResponsiblePartyId, command.ContactId, now);
+        if (!existing.Contains(payer.Id)) db.PaymentResponsibleParties.Add(payer);
+        return payer.Id;
+    }
     private static void ValidateRelations(Customer c, DeliveryPointEditCommand command) { if (command.ContactId is not null && c.Contacts.All(x => x.Id != command.ContactId)) throw new ArgumentException("El contacto no pertenece al cliente."); if (command.PaymentResponsiblePartyId is not null && c.PaymentResponsibleParties.All(x => x.Id != command.PaymentResponsiblePartyId)) throw new ArgumentException("El responsable de pago no pertenece al cliente."); }
     private static T Parse<T>(string value) where T : struct, Enum => Enum.TryParse<T>(value, true, out var parsed) ? parsed : throw new ArgumentException("El tipo seleccionado no es válido.");
     private static CustomerOperationResult Success(Guid id) => new(true, id, []);

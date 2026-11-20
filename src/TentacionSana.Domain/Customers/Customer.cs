@@ -75,6 +75,28 @@ public sealed class Customer
         if (string.IsNullOrWhiteSpace(name) || name.Trim().Length > 160) throw new ArgumentException("El nombre es obligatorio y admite hasta 160 caracteres.");
         if (!string.IsNullOrWhiteSpace(email) && (!MailAddress.TryCreate(email.Trim(), out _) || email.Trim().Length > 256)) throw new ArgumentException("El correo no tiene un formato válido.");
     }
+
+    public PaymentResponsibleParty ResolvePointPayer(DeliveryPointKind kind, string pointLabel, Guid? payerId, Guid? contactId, DateTimeOffset now)
+    {
+        if (payerId is { } explicitId)
+        {
+            var payer = PaymentResponsibleParties.SingleOrDefault(x => x.Id == explicitId && x.IsActive)
+                ?? throw new ArgumentException("El responsable de pago no está disponible para este cliente.");
+            if (kind == DeliveryPointKind.Franchise && payer.Kind != PaymentResponsibleKind.Franchisee)
+                throw new ArgumentException("Una franquicia debe tener un responsable de franquicia independiente de la central.");
+            return payer;
+        }
+        var franchise = kind == DeliveryPointKind.Franchise;
+        var label = franchise ? $"Franquicia · {pointLabel.Trim()}" : $"{Name} · Central";
+        var existing = PaymentResponsibleParties.FirstOrDefault(x => x.IsActive &&
+            x.Kind == (franchise ? PaymentResponsibleKind.Franchisee : PaymentResponsibleKind.CentralCompany) &&
+            (!franchise || x.Label == label));
+        if (existing is not null) return existing;
+        if (contactId is not null && Contacts.All(x => x.Id != contactId)) throw new ArgumentException("El contacto no pertenece al cliente.");
+        // El contacto que recibe pedidos no necesariamente es quien paga.
+        return AddPaymentResponsible(franchise ? PaymentResponsibleKind.Franchisee : PaymentResponsibleKind.CentralCompany,
+            label, franchise ? "" : Phone ?? "", franchise ? null : Email, now, null, label);
+    }
     internal static string? Clean(string? value) => string.IsNullOrWhiteSpace(value) ? null : value.Trim();
     internal static string? NormalizeOptionalPhone(string? value) => string.IsNullOrWhiteSpace(value) ? null : PhoneNumber.Normalize(value);
 }
@@ -122,7 +144,7 @@ public sealed class PaymentResponsibleParty
     internal static PaymentResponsibleParty Create(Guid customerId, PaymentResponsibleKind kind, string name, string phone, string? email, DateTimeOffset now, Guid? contactId = null, string? label = null)
     {
         if (string.IsNullOrWhiteSpace(name)) throw new ArgumentException("El nombre del responsable de pago es obligatorio.");
-        return new PaymentResponsibleParty { Id = Guid.NewGuid(), CustomerId = customerId, ContactId = contactId, Kind = kind, Label = Customer.Clean(label), Name = name.Trim(), Phone = PhoneNumber.Normalize(phone), Email = Customer.Clean(email), IsActive = true, CreatedAtUtc = now };
+        return new PaymentResponsibleParty { Id = Guid.NewGuid(), CustomerId = customerId, ContactId = contactId, Kind = kind, Label = Customer.Clean(label), Name = name.Trim(), Phone = string.IsNullOrWhiteSpace(phone) ? "" : PhoneNumber.Normalize(phone), Email = Customer.Clean(email), IsActive = true, CreatedAtUtc = now };
     }
 }
 

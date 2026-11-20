@@ -26,6 +26,7 @@ public sealed class OrderManagementService(ApplicationDbContext db, TimeProvider
 
     public async Task<OrderOperationResult> ConfigureDraftAsync(Guid id,int version,OrderConfiguration c,Guid user,CancellationToken ct=default)
     {
+        c = await ResolvePointPayerAsync(c, ct);
         var order=await Load(id,ct); if(order is null)return Fail("El pedido no existe."); if(order.Version!=version)return Conflict();
         if(!await ValidateRelations(c,ct))return Fail("La sucursal, contacto o responsable de pago no pertenece al cliente.");
         try { var dates=order.PromisedDateHistory.Count; var changes=order.ChangeHistory.Count; var now=clock.GetUtcNow(); order.Configure(c.CustomerId,c.DeliveryPointId,c.ContactId,c.PaymentResponsiblePartyId,c.PromisedAtUtc,c.Notes,user,now); order.SetDeliveryFee(c.DeliveryFee,user,now); if(order.PromisedDateHistory.Count>dates)db.PromisedDateHistory.Add(order.PromisedDateHistory[^1]); foreach(var item in order.ChangeHistory.Skip(changes))db.OrderChangeHistory.Add(item); return await Save(order,"OrderConfigured",user,ct); } catch(Exception ex) when(ex is ArgumentException or InvalidOperationException){return Fail(ex.Message);}
@@ -94,6 +95,7 @@ public sealed class OrderManagementService(ApplicationDbContext db, TimeProvider
 
     public async Task<OrderOperationResult> RegisterCompletedOrderAsync(Guid id,int version,OrderConfiguration configuration,DateTimeOffset completedAtUtc,string receiverName,Guid user,CancellationToken ct=default)
     {
+        configuration = await ResolvePointPayerAsync(configuration, ct);
         if(!await IsAdministrator(user)) return Fail("Solo una persona administradora puede registrar un pedido ya realizado.");
         if(completedAtUtc>clock.GetUtcNow()) return Fail("La fecha de un pedido ya realizado no puede ser futura.");
         if(string.IsNullOrWhiteSpace(receiverName)) return Fail("La persona receptora es obligatoria.");
@@ -243,6 +245,7 @@ public sealed class OrderManagementService(ApplicationDbContext db, TimeProvider
 
     public async Task<OrderOperationResult> ReviseConfigurationAsync(Guid id,int version,OrderConfiguration c,string reason,Guid user,CancellationToken ct=default)
     {
+        c = await ResolvePointPayerAsync(c, ct);
         var order=await Load(id,ct);if(order is null)return Fail("El pedido no existe.");if(order.Version!=version)return Conflict();if(!await CanModifyProgressed(order,user))return Fail("Este estado requiere autorización administrativa.");
         if (c.CustomerId != order.CustomerId)
         {
@@ -614,7 +617,26 @@ public sealed class OrderManagementService(ApplicationDbContext db, TimeProvider
     public async Task<IReadOnlyList<ProductOption>> ProductOptionsAsync(CancellationToken ct=default){var now=clock.GetUtcNow();return await db.Products.AsNoTracking().Where(x=>x.IsActive).OrderBy(x=>x.Name).Select(x=>new ProductOption(x.Id,x.Name,db.ProductPrices.Where(p=>p.ProductId==x.Id&&p.EffectiveFromUtc<=now&&(p.EffectiveToUtc==null||p.EffectiveToUtc>now)).OrderByDescending(p=>p.EffectiveFromUtc).Select(p=>p.Amount).FirstOrDefault())).ToListAsync(ct);}
 
     private Task<Order?> Load(Guid id,CancellationToken ct)=>db.Orders.AsSplitQuery().Include(x=>x.Lines).Include(x=>x.Reservations).Include(x=>x.ChangeHistory).Include(x=>x.StatusHistory).Include(x=>x.PromisedDateHistory).SingleOrDefaultAsync(x=>x.Id==id,ct);
-    private async Task<bool> ValidateRelations(OrderConfiguration c,CancellationToken ct)=>await db.Customers.AnyAsync(x=>x.Id==c.CustomerId&&x.IsActive&&x.ArchivedAtUtc==null,ct)&&(c.DeliveryPointId is null||await db.DeliveryPoints.AnyAsync(x=>x.Id==c.DeliveryPointId&&x.CustomerId==c.CustomerId&&x.IsActive,ct))&&(c.ContactId is null||await db.CustomerContacts.AnyAsync(x=>x.Id==c.ContactId&&x.CustomerId==c.CustomerId&&x.IsActive,ct))&&(c.PaymentResponsiblePartyId is null||await db.PaymentResponsibleParties.AnyAsync(x=>x.Id==c.PaymentResponsiblePartyId&&x.CustomerId==c.CustomerId&&x.IsActive,ct));
+    private async Task<OrderConfiguration> ResolvePointPayerAsync(OrderConfiguration command, CancellationToken ct)
+    {
+        if (command.PaymentResponsiblePartyId is not null || command.DeliveryPointId is null) return command;
+        var payerId = await db.DeliveryPoints.Where(x => x.Id == command.DeliveryPointId && x.CustomerId == command.CustomerId)
+            .Select(x => x.PaymentResponsiblePartyId).SingleOrDefaultAsync(ct);
+        return command with { PaymentResponsiblePartyId = payerId };
+    }
+    private async Task<bool> ValidateRelations(OrderConfiguration c,CancellationToken ct)
+    {
+        if (!await db.Customers.AnyAsync(x => x.Id == c.CustomerId && x.IsActive && x.ArchivedAtUtc == null, ct)) return false;
+        if (c.DeliveryPointId is { } pointId)
+        {
+            var point = await db.DeliveryPoints.AsNoTracking().SingleOrDefaultAsync(x => x.Id == pointId && x.CustomerId == c.CustomerId && x.IsActive, ct);
+            if (point is null) return false;
+            if (point.Kind == Domain.Customers.DeliveryPointKind.Franchise && !await db.PaymentResponsibleParties.AnyAsync(x =>
+                x.Id == c.PaymentResponsiblePartyId && x.CustomerId == c.CustomerId && x.IsActive && x.Kind == Domain.Customers.PaymentResponsibleKind.Franchisee, ct)) return false;
+        }
+        return (c.ContactId is null || await db.CustomerContacts.AnyAsync(x => x.Id == c.ContactId && x.CustomerId == c.CustomerId && x.IsActive, ct)) &&
+            (c.PaymentResponsiblePartyId is null || await db.PaymentResponsibleParties.AnyAsync(x => x.Id == c.PaymentResponsiblePartyId && x.CustomerId == c.CustomerId && x.IsActive, ct));
+    }
     private async Task<OrderSnapshot> Snapshot(Order order,DateTimeOffset now,CancellationToken ct){var customer=await db.Customers.SingleAsync(x=>x.Id==order.CustomerId,ct);var point=order.DeliveryPointId is null?null:await db.DeliveryPoints.SingleAsync(x=>x.Id==order.DeliveryPointId,ct);var contact=order.ContactId is null?null:await db.CustomerContacts.SingleAsync(x=>x.Id==order.ContactId,ct);var payer=order.PaymentResponsiblePartyId is null?null:await db.PaymentResponsibleParties.SingleAsync(x=>x.Id==order.PaymentResponsiblePartyId,ct);var linesJson=JsonSerializer.Serialize(order.Lines.Where(x=>x.IsActive).Select(x=>new{x.ProductId,x.ProductName,x.SaleQuantity,x.ReplacementQuantity,x.TastingQuantity,x.Quantity,x.StandardUnitPrice,x.SoldUnitPrice,x.DiscountReason,x.ReplacementReason,x.ReplacementNotes,x.TastingReason,x.TastingNotes}));return OrderSnapshot.Create(order.Id,customer.Name,point?.Label,point?.Address,contact?.Name,contact?.Phone,payer?.Name,now,point?.Reference,point?.Location,linesJson);}
     private async Task<bool> CanModifyProgressed(Order order,Guid user)=>order.Status==OrderStatus.Confirmed||await IsAdministrator(user);
     private async Task<bool> IsAdministrator(Guid user){var actor=await users.FindByIdAsync(user.ToString());return actor is not null&&(await users.IsInRoleAsync(actor,AppRoles.Administrator)||await db.UserRoles.AnyAsync(x=>x.UserId==user&&db.RoleClaims.Any(c=>c.RoleId==x.RoleId&&c.ClaimType==AppPermissions.ClaimType&&c.ClaimValue==AppPermissions.Administration)));}
