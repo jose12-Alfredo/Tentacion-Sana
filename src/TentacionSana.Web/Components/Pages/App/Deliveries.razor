@@ -29,7 +29,7 @@
     .delivery-table th:nth-child(6) { width: 7.4rem; }
     .delivery-table th:nth-child(7) { width: 8.2rem; }
     .delivery-table th:nth-child(8) { width: 8.4rem; }
-    .delivery-table th:nth-child(9) { width: 5rem; }
+    .delivery-table th:nth-child(9) { width: 11rem; }
     .delivery-table td { min-width: 0; }
     .delivery-table .order-cell { position: relative; z-index: 1; }
     .delivery-table .customer-cell { min-width: 0; }
@@ -47,7 +47,7 @@
     .driver-trigger:hover, .driver-trigger:focus-visible { border-radius: .4rem; background: #edf5e9; color: #22742a; outline: none; }
     .driver-trigger.unassigned { color: #8a6a2a; }
     .delivery-status.route-prepared { background: #e7eefb; color: #345e9f; }
-    .row-actions { display: flex; align-items: center; justify-content: flex-end; gap: .35rem; }
+    .row-actions { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: .35rem; }
     .bulk-action-bar { display: flex; align-items: center; gap: .55rem; position: sticky; z-index: 12; top: .5rem; margin: .7rem .85rem 0; padding: .65rem .75rem; border: 1px solid #b9d8b2; border-radius: .72rem; background: rgba(240,248,236,.97); box-shadow: 0 8px 22px rgba(36,76,38,.11); backdrop-filter: blur(8px); }
     .bulk-action-bar strong { margin-right: auto; color: #245d2a; font-size: .76rem; }
     .bulk-action-bar button { min-height: 2.1rem; border: 1px solid #b6cdb1; border-radius: .52rem; padding: 0 .68rem; background: #fff; color: #315437; font: 800 .68rem var(--font-body); cursor: pointer; }
@@ -184,9 +184,8 @@
 
 <header class="deliveries-heading">
     <div>
-        <span>LOGÍSTICA</span>
         <h1>ENTREGAS</h1>
-        <p>Organiza todos los pedidos que todavía tienen unidades por entregar, sin ocultar las entregas futuras.</p>
+        <p>Ajusta cantidades, registra entregas y organiza las rutas pendientes.</p>
     </div>
 </header>
 
@@ -280,7 +279,7 @@ else
                 <div class="delivery-table">
                     <table>
                         <thead>
-                            <tr><th></th><th>Pedido</th><th>Cliente / sucursal</th><th>Fecha prometida</th><th>Unidades</th><th>Total a cobrar</th><th>Estado</th><th>Repartidor</th><th>Acciones</th></tr>
+                            <tr><th></th><th>Pedido</th><th>Cliente / sucursal</th><th>Fecha prometida</th><th>Unidades</th><th>Saldo a cobrar</th><th>Estado</th><th>Repartidor</th><th>Acciones</th></tr>
                         </thead>
                         <tbody>
                             @foreach (var item in FilteredItems)
@@ -302,6 +301,7 @@ else
                                     <td>@if (CanAssignDriver(item)) { <button class="driver-trigger @(item.DriverUserId is null ? "unassigned" : null)" @onclick="() => OpenDriverDialog(item)">@DriverName(item)</button> } else { <span class="driver-readonly">@DriverName(item)</span> }</td>
                                     <td>
                                         <div class="row-actions">
+                                            <a class="delivery-task-link" href="@($"/app/pedidos/{item.OrderId}?accion={(item.DeliveryId is not null ? "entrega" : "cantidades")}")">@(item.DeliveryId is not null ? "Registrar entrega" : "Ajustar pedido")</a>
                                             @if (item.HasLocation) { <button class="view-pin" title="Ver en mapa" aria-label="Ver pedido @item.OrderNumber en el mapa" @onclick="() => ViewPinAsync(item.OrderId)">⌖</button> }
                                             <div class="row-menu">
                                                 <summary role="button" tabindex="0" aria-label="Acciones del pedido @item.OrderNumber" aria-expanded="@(_openMenuOrderId == item.OrderId)" @onclick="() => ToggleRowMenu(item.OrderId)">•••</summary>
@@ -311,6 +311,7 @@ else
                                                         @if (item.HasLocation) { <button @onclick="() => ViewPinAndCloseAsync(item.OrderId)">Ver en mapa</button> }
                                                         @if (MapUrl(item.Location) is { } actionMap) { <a href="@actionMap" target="_blank" rel="noopener noreferrer" @onclick="CloseRowMenu">Abrir ubicación</a> }
                                                         <a href="@($"/app/pedidos/{item.OrderId}")" @onclick="CloseRowMenu">Ver pedido</a>
+                                                        <a href="@($"/app/pedidos/{item.OrderId}?accion=cantidades")">Ajustar cantidades</a>
                                                         @if (CanAssignDriver(item)) { <button @onclick="() => OpenDriverDialogFromMenu(item)">@(item.DriverUserId is null ? "Asignar repartidor" : "Cambiar repartidor")</button> }
                                                         @if (item.CanAddToRoute) { <button @onclick="() => ToggleOneAndClose(item.OrderId)">@(!IsSelected(item.OrderId) ? "Agregar a ruta" : "Quitar de selección")</button> }
                                                         @if (item.RouteId is not null && item.Status == "Pending") { <button @onclick="() => ReturnOrderToPendingAndCloseAsync(item)">Quitar de ruta</button> }
@@ -337,10 +338,12 @@ else
                             </div>
                             <div class="mobile-facts">
                                 <div class="mobile-fact"><small>Unidades</small><strong>@Physical(item) uds</strong><span>@Breakdown(item)</span></div>
-                                <div class="mobile-fact"><small>Total a cobrar</small><strong>@Money(item.Balance)</strong>@if (HasPartialPayment(item)) { <span>saldo pendiente</span> }@if (item.DeliveryFee > 0) { <span class="fee-breakdown">Total @Money(item.Total): productos @Money(item.Total - item.DeliveryFee) + envío @Money(item.DeliveryFee)</span> }</div>
+                                <div class="mobile-fact"><small>Saldo a cobrar</small><strong>@Money(item.Balance)</strong>@if (HasPartialPayment(item)) { <span>saldo pendiente</span> }@if (item.DeliveryFee > 0) { <span class="fee-breakdown">Total @Money(item.Total): productos @Money(item.Total - item.DeliveryFee) + envío @Money(item.DeliveryFee)</span> }</div>
                             </div>
                             <div class="mobile-driver"><span>Repartidor</span>@if (CanAssignDriver(item)) { <button class="driver-trigger @(item.DriverUserId is null ? "unassigned" : null)" @onclick="() => OpenDriverDialog(item)">@DriverName(item)</button> } else { <strong>@DriverName(item)</strong> }</div>
                             <div class="mobile-actions">
+                                <a class="delivery-task-link" href="@($"/app/pedidos/{item.OrderId}?accion={(item.DeliveryId is not null ? "entrega" : "cantidades")}")">@(item.DeliveryId is not null ? "Registrar entrega" : "Ajustar pedido")</a>
+                                <a class="delivery-edit-link" href="@($"/app/pedidos/{item.OrderId}?accion=cantidades")">Ajustar cantidades</a>
                                 @if (item.HasLocation) { <button class="view-pin" type="button" @onclick="() => ViewPinAsync(item.OrderId)">⌖ Ver en mapa</button> }
                                 <div class="row-menu">
                                     <summary role="button" tabindex="0" aria-label="Acciones del pedido @item.OrderNumber" aria-expanded="@(_openMenuOrderId == item.OrderId)" @onclick="() => ToggleRowMenu(item.OrderId)">•••</summary>

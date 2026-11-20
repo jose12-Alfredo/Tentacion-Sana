@@ -7,6 +7,7 @@ public interface IDeliveryService
     Task<DeliveryResult> StartAsync(Guid deliveryId, int expectedVersion, Guid userId, CancellationToken cancellationToken = default);
     Task<DeliveryResult> ReturnOrderToPendingAsync(Guid orderId, Guid userId, CancellationToken cancellationToken = default);
     Task<DeliveryResult> CompleteAsync(CompleteDeliveryCommand command, Guid userId, CancellationToken cancellationToken = default);
+    Task<DeliveryResult> CorrectDateAsync(CorrectDeliveryDateCommand command, Guid userId, CancellationToken cancellationToken = default);
     Task<DeliveryResult> FailAsync(Guid deliveryId, int expectedVersion, string reason, Guid userId, CancellationToken cancellationToken = default);
     Task<DeliveryResult> PlanRouteAsync(PlanDeliveryRouteCommand command, Guid userId, CancellationToken cancellationToken = default);
     Task<DeliveryResult> StartRouteAsync(Guid routeId, int expectedVersion, Guid userId, CancellationToken cancellationToken = default);
@@ -38,7 +39,8 @@ public interface IDeliveryEvidenceService
 
 public sealed record ScheduleDeliveryCommand(Guid OrderId, Guid? DriverUserId, DateTimeOffset ScheduledAtUtc, IReadOnlyList<ScheduleLine> Lines);
 public sealed record ScheduleLine(Guid OrderLineId, int Quantity);
-public sealed record CompleteDeliveryCommand(Guid DeliveryId, int ExpectedVersion, string IdempotencyKey, string ReceiverName, IReadOnlyList<CompleteLine> Lines, decimal PaymentAmount, string? PaymentMethod, string? ExternalReference, bool CollectedByDriver);
+public sealed record CompleteDeliveryCommand(Guid DeliveryId, int ExpectedVersion, string IdempotencyKey, string ReceiverName, IReadOnlyList<CompleteLine> Lines, decimal PaymentAmount, string? PaymentMethod, string? ExternalReference, bool CollectedByDriver, DateTimeOffset CompletedAtUtc);
+public sealed record CorrectDeliveryDateCommand(Guid DeliveryId, int ExpectedVersion, DateTimeOffset CompletedAtUtc, string Reason);
 public sealed record CompleteLine(Guid DeliveryLineId, int SaleQuantity, int ReplacementQuantity, int TastingQuantity)
 {
     public CompleteLine(Guid deliveryLineId, int quantity) : this(deliveryLineId, quantity, 0, 0) { }
@@ -52,9 +54,9 @@ public sealed record DeliveryResult(bool Succeeded, Guid? Id, IReadOnlyList<stri
 public sealed record EvidenceResult(bool Succeeded, Guid? Id, IReadOnlyList<string> Errors);
 public sealed record SignedEvidenceResult(bool Succeeded, string? Url, IReadOnlyList<string> Errors);
 public sealed record EvidenceContentResult(bool Succeeded, byte[]? Content, string? ContentType, IReadOnlyList<string> Errors);
-public sealed record DeliveryItem(Guid Id, long OrderNumber, string Customer, string Status, Guid? DriverUserId, string? DriverName, DateTimeOffset ScheduledAtUtc, int PendingQuantity, int Version, int? RoutePosition = null, decimal Total = 0, decimal Paid = 0, decimal Balance = 0, int DeliveryEvidenceCount = 0, int PaymentEvidenceCount = 0, string? PaymentMethod = null, int DeliveredQuantity = 0, string? DeliveryPoint = null, Guid? DeliveryPointId = null, string? Address = null, string? Reference = null, string? Location = null, double? Latitude = null, double? Longitude = null, decimal DeliveryFee = 0);
+public sealed record DeliveryItem(Guid Id, long OrderNumber, string Customer, string Status, Guid? DriverUserId, string? DriverName, DateTimeOffset ScheduledAtUtc, int PendingQuantity, int Version, int? RoutePosition = null, decimal Total = 0, decimal Paid = 0, decimal Balance = 0, int DeliveryEvidenceCount = 0, int PaymentEvidenceCount = 0, string? PaymentMethod = null, int DeliveredQuantity = 0, string? DeliveryPoint = null, Guid? DeliveryPointId = null, string? Address = null, string? Reference = null, string? Location = null, double? Latitude = null, double? Longitude = null, decimal DeliveryFee = 0, DateTimeOffset? CompletedAtUtc = null);
 public sealed record DeliveryLineItem(Guid Id, Guid OrderLineId, string Product, int SaleQuantity, int ReplacementQuantity, int TastingQuantity, int AssignedQuantity, int DeliveredSaleQuantity, int DeliveredReplacementQuantity, int DeliveredTastingQuantity, int DeliveredQuantity, int PendingQuantity, int PendingSaleQuantity, int PendingReplacementQuantity, int PendingTastingQuantity, Guid ProductId = default);
-public sealed record DeliveryDetail(Guid Id, Guid OrderId, long OrderNumber, string Customer, string? Address, string? Location, string? ContactName, string? ContactPhone, string? Notes, string Status, Guid? DriverUserId, string? DriverName, DateTimeOffset ScheduledAtUtc, int Version, IReadOnlyList<DeliveryLineItem> Lines, IReadOnlyList<EvidenceItem> Evidence, IReadOnlyList<DeliveryHistoryItem> History, decimal Balance, int ReceivableVersion, decimal Total = 0, decimal Paid = 0, IReadOnlyList<PaymentHistoryItem>? Payments = null, decimal DeliveryFee = 0);
+public sealed record DeliveryDetail(Guid Id, Guid OrderId, long OrderNumber, string Customer, string? Address, string? Location, string? ContactName, string? ContactPhone, string? Notes, string Status, Guid? DriverUserId, string? DriverName, DateTimeOffset ScheduledAtUtc, int Version, IReadOnlyList<DeliveryLineItem> Lines, IReadOnlyList<EvidenceItem> Evidence, IReadOnlyList<DeliveryHistoryItem> History, decimal Balance, int ReceivableVersion, decimal Total = 0, decimal Paid = 0, IReadOnlyList<PaymentHistoryItem>? Payments = null, decimal DeliveryFee = 0, DateTimeOffset? CompletedAtUtc = null, DateTimeOffset? RecordedAtUtc = null);
 public sealed record EvidenceItem(Guid Id, string FileName, DateTimeOffset UploadedAtUtc);
 public sealed record DeliveryHistoryItem(DateTimeOffset AtUtc, string Status, string Reason);
 public sealed record DeliveryOrderLineOption(Guid Id, string Product, int SaleAvailable, int ReplacementAvailable, int TastingAvailable, int AvailableToSchedule);

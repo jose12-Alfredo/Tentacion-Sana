@@ -225,7 +225,7 @@ if (args.Contains("--check-phase6", StringComparer.OrdinalIgnoreCase))
         if (!started.Succeeded) throw new InvalidOperationException(string.Join(" ", started.Errors));
         db.ChangeTracker.Clear();
         detail = await deliveries.GetAsync(deliveryId.Value) ?? throw new InvalidOperationException();
-        var completeCommand = new CompleteDeliveryCommand(detail.Id, detail.Version, completeKey, "Receptor fase 6", detail.Lines.Select(x => new CompleteLine(x.Id, x.PendingQuantity)).ToList(), 0, "Cash", null, false);
+        var completeCommand = new CompleteDeliveryCommand(detail.Id, detail.Version, completeKey, "Receptor fase 6", detail.Lines.Select(x => new CompleteLine(x.Id, x.PendingQuantity)).ToList(), 0, "Cash", null, false, DateTimeOffset.UtcNow);
         await using var concurrentScope1 = app.Services.CreateAsyncScope();
         await using var concurrentScope2 = app.Services.CreateAsyncScope();
         var completions = await Task.WhenAll(concurrentScope1.ServiceProvider.GetRequiredService<IDeliveryService>().CompleteAsync(completeCommand, userId), concurrentScope2.ServiceProvider.GetRequiredService<IDeliveryService>().CompleteAsync(completeCommand, userId));

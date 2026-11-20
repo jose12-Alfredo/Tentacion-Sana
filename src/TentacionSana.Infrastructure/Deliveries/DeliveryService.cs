@@ -199,6 +199,9 @@ public sealed class DeliveryService(ApplicationDbContext db, TimeProvider clock,
                 x => (SaleQuantity: x.Sum(y => y.SaleQuantity), ReplacementQuantity: x.Sum(y => y.ReplacementQuantity), TastingQuantity: x.Sum(y => y.TastingQuantity)));
             if (delivered.Keys.Except(delivery.Lines.Select(x => x.Id)).Any()) return Fail("Una línea de entrega no pertenece al pedido.");
             var now = clock.GetUtcNow();
+            if (command.CompletedAtUtc == default || command.CompletedAtUtc > now)
+                return Fail("Indica la fecha real de entrega según la boleta; no puede ser futura.");
+            var completedAt = command.CompletedAtUtc.ToUniversalTime();
             decimal saleAmount = 0;
             decimal? historicalCost = 0;
 
@@ -265,7 +268,7 @@ public sealed class DeliveryService(ApplicationDbContext db, TimeProvider clock,
             }
 
             if (delivered.Values.Sum(x => x.SaleQuantity + x.ReplacementQuantity + x.TastingQuantity) <= 0) throw new InvalidOperationException("Debe confirmar al menos una unidad entregada.");
-            delivery.Complete(delivered, command.ReceiverName, userId, now);
+            delivery.Complete(delivered, command.ReceiverName, userId, now, completedAt);
             db.DeliveryStatusHistory.Add(delivery.History[^1]);
             var receivable = await db.Receivables.SingleOrDefaultAsync(x => x.OrderId == order.Id, cancellationToken);
             var deliveryFee = await db.Deliveries.AnyAsync(x => x.OrderId == order.Id && x.CompletedAtUtc != null, cancellationToken)
@@ -274,7 +277,7 @@ public sealed class DeliveryService(ApplicationDbContext db, TimeProvider clock,
             {
                 if (saleAmount > 0)
                 {
-                    var sale = Sale.Create(order.Id, delivery.Id, saleAmount, historicalCost, now);
+                    var sale = Sale.Create(order.Id, delivery.Id, saleAmount, historicalCost, completedAt);
                     db.Sales.Add(sale);
                 }
                 if (receivable is null) { receivable = Receivable.Create(order.Id, order.CustomerId, order.PaymentResponsiblePartyId); db.Receivables.Add(receivable); }
@@ -297,6 +300,48 @@ public sealed class DeliveryService(ApplicationDbContext db, TimeProvider clock,
         }
         catch (ArgumentException exception) { await transaction.RollbackAsync(cancellationToken); return Fail(exception.Message); }
         catch (InvalidOperationException exception) { await transaction.RollbackAsync(cancellationToken); db.ChangeTracker.Clear(); return await WaitForIdempotentAsync("CompleteDelivery", command.IdempotencyKey, cancellationToken) ? Ok(command.DeliveryId) : Fail(exception.Message); }
+    }
+
+    public async Task<DeliveryResult> CorrectDateAsync(CorrectDeliveryDateCommand command, Guid userId, CancellationToken cancellationToken = default)
+    {
+        if (!await db.UserRoles.AnyAsync(x => x.UserId == userId && db.Roles.Any(r => r.Id == x.RoleId &&
+            (r.Name == AppRoles.Administrator || db.RoleClaims.Any(c => c.RoleId == r.Id && c.ClaimType == AppPermissions.ClaimType && c.ClaimValue == AppPermissions.Administration))), cancellationToken))
+            return Fail("La corrección de fecha requiere una cuenta administradora.");
+
+        return await db.Database.CreateExecutionStrategy().ExecuteAsync(async () =>
+        {
+            db.ChangeTracker.Clear();
+            await using var transaction = await db.Database.BeginTransactionAsync(cancellationToken);
+            try
+            {
+                var delivery = await LoadAsync(command.DeliveryId, cancellationToken);
+                if (delivery is null) return Fail("La entrega no existe.");
+                if (delivery.Version != command.ExpectedVersion) return Conflict();
+                var now = clock.GetUtcNow();
+                var previous = delivery.CompletedAtUtc;
+                // Una entrega puede confirmarse parcialmente varias veces. Solo se corrige
+                // la venta de la última confirmación, conservando las anteriores.
+                var sales = await db.Sales.Where(x => x.DeliveryId == delivery.Id && x.OccurredAtUtc == previous).ToListAsync(cancellationToken);
+                var earlierSales = await db.Sales.Where(x => x.DeliveryId == delivery.Id && x.OccurredAtUtc != previous)
+                    .MaxAsync(x => (DateTimeOffset?)x.OccurredAtUtc, cancellationToken);
+                if (earlierSales > command.CompletedAtUtc) return Fail("La fecha no puede ser anterior a otra entrega parcial de este pedido.");
+                delivery.CorrectCompletionDate(command.CompletedAtUtc, command.Reason, userId, now);
+                foreach (var sale in sales) sale.CorrectDate(command.CompletedAtUtc, now);
+                db.DeliveryStatusHistory.Add(delivery.History[^1]);
+                db.AuditEntries.Add(new AuditEntry
+                {
+                    Id = Guid.NewGuid(), Action = "DeliveryDateCorrected", EntityType = "Delivery", EntityId = delivery.Id.ToString(),
+                    UserId = userId, OccurredAtUtc = now, Reason = command.Reason.Trim(),
+                    PreviousValuesJson = System.Text.Json.JsonSerializer.Serialize(new { CompletedAtUtc = previous }),
+                    NewValuesJson = System.Text.Json.JsonSerializer.Serialize(new { delivery.CompletedAtUtc })
+                });
+                await db.SaveChangesAsync(cancellationToken);
+                await transaction.CommitAsync(cancellationToken);
+                return Ok(delivery.Id);
+            }
+            catch (DbUpdateConcurrencyException) { db.ChangeTracker.Clear(); return Conflict(); }
+            catch (Exception ex) when (ex is ArgumentException or InvalidOperationException) { db.ChangeTracker.Clear(); return Fail(ex.Message); }
+        });
     }
 
     public async Task<DeliveryResult> FailAsync(Guid deliveryId, int expectedVersion, string reason, Guid userId, CancellationToken cancellationToken = default)
@@ -584,13 +629,13 @@ public sealed class DeliveryService(ApplicationDbContext db, TimeProvider clock,
 
     public async Task<DeliveryBoard> GetBoardAsync(DateOnly referenceDate, CancellationToken cancellationToken = default)
     {
-        var start = StartOfLocalDay(referenceDate);
+        var start = DeliveryDates.ToUtc(referenceDate.ToDateTime(TimeOnly.MinValue));
         var end = start.AddDays(1);
         var deliveredToday = await db.Deliveries.AsNoTracking()
             .CountAsync(x => x.Status == DeliveryStatus.Delivered && x.CompletedAtUtc >= start && x.CompletedAtUtc < end
                 && db.Orders.Any(order => order.Id == x.OrderId && order.ArchivedAtUtc == null), cancellationToken);
         var collectedToday = await db.Payments.AsNoTracking()
-            .Where(x => x.DeliveryId != null && x.Status == PaymentStatus.Confirmed && x.ReceivedAtUtc >= start && x.ReceivedAtUtc < end
+            .Where(x => x.DeliveryId != null && x.Status == PaymentStatus.Confirmed && x.PaymentDateUtc >= start && x.PaymentDateUtc < end
                 && db.Orders.Any(order => order.Id == x.OrderId && order.ArchivedAtUtc == null))
             .SumAsync(x => x.Amount, cancellationToken);
         var orders = await db.Orders.AsNoTracking().Include(x => x.Lines).Include(x => x.Reservations)
@@ -756,7 +801,7 @@ public sealed class DeliveryService(ApplicationDbContext db, TimeProvider clock,
                 Customer=db.Customers.Where(c=>c.Id==db.Orders.Where(o=>o.Id==x.OrderId).Select(o=>o.CustomerId).First()).Select(c=>c.Name).First(),
                 Status=x.Status.ToString(), x.DriverUserId,
                 DriverName=x.DriverUserId==null?null:db.Users.Where(u=>u.Id==x.DriverUserId).Select(u=>u.DisplayName).FirstOrDefault(),
-                x.ScheduledAtUtc, Pending=x.Lines.Sum(l=>l.AssignedQuantity-l.DeliveredQuantity), Delivered=x.Lines.Sum(l=>l.DeliveredQuantity), x.Version,
+                x.ScheduledAtUtc, x.CompletedAtUtc, Pending=x.Lines.Sum(l=>l.AssignedQuantity-l.DeliveredQuantity), Delivered=x.Lines.Sum(l=>l.DeliveredQuantity), x.Version,
                 DeliveryPointId=db.Orders.Where(o=>o.Id==x.OrderId).Select(o=>o.DeliveryPointId).FirstOrDefault(),
                 DeliveryPoint=db.DeliveryPoints.Where(p=>p.Id==db.Orders.Where(o=>o.Id==x.OrderId).Select(o=>o.DeliveryPointId).FirstOrDefault()).Select(p=>p.Label).FirstOrDefault(),
                 Address=db.DeliveryPoints.Where(p=>p.Id==db.Orders.Where(o=>o.Id==x.OrderId).Select(o=>o.DeliveryPointId).FirstOrDefault()).Select(p=>p.Address).FirstOrDefault(),
@@ -776,7 +821,7 @@ public sealed class DeliveryService(ApplicationDbContext db, TimeProvider clock,
         return items.Select(x =>
         {
             var coordinate = coordinateTasks[x.Id].Result;
-            return new DeliveryItem(x.Id,x.Number,x.Customer,x.Status,x.DriverUserId,x.DriverName,x.ScheduledAtUtc,x.Pending,x.Version,x.RoutePosition,x.Total,x.Paid,Math.Max(0,x.Total-x.Paid),x.DeliveryEvidenceCount,x.PaymentEvidenceCount,x.PaymentMethod,x.Delivered,x.DeliveryPoint,x.DeliveryPointId,x.Address,x.Reference,x.Location,coordinate?.Latitude,coordinate?.Longitude,x.DeliveryFee);
+            return new DeliveryItem(x.Id,x.Number,x.Customer,x.Status,x.DriverUserId,x.DriverName,x.ScheduledAtUtc,x.Pending,x.Version,x.RoutePosition,x.Total,x.Paid,Math.Max(0,x.Total-x.Paid),x.DeliveryEvidenceCount,x.PaymentEvidenceCount,x.PaymentMethod,x.Delivered,x.DeliveryPoint,x.DeliveryPointId,x.Address,x.Reference,x.Location,coordinate?.Latitude,coordinate?.Longitude,x.DeliveryFee,x.CompletedAtUtc);
         }).ToList();
     }
 
@@ -791,6 +836,7 @@ public sealed class DeliveryService(ApplicationDbContext db, TimeProvider clock,
                 delivery.OrderId,
                 delivery.DriverUserId,
                 delivery.ScheduledAtUtc,
+                delivery.CompletedAtUtc,
                 delivery.Version,
                 Status = delivery.Status.ToString(),
                 OrderNumber = db.Orders.Where(order => order.Id == delivery.OrderId).Select(order => order.Number).Single(),
@@ -829,10 +875,14 @@ public sealed class DeliveryService(ApplicationDbContext db, TimeProvider clock,
         var history = await db.DeliveryStatusHistory.AsNoTracking().Where(x => x.DeliveryId == header.Id).OrderByDescending(x => x.ChangedAtUtc).Select(x => new DeliveryHistoryItem(x.ChangedAtUtc, x.NewStatus.ToString(), x.Reason)).ToListAsync(cancellationToken);
         var paymentItems = await PaymentsAsync(header.OrderId, cancellationToken);
         var payments = paymentItems.Sum(x => x.Amount);
+        var recordedAt = await db.AuditEntries.AsNoTracking().Where(x =>
+                (x.EntityType == "Delivery" && x.EntityId == deliveryId.ToString() && x.Action == "DeliveryCompleted") ||
+                (x.EntityType == "Order" && x.EntityId == header.OrderId.ToString() && x.Action == "HistoricalOrderCompleted"))
+            .MinAsync(x => (DateTimeOffset?)x.OccurredAtUtc, cancellationToken);
         return new DeliveryDetail(header.Id, header.OrderId, header.OrderNumber, header.CustomerName, header.Address, header.Location,
             header.ContactName, header.ContactPhone, header.Notes, header.Status, header.DriverUserId, header.DriverName,
             header.ScheduledAtUtc, header.Version, lines, evidence, history, Math.Max(0, header.Total - payments),
-            header.ReceivableVersion, header.Total, payments, paymentItems, header.DeliveryFee);
+            header.ReceivableVersion, header.Total, payments, paymentItems, header.DeliveryFee, header.CompletedAtUtc, recordedAt);
     }
 
     public async Task<IReadOnlyList<DeliveryOrderOption>> SchedulableOrdersAsync(CancellationToken cancellationToken = default)

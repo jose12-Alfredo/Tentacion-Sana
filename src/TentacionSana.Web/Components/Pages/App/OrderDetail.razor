@@ -21,10 +21,10 @@ else
     <a class="back-link" href="/app/pedidos">← Volver a pedidos</a>
     <header class="detail-heading">
         <div>
-            <p>@(IsDraft ? "Borrador sin reserva" : _order.Status is "Delivered" or "Cancelled" ? "Gestión del pedido" : "Pedido confirmado")</p>
             <h1>Pedido #@_order.Number</h1>
             <span><strong>@_order.Customer</strong>@if (_order.DeliveryPoint is not null) { <text> · @_order.DeliveryPoint</text> }</span>
         </div>
+        <span class="badge status-@_order.Status.ToLowerInvariant()">@OrderStatusText</span>
     </header>
 
     @if (_errors.Count > 0)
@@ -33,11 +33,69 @@ else
     }
     @if (_message is not null) { <p class="status-message" role="status">@_message</p> }
 
+    @if (!IsDraft && _order.Status != "Cancelled")
+    {
+        <section class="order-workflow" aria-label="Acciones del pedido">
+            <div><strong>@(_order.Status == "Delivered" ? "Entrega registrada" : "Ajusta el pedido y registra lo que se entregó")</strong><p>@(_order.Status == "Delivered" ? "Puedes consultar el cobro y corregir las cantidades con autorización administrativa." : "Si entregaste más unidades, cambia primero la cantidad de venta. El total se recalcula al guardar.")</p></div>
+            <div class="workflow-actions">
+                @if (CanEditConfirmedOrder) { <button type="button" class="workflow-secondary" @onclick="BeginQuantityEdit" disabled="@_saving">Ajustar cantidades</button> }
+                @if (CanRegisterDelivery) { <button type="button" @onclick="OpenDeliveryAsync" disabled="@_saving">Registrar entrega</button> }
+                @if (_canCorrectDelivered && _order.DeliveredAtUtc is not null) { <button type="button" class="workflow-secondary" @onclick="OpenDateCorrectionAsync" disabled="@_saving">Corregir fecha de entrega</button> }
+            </div>
+            @if (RequiresAdministrativeEdit) { <p class="workflow-note">El pedido está @OrderStatusText.ToLowerInvariant(). Para cambiar cantidades, entra con una cuenta administradora.</p> }
+            @if (_chooseRevisionLine) { <p class="workflow-note" role="status">Selecciona «Editar» junto al producto que quieres ajustar.</p> }
+        </section>
+    }
+
+    @if (_showDeliveryForm)
+    {
+        <section class="detail-card delivery-registration" aria-labelledby="register-delivery-title">
+            <h2 id="register-delivery-title">Registrar entrega</h2>
+            <p>Confirma las unidades pendientes de esta entrega. El pago se registra por separado con su respaldo.</p>
+            @if (_deliveries.Count > 1)
+            {
+                <label>Entrega<select @bind="_selectedDeliveryId">@foreach (var delivery in _deliveries) { <option value="@delivery.Id">@delivery.ScheduledAtUtc.ToLocalTime().ToString("dd/MM/yyyy HH:mm") · @delivery.Lines.Sum(x => x.PendingQuantity) unidades · @(delivery.DriverName ?? "Sin repartidor")</option> }</select></label>
+            }
+            @if (SelectedDelivery is { } selectedDelivery)
+            {
+                <ul class="delivery-quantity-list">@foreach (var line in selectedDelivery.Lines.Where(x => x.PendingQuantity > 0)) { <li><strong>@line.Product</strong><span>@line.PendingSaleQuantity venta · @line.PendingReplacementQuantity reposición · @line.PendingTastingQuantity degustación</span></li> }</ul>
+                <p><strong>@selectedDelivery.Lines.Sum(x => x.PendingQuantity) unidades por registrar</strong> · Valor de venta: Bs @DeliverySaleTotal.ToString("N2")</p>
+                <label>Fecha real de entrega según boleta <span class="required">*</span><input type="date" @bind="_deliveryDateLocal" max="@DeliveryDates.LocalDate(DateTimeOffset.UtcNow).ToString("yyyy-MM-dd")" /><small>Puede ser una fecha pasada. La fecha prometida no se modifica.</small></label>
+                <label>Persona que recibió <span class="required">*</span><input @bind="_deliveryReceiver" @bind:event="oninput" autocomplete="name" /></label>
+                <p class="workflow-note">¿La cantidad no coincide o la entrega fue parcial? Ajusta las cantidades antes de confirmar o registra la entrega parcial desde Mis entregas.</p>
+                @if (_deliveryDateLocal is { } deliveryDate) { <p role="status">Se registrará la entrega del <strong>@deliveryDate.ToString("dd/MM/yyyy")</strong>. La carga en el sistema quedará registrada por separado.</p> }
+                <div class="workflow-actions"><button type="button" class="workflow-secondary" @onclick="CloseDeliveryForm" disabled="@_saving">Cancelar</button><button type="button" @onclick="CompleteDeliveryAsync" disabled="@(_saving || _deliveryDateLocal is null || string.IsNullOrWhiteSpace(_deliveryReceiver))">@(_saving ? "Registrando…" : "Confirmar unidades entregadas")</button></div>
+            }
+            else { <p>No hay entregas asignadas pendientes de confirmar. <a href="/app/entregas">Organizar entrega</a>.</p><button type="button" @onclick="CloseDeliveryForm">Cerrar</button> }
+            @if (_deliveryErrors.Count > 0) { <div class="action-feedback" role="alert">@foreach (var error in _deliveryErrors) { <p>@error</p> }</div> }
+        </section>
+    }
+
+    @if (_showDateCorrection)
+    {
+        <section class="detail-card delivery-registration" aria-labelledby="correct-date-title">
+            <h2 id="correct-date-title">Corregir fecha de entrega</h2>
+            <p>Usa la fecha que figura en la boleta. Se actualizarán la entrega, la venta y los reportes; los pagos conservan sus propias fechas.</p>
+            @if (_datedDeliveries.Count > 0)
+            {
+                <label>Entrega registrada<select @bind="_dateCorrectionDeliveryId" @bind:after="DateCorrectionSelectionChanged">@foreach (var delivery in _datedDeliveries) { <option value="@delivery.Id">@DeliveryDates.LocalDate(delivery.CompletedAtUtc!.Value).ToString("dd/MM/yyyy") · @delivery.Lines.Sum(x => x.DeliveredQuantity) unidades · @(delivery.DriverName ?? "Sin repartidor")</option> }</select></label>
+                @if (DateCorrectionDelivery is { } current)
+                {
+                    <p>Fecha real actual: <strong>@DeliveryDates.LocalDate(current.CompletedAtUtc!.Value).ToString("dd/MM/yyyy")</strong></p>
+                    @if (current.RecordedAtUtc is { } recorded) { <p>Registrada en el sistema: @recorded.ToOffset(DeliveryDates.BusinessOffset).ToString("dd/MM/yyyy HH:mm")</p> }
+                    <label>Nueva fecha real de entrega <span class="required">*</span><input type="date" @bind="_correctedDateLocal" max="@DeliveryDates.LocalDate(DateTimeOffset.UtcNow).ToString("yyyy-MM-dd")" /></label>
+                    <label>Motivo de la corrección <span class="required">*</span><input @bind="_dateCorrectionReason" @bind:event="oninput" maxlength="350" placeholder="Ej.: fecha corregida según boleta de entrega" /></label>
+                    <div class="workflow-actions"><button type="button" class="workflow-secondary" @onclick="CloseDateCorrection" disabled="@_saving">Cancelar</button><button type="button" @onclick="CorrectDeliveryDateAsync" disabled="@(_saving || _correctedDateLocal is null || string.IsNullOrWhiteSpace(_dateCorrectionReason))">@(_saving ? "Guardando…" : "Guardar fecha corregida")</button></div>
+                }
+            }
+            else { <p>No se encontraron entregas confirmadas para corregir.</p><button type="button" @onclick="CloseDateCorrection">Cerrar</button> }
+            @if (_dateCorrectionErrors.Count > 0) { <div class="action-feedback" role="alert">@foreach (var error in _dateCorrectionErrors) { <p>@error</p> }</div> }
+        </section>
+    }
+
     <section class="order-facts" aria-label="Resumen rápido del pedido">
-        <div><small>Fecha prometida</small><strong>@(_order.PromisedAtUtc?.ToLocalTime().ToString("dd/MM/yyyy") ?? "Sin definir")</strong></div>
-        <div><small>Venta</small><strong>@SoldQuantity uds</strong></div>
-        <div><small>Reposición</small><strong>@ReplacementQuantity uds</strong></div>
-        <div><small>Degustación</small><strong>@TastingQuantity uds</strong></div>
+        <div><small>@(_order.DeliveredAtUtc is null ? "Fecha prometida" : "Fecha real de entrega")</small><strong>@(_order.DeliveredAtUtc is { } actual ? DeliveryDates.LocalDate(actual).ToString("dd/MM/yyyy") : _order.PromisedAtUtc?.ToLocalTime().ToString("dd/MM/yyyy") ?? "Sin definir")</strong>@if (_order.DeliveredAtUtc is not null) { <small>Prometida: @(_order.PromisedAtUtc?.ToLocalTime().ToString("dd/MM/yyyy") ?? "Sin definir")</small> }</div>
+        <div><small>Venta</small><strong>@SoldQuantity uds</strong><small>@ReplacementQuantity reposición · @TastingQuantity degustación</small></div>
         <div class="physical-fact"><small>A entregar</small><strong>@TotalQuantity uds</strong></div>
         <div class="money-fact"><small>A cobrar</small><strong>Bs @OrderTotal.ToString("N2")</strong></div>
     </section>
@@ -104,7 +162,11 @@ else
                     <div class="product-table"><table><thead><tr><th>Producto</th><th>Venta</th><th>Reposición</th><th>Degustación</th><th>Total físico</th><th>Precio venta</th><th>Subtotal</th>@if (IsDraft || CanEditConfirmedOrder) { <th><span class="sr-only">Acciones</span></th> }</tr></thead><tbody>
                         @foreach (var line in _order.Lines)
                         {
-                            <tr><td><strong>@line.Product</strong><small>Estándar: Bs @line.StandardUnitPrice.ToString("N2")</small>@if (line.UnitDiscount > 0) { <small class="line-discount">Descuento: Bs @line.UnitDiscount.ToString("N2") · @line.DiscountReason</small> }@if (line.ReplacementQuantity > 0) { <small>Reposición: @line.ReplacementReason @line.ReplacementNotes</small> }@if (line.TastingQuantity > 0) { <small>Degustación: @line.TastingReason @line.TastingNotes</small> }</td><td>@line.SaleQuantity</td><td>@line.ReplacementQuantity</td><td>@line.TastingQuantity</td><td><strong>@line.Quantity</strong></td><td>Bs @line.SoldUnitPrice.ToString("N2")</td><td><strong>Bs @((line.SaleQuantity * line.SoldUnitPrice).ToString("N2"))</strong></td>@if (IsDraft) { <td><button class="text-button danger" @onclick="() => RemoveAsync(line.Id)">Quitar</button></td> } else if (CanEditConfirmedOrder) { <td><button type="button" class="edit-line-trigger" @onclick="() => OpenLineEditor(line.Id)">Editar</button></td> }</tr>
+                            <tr>
+                                <td class="product-name"><strong>@line.Product</strong><small>Estándar: Bs @line.StandardUnitPrice.ToString("N2")</small>@if (line.UnitDiscount > 0) { <small class="line-discount">Descuento: Bs @line.UnitDiscount.ToString("N2") · @line.DiscountReason</small> }@if (line.ReplacementQuantity > 0) { <small>Reposición: @line.ReplacementReason @line.ReplacementNotes</small> }@if (line.TastingQuantity > 0) { <small>Degustación: @line.TastingReason @line.TastingNotes</small> }</td>
+                                <td data-label="Venta">@line.SaleQuantity</td><td data-label="Reposición">@line.ReplacementQuantity</td><td data-label="Degustación">@line.TastingQuantity</td><td data-label="Total físico"><strong>@line.Quantity</strong></td><td data-label="Precio venta">Bs @line.SoldUnitPrice.ToString("N2")</td><td data-label="Subtotal"><strong>Bs @((line.SaleQuantity * line.SoldUnitPrice).ToString("N2"))</strong></td>
+                                @if (IsDraft) { <td class="product-actions"><button class="text-button danger" @onclick="() => RemoveAsync(line.Id)">Quitar</button></td> } else if (CanEditConfirmedOrder) { <td class="product-actions"><button type="button" class="edit-line-trigger" @onclick="() => OpenLineEditor(line.Id)">Editar cantidades</button></td> }
+                            </tr>
                         }
                     </tbody></table></div>
                 }
@@ -120,13 +182,13 @@ else
                         </div>
                         <p class="line-editor-preview">Antes: <strong>@SelectedRevisionLine.SaleQuantity venta + @SelectedRevisionLine.ReplacementQuantity reposición + @SelectedRevisionLine.TastingQuantity degustación = @SelectedRevisionLine.Quantity unidades</strong><br />Ahora: <strong>@_revisionSaleQuantity venta + @_revisionReplacementQuantity reposición + @_revisionTastingQuantity degustación = @RevisionPhysicalTotal unidades</strong>@if (_order.Status != "Delivered" && RevisionPhysicalTotal < SelectedRevisionLine.Quantity) { <span> · Se liberarán hasta @(SelectedRevisionLine.Quantity - RevisionPhysicalTotal) unidades de la reserva.</span> }</p>
                         @if (_order.Status == "Delivered" && RevisionPhysicalTotal > SelectedRevisionLine.Quantity) { <label class="line-editor-reason"><input type="checkbox" @bind="_additionalUnitsAlreadyDelivered" /> Confirmo que las @(RevisionPhysicalTotal - SelectedRevisionLine.Quantity) unidades adicionales ya se entregaron. Se descontarán del stock disponible.</label> }
-                        @if (_order.Status == "Delivered") { <p class="line-editor-preview">Nuevo total a cobrar: <strong>Bs @(CorrectedOrderTotal.ToString("N2"))</strong> · Nuevo saldo: <strong>Bs @(Math.Max(0, CorrectedOrderTotal - _order.Paid).ToString("N2"))</strong>@if (_order.Paid > CorrectedOrderTotal) { <span> · El excedente pagado quedará como crédito para revisar.</span> }</p> }
+                        <p class="line-editor-preview" aria-live="polite">Nuevo total del pedido: <strong>Bs @(CorrectedOrderTotal.ToString("N2"))</strong> · Saldo del pedido: <strong>Bs @(Math.Max(0, CorrectedOrderTotal - _order.Paid).ToString("N2"))</strong>@if (_order.Paid > CorrectedOrderTotal) { <span> · El excedente pagado quedará como crédito para revisar.</span> }</p>
                         <div class="line-editor-details">
                             @if (_revisionReplacementQuantity > 0) { <label>Motivo de reposición <span class="required">*</span><select @bind="_revisionReplacementReason"><option value="">Selecciona un motivo</option>@foreach (var reason in ReplacementReasons) { <option value="@reason">@reason</option> }</select></label><label>Observación de reposición<input @bind="_revisionReplacementNotes" placeholder="Opcional" /></label> }
                             @if (_revisionTastingQuantity > 0) { <label>Motivo o destino de degustación <span class="required">*</span><select @bind="_revisionTastingReason"><option value="">Selecciona un motivo</option>@foreach (var reason in TastingReasons) { <option value="@reason">@reason</option> }</select></label><label>Observación de degustación<input @bind="_revisionTastingNotes" placeholder="Opcional" /></label> }
-                            <label>Precio por unidad vendida (Bs)<input type="number" min="0" step="0.01" @bind="_revisionPrice" /></label>
+                            <label>Precio por unidad vendida (Bs)<input type="number" min="0" step="0.01" @bind="_revisionPrice" @bind:event="oninput" /></label>
                             @if (_revisionPrice < RevisionStandardPrice) { <label>Motivo del descuento <span class="required">*</span><input @bind="_revisionDiscountReason" /></label> }
-                            <label class="line-editor-reason">Motivo del cambio <span class="required">*</span><input @bind="_lineRevisionReason" placeholder="Ej.: se redujo la venta y se entregó una muestra" /></label>
+                            <label class="line-editor-reason">Motivo del cambio <span class="required">*</span><input @bind="_lineRevisionReason" placeholder="Ej.: se entregaron 12 unidades de venta en lugar de 10" /></label>
                         </div>
                         @if (_order.Status != "Delivered") { <details class="line-editor-product-change"><summary>Cambiar también el producto</summary><label>Producto<select @bind="_revisionProductId" @bind:after="RevisionProductChanged">@if (!_products.Any(x => x.Id == SelectedRevisionLine.ProductId)) { <option value="@SelectedRevisionLine.ProductId">@SelectedRevisionLine.Product (producto anterior)</option> }@foreach (var product in _products) { <option value="@product.Id">@product.Name</option> }</select></label></details> }
                         @if (_revisionErrors.Count > 0) { <div class="action-feedback" role="alert">@foreach (var error in _revisionErrors) { <p>@error</p> }</div> }
@@ -168,7 +230,7 @@ else
                     </section>
                 }
 
-                <section class="order-summary" aria-label="Resumen del pedido"><header><h3>Resumen del pedido</h3><span>Actualizado automáticamente</span></header><dl><div><dt>Unidades para venta</dt><dd>@SoldQuantity</dd></div><div><dt>Reposiciones</dt><dd>@ReplacementQuantity</dd></div><div><dt>Degustaciones</dt><dd>@TastingQuantity</dd></div><div class="summary-emphasis"><dt>Total a entregar</dt><dd>@TotalQuantity</dd></div><div><dt>Subtotal</dt><dd>Bs @StandardSubtotal.ToString("N2")</dd></div><div><dt>Descuento</dt><dd>Bs @DiscountTotal.ToString("N2")</dd></div><div><dt>Productos</dt><dd>Bs @ProductSubtotal.ToString("N2")</dd></div><div><dt>Envío</dt><dd>Bs @_form.DeliveryFee.ToString("N2")</dd></div><div class="summary-total"><dt>Total a cobrar</dt><dd>Bs @OrderTotal.ToString("N2")</dd></div></dl></section>
+                <details class="order-summary"><summary>Ver desglose de cantidades y total</summary><dl><div><dt>Unidades para venta</dt><dd>@SoldQuantity</dd></div><div><dt>Reposiciones</dt><dd>@ReplacementQuantity</dd></div><div><dt>Degustaciones</dt><dd>@TastingQuantity</dd></div><div class="summary-emphasis"><dt>Total a entregar</dt><dd>@TotalQuantity</dd></div><div><dt>Subtotal</dt><dd>Bs @StandardSubtotal.ToString("N2")</dd></div><div><dt>Descuento</dt><dd>Bs @DiscountTotal.ToString("N2")</dd></div><div><dt>Productos</dt><dd>Bs @ProductSubtotal.ToString("N2")</dd></div><div><dt>Envío</dt><dd>Bs @_form.DeliveryFee.ToString("N2")</dd></div><div class="summary-total"><dt>Total a cobrar</dt><dd>Bs @OrderTotal.ToString("N2")</dd></div></dl></details>
             </section>
 
             @if (IsDraft)
@@ -183,7 +245,7 @@ else
                         <summary>Registrar pedido ya realizado</summary>
                         <p>Úsalo solo para una operación histórica: registra la entrega, descuenta el inventario, crea la venta y genera la cuenta por cobrar cuando corresponda.</p>
                         <div class="form-grid">
-                            <label>Fecha y hora de entrega <span class="required">*</span><input type="datetime-local" @bind="_completedLocal" /></label>
+                            <label>Fecha real de entrega según boleta <span class="required">*</span><input type="date" @bind="_completedLocal" max="@DeliveryDates.LocalDate(DateTimeOffset.UtcNow).ToString("yyyy-MM-dd")" /></label>
                             <label>Persona receptora <span class="required">*</span><input @bind="_historicalReceiver" placeholder="Nombre de quien recibió" /></label>
                         </div>
                         <button class="historical-action" @onclick="RegisterCompletedOrderAsync" disabled="@(!CanRegisterCompletedOrder)">Registrar pedido ya realizado</button>
@@ -192,7 +254,7 @@ else
             }
             else
             {
-                <section class="detail-card reservation-card"><header><div><small>Inventario</small><h2>Reserva de stock</h2></div><span class="@(_order.ShortageQuantity > 0 ? "attention" : "complete")">@(_order.ShortageQuantity > 0 ? $"Faltan {_order.ShortageQuantity} unidades por reservar." : "Reserva completa")</span></header><p>Al confirmar el pedido se registra toda la cantidad solicitada. Solo se apartan las unidades disponibles; las faltantes quedan pendientes de producción y se reservan al ingresar stock. No se pueden entregar antes de tener reserva. La reserva considera venta, reposición y degustación.</p><AuthorizeView Policy="@AppPolicies.ManageProduction"><Authorized><a class="panel-link" href="/app/inventario">Revisar insumos y lista de compra →</a></Authorized></AuthorizeView></section>
+                <details class="detail-card reservation-card" open="@(_order.ShortageQuantity > 0)"><summary>Inventario · <span class="@(_order.ShortageQuantity > 0 ? "attention" : "complete")">@(_order.ShortageQuantity > 0 ? $"Faltan {_order.ShortageQuantity} unidades por reservar" : "Reserva completa")</span></summary><p>La reserva incluye venta, reposición y degustación. Las unidades faltantes se reservan al ingresar stock.</p><AuthorizeView Policy="@AppPolicies.ManageProduction"><Authorized><a class="panel-link" href="/app/inventario">Revisar inventario</a></Authorized></AuthorizeView></details>
             }
 
             @if (_order.Status is not "Cancelled" and not "Delivered" && !IsDraft)
@@ -234,7 +296,7 @@ else
             @if (!string.IsNullOrWhiteSpace(_order.Notes)) { <section class="side-card notes-card"><h2>Observación</h2><p>@_order.Notes</p></section> }
         </aside>
     </div>
-    <section class="timeline-card"><header><small>Trazabilidad</small><h2>Historial del pedido</h2></header>@if (_order.History.Count == 0) { <p>Aún no hay movimientos registrados.</p> } else { <ol>@foreach (var history in _order.History) { <li><time>@history.AtUtc.ToLocalTime().ToString("d MMM · HH:mm")</time><div><strong>@history.Kind</strong><p>@history.Description</p></div></li> }</ol> }</section>
+    <details class="timeline-card"><summary>Historial del pedido · @_order.History.Count movimientos</summary>@if (_order.History.Count == 0) { <p>Aún no hay movimientos registrados.</p> } else { <ol>@foreach (var history in _order.History) { <li><time>@history.AtUtc.ToLocalTime().ToString("d MMM · HH:mm")</time><div><strong>@history.Kind</strong><p>@history.Description</p></div></li> }</ol> }</details>
 }
 @if (_paymentEvidenceUrl is not null || _deliveryEvidenceUrl is not null)
 {
@@ -246,6 +308,23 @@ else
 
 @code {
     [Parameter] public Guid OrderId { get; set; }
+    [SupplyParameterFromQuery(Name = "accion")] public string? RequestedAction { get; set; }
+    private Guid? _actionOrderId;
+    private string? _appliedAction;
+    private bool _chooseRevisionLine, _canRegisterDelivery, _showDeliveryForm;
+    private IReadOnlyList<DeliveryDetail> _deliveries = [];
+    private Guid? _selectedDeliveryId;
+    private string _deliveryReceiver = "", _deliveryKey = "";
+    private DateTime? _deliveryDateLocal, _correctedDateLocal;
+    private bool _showDateCorrection;
+    private IReadOnlyList<DeliveryDetail> _datedDeliveries = [];
+    private Guid? _dateCorrectionDeliveryId;
+    private string _dateCorrectionReason = "";
+    private readonly List<string> _dateCorrectionErrors = [];
+    private DeliveryDetail? DateCorrectionDelivery => _datedDeliveries.FirstOrDefault(x => x.Id == _dateCorrectionDeliveryId);
+    private readonly List<string> _deliveryErrors = [];
+    private DeliveryDetail? SelectedDelivery => _deliveries.FirstOrDefault(x => x.Id == _selectedDeliveryId);
+    private decimal DeliverySaleTotal => SelectedDelivery?.Lines.Sum(x => x.PendingSaleQuantity * (_order?.Lines.FirstOrDefault(l => l.Id == x.OrderLineId)?.SoldUnitPrice ?? 0m)) ?? 0m;
     private TentacionSana.Application.Orders.OrderDetail? _order;
     private IReadOnlyList<OrderOption> _customers = [];
     private IReadOnlyList<ProductOption> _products = [];
@@ -267,7 +346,7 @@ else
     private IBrowserFile? _paymentEvidence;
     private decimal _paymentAmount;
     private DateTime _paymentDate = DateTime.Today;
-    private DateTime _completedLocal = DateTime.Now;
+    private DateTime? _completedLocal;
     private string _historicalReceiver = "";
     private Guid? _revisionLineId;
     private Guid _revisionProductId;
@@ -280,7 +359,10 @@ else
 
     private bool IsDraft => _order?.Status == "Draft";
     private bool _canCorrectDelivered;
-    private bool CanEditConfirmedOrder => _order?.Status is "Confirmed" or "InPreparation" or "Ready" or "OutForDelivery" || (_order?.Status == "Delivered" && _canCorrectDelivered);
+    private bool CanEditConfirmedOrder => _order?.Status == "Confirmed" || (_canCorrectDelivered && _order?.Status is "InPreparation" or "Ready" or "OutForDelivery" or "Delivered");
+    private bool RequiresAdministrativeEdit => !_canCorrectDelivered && _order?.Status is "InPreparation" or "Ready" or "OutForDelivery" or "Delivered";
+    private bool CanRegisterDelivery => _canRegisterDelivery && _order?.DeliveryStatus is "Assigned" or "InRoute" or "Partial";
+    private string OrderStatusText => _order?.Status switch { "Draft" => "Borrador", "Confirmed" => "Confirmado", "InPreparation" => "En preparación", "Ready" => "Listo para entregar", "OutForDelivery" => "En reparto", "Delivered" => "Entregado", "Cancelled" => "Cancelado", _ => "Sin estado" };
     private OrderLineDetail? SelectedRevisionLine => _order?.Lines.FirstOrDefault(x => x.Id == _revisionLineId);
     private int RevisionPhysicalTotal => _revisionSaleQuantity + _revisionReplacementQuantity + _revisionTastingQuantity;
     private decimal CorrectedOrderTotal => OrderTotal - (SelectedRevisionLine?.SaleQuantity * SelectedRevisionLine?.SoldUnitPrice ?? 0m) + _revisionSaleQuantity * _revisionPrice;
@@ -288,7 +370,7 @@ else
         ? SelectedRevisionLine?.StandardUnitPrice ?? 0
         : _products.FirstOrDefault(x => x.Id == _revisionProductId)?.CurrentPrice ?? 0;
     private bool CanConfirm => IsDraft && _order!.Lines.Count > 0 && _form.PromisedLocal is not null;
-    private bool CanRegisterCompletedOrder => CanConfirm && _completedLocal <= DateTime.Now && !string.IsNullOrWhiteSpace(_historicalReceiver);
+    private bool CanRegisterCompletedOrder => CanConfirm && _completedLocal is { } completed && completed.Date <= DeliveryDates.LocalDate(DateTimeOffset.UtcNow) && !string.IsNullOrWhiteSpace(_historicalReceiver);
     private OrderOption? SelectedCustomer => _customers.FirstOrDefault(x => x.Id == _form.CustomerId);
     private OrderPointOption? SelectedPoint => SelectedCustomer?.DeliveryPoints.FirstOrDefault(x => x.Id == _form.DeliveryPointId);
     private OrderSubOption? SelectedContact => SelectedCustomer?.Contacts.FirstOrDefault(x => x.Id == _form.ContactId);
@@ -305,7 +387,99 @@ else
     private int LinePhysicalTotal => _line.SaleQuantity + _line.ReplacementQuantity + _line.TastingQuantity;
     private decimal LineSubtotal => _line.SaleQuantity * _line.SoldPrice;
 
-    protected override async Task OnParametersSetAsync() { var state = await AuthenticationStateProvider.GetAuthenticationStateAsync(); _canCorrectDelivered = (await AuthorizationService.AuthorizeAsync(state.User, AppPolicies.Administration)).Succeeded; _customers = await Service.CustomerOptionsAsync(); _products = await Service.ProductOptionsAsync(); await LoadAsync(); }
+    protected override async Task OnParametersSetAsync()
+    {
+        var state = await AuthenticationStateProvider.GetAuthenticationStateAsync();
+        _canCorrectDelivered = (await AuthorizationService.AuthorizeAsync(state.User, AppPolicies.Administration)).Succeeded;
+        _canRegisterDelivery = _canCorrectDelivered || (await AuthorizationService.AuthorizeAsync(state.User, AppPolicies.ManageDeliveries)).Succeeded;
+        _customers = await Service.CustomerOptionsAsync(); _products = await Service.ProductOptionsAsync(); await LoadAsync();
+        if (_actionOrderId != OrderId || _appliedAction != RequestedAction)
+        {
+            CloseLineEditor(); CloseDeliveryForm(); CloseDateCorrection(); _chooseRevisionLine = false;
+            _actionOrderId = OrderId; _appliedAction = RequestedAction;
+            if (RequestedAction == "cantidades" && CanEditConfirmedOrder) BeginQuantityEdit();
+            if (RequestedAction == "entrega" && CanRegisterDelivery) await OpenDeliveryAsync();
+        }
+    }
+    private void BeginQuantityEdit()
+    {
+        CloseDeliveryForm(); CloseDateCorrection();
+        if (_order?.Lines.Count == 1) OpenLineEditor(_order.Lines[0].Id);
+        else _chooseRevisionLine = true;
+    }
+    private void CloseDeliveryForm() { _showDeliveryForm = false; _deliveries = []; _selectedDeliveryId = null; _deliveryErrors.Clear(); }
+    private async Task OpenDeliveryAsync()
+    {
+        if (_saving || !CanRegisterDelivery) return;
+        _saving = true; CloseLineEditor(); CloseDateCorrection(); CloseDeliveryForm(); _showDeliveryForm = true; _deliveryReceiver = ""; _deliveryDateLocal = null; _deliveryKey = Guid.NewGuid().ToString("N");
+        try
+        {
+            var items = await DeliveryService.ListAsync();
+            var deliveries = new List<DeliveryDetail>();
+            var userId = await UserId();
+            foreach (var item in items.Where(x => x.OrderNumber == _order!.Number && (_canCorrectDelivered || x.DriverUserId == userId) && x.Status is "Assigned" or "InRoute" or "Partial"))
+            {
+                var detail = await DeliveryService.GetAsync(item.Id);
+                if (detail?.OrderId == OrderId && detail.Lines.Any(x => x.PendingQuantity > 0)) deliveries.Add(detail);
+            }
+            _deliveries = deliveries; _selectedDeliveryId = deliveries.FirstOrDefault()?.Id;
+        }
+        catch (Exception ex) { LoggerFactory.CreateLogger("OrderDetail").LogError(ex, "No se pudieron cargar las entregas del pedido {OrderId}", OrderId); _deliveryErrors.Add("No se pudieron cargar las entregas. Cierra esta sección y vuelve a intentarlo."); }
+        finally { _saving = false; }
+    }
+    private async Task CompleteDeliveryAsync()
+    {
+        if (_saving || SelectedDelivery is not { } delivery || string.IsNullOrWhiteSpace(_deliveryReceiver)) return;
+        if (_deliveryDateLocal is null || _deliveryDateLocal.Value.Date > DeliveryDates.LocalDate(DateTimeOffset.UtcNow)) { _deliveryErrors.Clear(); _deliveryErrors.Add("Indica la fecha real de entrega según la boleta; no puede ser futura."); return; }
+        _saving = true; _deliveryErrors.Clear();
+        try
+        {
+            var lines = delivery.Lines.Where(x => x.PendingQuantity > 0).Select(x => new CompleteLine(x.Id, x.PendingSaleQuantity, x.PendingReplacementQuantity, x.PendingTastingQuantity)).ToList();
+            var result = await DeliveryService.CompleteAsync(new(delivery.Id, delivery.Version, _deliveryKey, _deliveryReceiver, lines, 0, null, null, false, DeliveryDates.ToUtc(_deliveryDateLocal.Value)), await UserId());
+            if (!result.Succeeded) { _deliveryErrors.AddRange(result.Errors); return; }
+            CloseDeliveryForm(); _message = "Entrega registrada. Las unidades entregadas y la cuenta por cobrar se actualizaron. Puedes registrar el pago en la sección Pago.";
+            try { await LoadAsync(); }
+            catch (Exception ex) { LoggerFactory.CreateLogger("OrderDetail").LogError(ex, "La entrega del pedido {OrderId} se registró, pero no se pudo recargar", OrderId); _message = "La entrega se registró. Recarga el pedido para consultar las cantidades y el saldo actualizados."; }
+        }
+        catch (Exception ex) { LoggerFactory.CreateLogger("OrderDetail").LogError(ex, "No se pudo registrar la entrega del pedido {OrderId}", OrderId); _deliveryErrors.Add("No se pudo confirmar el resultado. Recarga el pedido para comprobar su estado antes de intentar otra vez."); }
+        finally { _saving = false; }
+    }
+    private void CloseDateCorrection() { _showDateCorrection = false; _datedDeliveries = []; _dateCorrectionDeliveryId = null; _dateCorrectionErrors.Clear(); _dateCorrectionReason = ""; }
+    private void DateCorrectionSelectionChanged() { _correctedDateLocal = DateCorrectionDelivery?.CompletedAtUtc is { } date ? DeliveryDates.LocalDate(date) : null; _dateCorrectionErrors.Clear(); }
+    private async Task OpenDateCorrectionAsync()
+    {
+        if (_saving || !_canCorrectDelivered) return;
+        _saving = true; CloseLineEditor(); CloseDeliveryForm(); CloseDateCorrection(); _showDateCorrection = true;
+        try
+        {
+            var items = await DeliveryService.ListAsync();
+            var deliveries = new List<DeliveryDetail>();
+            foreach (var item in items.Where(x => x.OrderNumber == _order!.Number && x.DeliveredQuantity > 0))
+            {
+                var detail = await DeliveryService.GetAsync(item.Id);
+                if (detail?.OrderId == OrderId && detail.CompletedAtUtc is not null) deliveries.Add(detail);
+            }
+            _datedDeliveries = deliveries; _dateCorrectionDeliveryId = deliveries.FirstOrDefault()?.Id; DateCorrectionSelectionChanged();
+        }
+        catch (Exception ex) { LoggerFactory.CreateLogger("OrderDetail").LogError(ex, "No se pudieron cargar las fechas del pedido {OrderId}", OrderId); _dateCorrectionErrors.Add("No se pudieron cargar las fechas. Cierra esta sección y vuelve a intentarlo."); }
+        finally { _saving = false; }
+    }
+    private async Task CorrectDeliveryDateAsync()
+    {
+        if (_saving || DateCorrectionDelivery is not { } delivery || _correctedDateLocal is null) return;
+        _dateCorrectionErrors.Clear();
+        if (_correctedDateLocal.Value.Date > DeliveryDates.LocalDate(DateTimeOffset.UtcNow)) { _dateCorrectionErrors.Add("La fecha real de entrega no puede ser futura."); return; }
+        _saving = true;
+        try
+        {
+            var result = await DeliveryService.CorrectDateAsync(new(delivery.Id, delivery.Version, DeliveryDates.ToUtc(_correctedDateLocal.Value), _dateCorrectionReason), await UserId());
+            if (!result.Succeeded) { _dateCorrectionErrors.AddRange(result.Errors); return; }
+            CloseDateCorrection(); _message = "Fecha de entrega corregida. Vuelve a consultar los reportes o genera nuevamente el estado de cuenta para ver la fecha actualizada.";
+            await LoadAsync();
+        }
+        catch (Exception ex) { LoggerFactory.CreateLogger("OrderDetail").LogError(ex, "No se pudo completar la corrección de fecha del pedido {OrderId}", OrderId); _dateCorrectionErrors.Add("No se pudo confirmar el resultado. Recarga el pedido para comprobar si la fecha se guardó antes de intentar otra vez."); }
+        finally { _saving = false; }
+    }
     private async Task LoadAsync(CancellationToken ct = default) { _order = await Service.GetAsync(OrderId, ct); _payments = await DeliveryService.PaymentsAsync(OrderId, ct); _deliveryEvidence = await DeliveryService.GetOrderEvidenceAsync(OrderId, ct); if (_order is null) return; _form = new() { CustomerId = _order.CustomerId, DeliveryPointId = _order.DeliveryPointId, ContactId = _order.ContactId, PayerId = _order.PaymentResponsiblePartyId, PromisedLocal = _order.PromisedAtUtc?.ToLocalTime().DateTime, Notes = _order.Notes, DeliveryFee = _order.DeliveryFee }; _pointImageUrl = _order.DeliveryPointId is null ? null : await PointImageService.GetUrlAsync(_order.DeliveryPointId.Value, ct); if (_paymentAmount <= 0) _paymentAmount = _order.Balance; }
     private Task CustomerChanged() { _form.DeliveryPointId = null; _form.ContactId = null; _form.PayerId = null; _pointImageUrl = null; return Task.CompletedTask; }
     private async Task PointChanged() { _form.ContactId = SelectedPoint?.ContactId; _form.PayerId = SelectedPoint?.PayerId; _pointImageUrl = _form.DeliveryPointId is null ? null : await PointImageService.GetUrlAsync(_form.DeliveryPointId.Value); }
@@ -391,7 +565,7 @@ else
         catch { _actionErrors.Add("No se pudo confirmar el pedido. Intenta nuevamente."); }
         finally { _saving = false; }
     }
-    private async Task RegisterCompletedOrderAsync() { if (!CanRegisterCompletedOrder) { _errors.Clear(); _errors.Add("Agrega un producto, define la fecha prometida y completa una fecha pasada o actual con la persona receptora."); return; } var userId = await UserId(); var completedAt = new DateTimeOffset(DateTime.SpecifyKind(_completedLocal, DateTimeKind.Local)).ToUniversalTime(); await Handle(await Service.RegisterCompletedOrderAsync(OrderId, _order!.Version, new(_form.CustomerId, _form.DeliveryPointId, _form.ContactId, _form.PayerId, UtcDate(_form.PromisedLocal), _form.Notes, _form.DeliveryFee), completedAt, _historicalReceiver, userId), false); }
+    private async Task RegisterCompletedOrderAsync() { if (!CanRegisterCompletedOrder) { _errors.Clear(); _errors.Add("Agrega un producto, define la fecha prometida y completa la fecha real de entrega según boleta con la persona receptora."); return; } var userId = await UserId(); var completedAt = DeliveryDates.ToUtc(_completedLocal!.Value); await Handle(await Service.RegisterCompletedOrderAsync(OrderId, _order!.Version, new(_form.CustomerId, _form.DeliveryPointId, _form.ContactId, _form.PayerId, UtcDate(_form.PromisedLocal), _form.Notes, _form.DeliveryFee), completedAt, _historicalReceiver, userId), false); }
     private Task<OrderOperationResult> SaveDraftAsync(Guid userId) => Service.ConfigureDraftAsync(OrderId, _order!.Version, new(_form.CustomerId, _form.DeliveryPointId, _form.ContactId, _form.PayerId, UtcDate(_form.PromisedLocal), _form.Notes, _form.DeliveryFee), userId);
     private async Task CancelAsync() => await Handle(await Service.CancelAsync(OrderId, _order!.Version, _cancelReason, await UserId()), false);
     private async Task ReviseConfigurationAsync()
@@ -431,6 +605,7 @@ else
     }
     private void OpenLineEditor(Guid lineId)
     {
+        CloseDeliveryForm(); CloseDateCorrection(); _chooseRevisionLine = false;
         _revisionLineId = lineId;
         _additionalUnitsAlreadyDelivered = false;
         var line = SelectedRevisionLine;

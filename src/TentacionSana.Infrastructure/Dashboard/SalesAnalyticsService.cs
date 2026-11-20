@@ -1,32 +1,39 @@
 using Microsoft.EntityFrameworkCore;
 using TentacionSana.Application.Dashboard;
+using TentacionSana.Application.Deliveries;
 using TentacionSana.Domain.Orders;
 using TentacionSana.Infrastructure.Persistence;
 
 namespace TentacionSana.Infrastructure.Dashboard;
 
-public sealed class SalesAnalyticsService(ApplicationDbContext db, TimeProvider clock) : ISalesAnalyticsService
+public sealed class SalesAnalyticsService(ApplicationDbContext db) : ISalesAnalyticsService
 {
     public async Task<SalesAnalyticsReport> GetAsync(DateOnly? fromDate, DateOnly? toDate, CancellationToken cancellationToken = default)
     {
         if (fromDate > toDate) throw new ArgumentException("La fecha inicial debe ser anterior a la fecha final.");
 
-        var offset = clock.GetLocalNow().Offset;
+        var offset = DeliveryDates.BusinessOffset;
         DateTimeOffset? fromUtc = fromDate is { } first
             ? new DateTimeOffset(first.ToDateTime(TimeOnly.MinValue), offset).ToUniversalTime() : null;
         DateTimeOffset? untilUtc = toDate is { } last
             ? new DateTimeOffset(last.AddDays(1).ToDateTime(TimeOnly.MinValue), offset).ToUniversalTime() : null;
 
         var totalCustomers = await db.Customers.AsNoTracking().CountAsync(cancellationToken);
-        var orders = await db.Orders.AsNoTracking()
-            .Where(x => x.Status == OrderStatus.Delivered && x.ArchivedAtUtc == null
-                && x.StatusHistory.Any(h => h.NewStatus == OrderStatus.Delivered
-                    && (fromUtc == null || h.ChangedAtUtc >= fromUtc)
-                    && (untilUtc == null || h.ChangedAtUtc < untilUtc)))
+        var rows = await db.Orders.AsNoTracking()
+            .Where(x => x.Status == OrderStatus.Delivered && x.ArchivedAtUtc == null)
             .Include(x => x.StatusHistory)
             .Include(x => x.Lines)
+            .Select(order => new
+            {
+                Order = order,
+                DeliveredAt = db.Deliveries.Where(d => d.OrderId == order.Id).Max(d => d.CompletedAtUtc)
+                    ?? order.StatusHistory.Where(h => h.NewStatus == OrderStatus.Delivered).Max(h => (DateTimeOffset?)h.ChangedAtUtc)
+            })
+            .Where(x => x.DeliveredAt != null && (fromUtc == null || x.DeliveredAt >= fromUtc) && (untilUtc == null || x.DeliveredAt < untilUtc))
             .AsSplitQuery()
             .ToListAsync(cancellationToken);
+        var orders = rows.Select(x => x.Order).ToList();
+        var deliveryDates = rows.ToDictionary(x => x.Order.Id, x => x.DeliveredAt!.Value);
 
         var customerIds = orders.Select(x => x.CustomerId).Distinct().ToList();
         var customerNames = await db.Customers.AsNoTracking()
@@ -41,9 +48,7 @@ public sealed class SalesAnalyticsService(ApplicationDbContext db, TimeProvider 
         var sales = orders.Select(order => new
         {
             Order = order,
-            Date = DateOnly.FromDateTime(order.StatusHistory
-                .Where(h => h.NewStatus == OrderStatus.Delivered)
-                .Max(h => h.ChangedAtUtc).ToOffset(offset).DateTime),
+            Date = DateOnly.FromDateTime(deliveryDates[order.Id].ToOffset(offset).DateTime),
             Customer = customerNames.GetValueOrDefault(order.CustomerId, "Cliente sin nombre"),
             Revenue = order.Lines.Where(line => line.IsActive).Sum(line => line.LineTotal) + order.DeliveryFee,
             Units = order.Lines.Where(line => line.IsActive).Sum(line => line.SaleQuantity),

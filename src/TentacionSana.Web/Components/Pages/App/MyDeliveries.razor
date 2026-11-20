@@ -86,7 +86,7 @@ else
                         <span><strong>@item.Customer</strong><small>@(item.DeliveryPoint ?? item.Address ?? "Sin punto de entrega")</small></span>
                     </span>
                     <span class="delivery-units"><strong>@(IsCompleted(item) ? item.DeliveredQuantity : item.PendingQuantity)</strong><small>@(IsCompleted(item) ? "entregadas" : "por entregar")</small></span>
-                    <span class="delivery-date @DeliveryDateClass(item)"><strong>@DeliveryDateLabel(item)</strong><small>@item.ScheduledAtUtc.ToLocalTime().ToString("HH:mm")</small></span>
+                    <span class="delivery-date @DeliveryDateClass(item)"><strong>@DeliveryDateLabel(item)</strong><small>@(IsCompleted(item) ? "Entrega real" : item.ScheduledAtUtc.ToLocalTime().ToString("HH:mm"))</small></span>
                     <span class="delivery-balance"><strong>Saldo @Money(item.Balance)</strong><small>Total @Money(item.Total) · Cobrado @Money(item.Paid)</small>@if (item.DeliveryFee > 0) { <small class="fee-breakdown">Productos @Money(item.Total - item.DeliveryFee) + envío @Money(item.DeliveryFee)</small> }</span>
                     <span class="delivery-states"><span class="delivery-status @StatusClass(item.Status)">@StatusText(item.Status)</span><span class="payment-status @PaymentStatusClass(item)">@PaymentStatusText(item)</span></span>
                     <span class="delivery-action"><button type="button" class="row-action" @onclick="() => OpenAsync(item.Id)" disabled="@(_openingDeliveryId == item.Id)" aria-expanded="@(_detail?.Id == item.Id)" aria-controls="@($"delivery-detail-{item.Id}")">@(_openingDeliveryId == item.Id ? "Cargando…" : IsCompleted(item) ? "Ver detalle" : item.Status == "InRoute" ? "Continuar entrega" : "Iniciar entrega") <b aria-hidden="true">›</b></button><small>@(item.DeliveryEvidenceCount + item.PaymentEvidenceCount) evidencia(s)</small></span>
@@ -145,6 +145,7 @@ else
                                         }
                                     </div>
                                 }
+                                <label>Fecha real de entrega según boleta *<input type="date" @bind="_deliveryDateLocal" max="@DeliveryDates.LocalDate(DateTimeOffset.UtcNow).ToString("yyyy-MM-dd")" /><small>Elige cuándo se entregó, aunque estés registrándolo hoy. No modifica la fecha prometida.</small></label>
                                 <label>Recibió<input @bind="_receiver" placeholder="Nombre de quien recibe" /></label>
                                 <label class="file-field">Evidencia de entrega <small>JPG, PNG o WebP; máximo 10 MB</small><InputFile OnChange="SelectEvidence" accept="image/jpeg,image/png,image/webp" /></label>
 
@@ -156,9 +157,11 @@ else
                                         <div class="payment-fields"><label>Monto *<input type="number" min="0.01" step="0.01" @bind="_paymentAmount" /></label><label>Método *<select @bind="_paymentMethod"><option value="Qr">QR</option><option value="Cash">Efectivo</option></select></label></div>
                                         <label class="file-field">Respaldo del pago *<InputFile OnChange="SelectPaymentEvidence" accept="image/jpeg,image/png,image/webp" /></label>
                                         <label>Observación<input @bind="_paymentNotes" /></label>
+                                        <label>Fecha real del pago *<input type="date" @bind="_paymentDateLocal" max="@DeliveryDates.LocalDate(DateTimeOffset.UtcNow).ToString("yyyy-MM-dd")" /></label>
                                     }
                                 </div>
-                                <button class="confirm-delivery" @onclick="CompleteAsync" disabled="@_saving">@(_saving ? "Confirmando…" : "Confirmar entrega")</button>
+                                @if (_deliveryDateLocal is { } actualDate) { <p>Fecha de entrega a registrar: <strong>@actualDate.ToString("dd/MM/yyyy")</strong></p> }
+                                <button class="confirm-delivery" @onclick="CompleteAsync" disabled="@(_saving || _deliveryDateLocal is null)">@(_saving ? "Confirmando…" : "Confirmar entrega")</button>
                             </section>
 
                             <section class="incident-card">
@@ -169,6 +172,11 @@ else
                             </section>
                         }
 
+                        @if (_detail.CompletedAtUtc is { } completedAt)
+                        {
+                            <p>Fecha real de entrega: <strong>@DeliveryDates.LocalDate(completedAt).ToString("dd/MM/yyyy")</strong>@if (_detail.RecordedAtUtc is { } recordedAt) { <span> · Registrada en el sistema: @recordedAt.ToOffset(DeliveryDates.BusinessOffset).ToString("dd/MM/yyyy HH:mm")</span> }</p>
+                            <AuthorizeView Policy="@AppPolicies.Administration"><Authorized><a href="/app/pedidos/@_detail.OrderId">Abrir pedido para corregir fecha de entrega</a></Authorized></AuthorizeView>
+                        }
                         @if (_detail.Evidence.Count > 0)
                         {
                             <section class="evidence-history"><h3>Evidencias</h3><ul>@foreach (var evidence in _detail.Evidence) { <li><button class="link-button" @onclick="() => ViewEvidenceAsync(evidence.Id)">@evidence.FileName</button><small>@evidence.UploadedAtUtc.ToLocalTime().ToString("g")</small></li> }</ul></section>
@@ -220,8 +228,8 @@ else
     private static bool IsCompleted(DeliveryItem item) => item.Status == "Delivered";
     private static string DeliveryDateLabel(DeliveryItem item)
     {
-        var date = item.ScheduledAtUtc.ToLocalTime().Date;
-        var today = DateTime.Today;
+        var date = IsCompleted(item) && item.CompletedAtUtc is { } actual ? DeliveryDates.LocalDate(actual) : item.ScheduledAtUtc.ToLocalTime().Date;
+        var today = DeliveryDates.LocalDate(DateTimeOffset.UtcNow);
         if (date == today) return "Hoy";
         if (date == today.AddDays(1)) return "Mañana";
         if (!IsCompleted(item) && date < today) return $"Atrasada {(today - date).Days} d";
@@ -242,6 +250,7 @@ else
     private string _receiver = string.Empty, _incidentType = "Local cerrado", _incidentNotes = string.Empty;
     private IBrowserFile? _evidence, _incidentEvidence, _paymentEvidence;
     private bool _receivedPayment;
+    private DateTime? _deliveryDateLocal, _paymentDateLocal;
     private decimal _paymentAmount;
     private string _paymentMethod = "Qr", _paymentNotes = string.Empty;
     private string? _message;
@@ -308,6 +317,7 @@ else
             }
             foreach (var line in _detail.Lines) _complete[line.Id] = new(line.PendingSaleQuantity, line.PendingReplacementQuantity, line.PendingTastingQuantity);
             _receiver = _detail.ContactName ?? string.Empty;
+            _deliveryDateLocal = null; _paymentDateLocal = null;
             _receivedPayment = false; _paymentAmount = 0; _paymentMethod = "Qr"; _paymentNotes = string.Empty; _evidence = null; _paymentEvidence = null; _incidentEvidence = null;
             _focusDeliveryId = id;
         }
@@ -379,7 +389,9 @@ else
     }
     private async Task CompleteAsync()
     {
-        if (_detail is null) return;
+        if (_detail is null || _saving) return;
+        if (_deliveryDateLocal is null || _deliveryDateLocal.Value.Date > DeliveryDates.LocalDate(DateTimeOffset.UtcNow)) { SetMessage("Indica la fecha real de entrega según la boleta; no puede ser futura.", true); return; }
+        if (_receivedPayment && (_paymentDateLocal is null || _paymentDateLocal.Value.Date > DeliveryDates.LocalDate(DateTimeOffset.UtcNow))) { SetMessage("Indica la fecha real del pago; no puede ser futura.", true); return; }
         if (StockShortages.Count > 0) { var shortage = StockShortages[0]; SetMessage($"Faltan {shortage.Missing} unidades de {shortage.Product}: quieres registrar {shortage.Requested} y el inventario tiene {shortage.Physical}.", true); return; }
         if (string.IsNullOrWhiteSpace(_receiver)) { SetMessage("Indica quién recibió el pedido.", true); return; }
         if (_receivedPayment && _paymentAmount <= 0) { SetMessage("Indica el monto recibido.", true); return; }
@@ -387,14 +399,14 @@ else
         _saving = true;
         if (_evidence is not null && !await UploadEvidenceAsync(_evidence)) { _saving = false; return; }
         var lines = _complete.Select(x => new CompleteLine(x.Key, x.Value.Sale, x.Value.Replacement, x.Value.Tasting)).ToList();
-        var result = await Service.CompleteAsync(new(_detail.Id, _detail.Version, Guid.NewGuid().ToString("N"), _receiver, lines, 0, null, null, false), _userId);
+        var result = await Service.CompleteAsync(new(_detail.Id, _detail.Version, Guid.NewGuid().ToString("N"), _receiver, lines, 0, null, null, false, DeliveryDates.ToUtc(_deliveryDateLocal.Value)), _userId);
         if (!result.Succeeded) { _saving = false; await FinishAsync(result); return; }
         if (_receivedPayment)
         {
             var receivable = (await Service.ReceivablesAsync()).FirstOrDefault(x => x.OrderId == _detail.OrderId);
             if (receivable is null) { _saving = false; SetMessage("La entrega fue confirmada, pero todavía no existe un saldo cobrable para registrar el pago.", true); await ReloadAsync(); return; }
             await using var stream = _paymentEvidence!.OpenReadStream(10 * 1024 * 1024);
-            var payment = await Service.RegisterPaymentAsync(new(_detail.OrderId, receivable.Version, Guid.NewGuid().ToString("N"), _paymentAmount, _paymentMethod, null, true, false, DateTimeOffset.UtcNow, _paymentNotes, stream, _paymentEvidence.Name, _paymentEvidence.ContentType, _paymentEvidence.Size, _detail.Id), _userId);
+            var payment = await Service.RegisterPaymentAsync(new(_detail.OrderId, receivable.Version, Guid.NewGuid().ToString("N"), _paymentAmount, _paymentMethod, null, true, false, DeliveryDates.ToUtc(_paymentDateLocal!.Value), _paymentNotes, stream, _paymentEvidence.Name, _paymentEvidence.ContentType, _paymentEvidence.Size, _detail.Id), _userId);
             if (!payment.Succeeded) { _saving = false; SetMessage($"Entrega confirmada, pero no se pudo registrar el pago: {string.Join(" ", payment.Errors)}", true); await ReloadAsync(); return; }
         }
         _saving = false;
