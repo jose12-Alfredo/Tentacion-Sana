@@ -1,14 +1,12 @@
 @page "/app/cuentas-por-cobrar"
 @layout AdminLayout
-@rendermode InteractiveServer
+@rendermode @(new InteractiveServerRenderMode(prerender: false))
 @attribute [Authorize(Policy=AppPolicies.ManageFinance)]
 @inject IReceivablesService AccountService
 @inject IDeliveryService DeliveryService
-@inject IDeliveryEvidenceService DeliveryEvidenceService
 @inject AuthenticationStateProvider Auth
 @inject IJSRuntime JS
 @inject ILogger<Receivables> Logger
-@implements IAsyncDisposable
 
 <PageTitle>Cuentas por cobrar | Tentaci&oacute;n Sana</PageTitle>
 
@@ -84,7 +82,7 @@ else
                                 <strong data-label="Pedido">#@order.OrderNumber</strong><span data-label="Sucursal">@order.Branch</span><span data-label="Entrega">@(order.DeliveredAtUtc?.ToLocalTime().ToString("dd/MM/yyyy") ?? "Sin fecha")</span>
                                 <span data-label="Total">@Money(order.Total)</span><span data-label="Pagado">@Money(order.Paid)</span><strong data-label="Saldo" class="balance-value">@Money(order.Balance)</strong>
                                 <span data-label="Antig&uuml;edad" class="age @AgeClass(order)">@order.AgeDays d&iacute;as</span><span data-label="Estado"><b class="status-pill @order.Status.ToLowerInvariant()">@StatusText(order.Status)</b></span>
-                                <span data-label="Evidencias" class="evidence-count">@if (order.DeliveryEvidenceCount > 0) { <button type="button" class="evidence-view-button" @onclick="() => OpenDeliveryBoletasAsync(order)">@(order.DeliveryEvidenceCount == 1 ? "Ver boleta" : $"Ver boletas ({order.DeliveryEvidenceCount})")</button> } else { <span>Sin boleta</span> }<small>Pagos: @order.PaymentEvidenceCount</small></span>
+                                <span data-label="Evidencias" class="evidence-count">@if (order.DeliveryEvidenceCount > 0) { <a class="evidence-view-button" href="/media/orders/@order.OrderId/delivery-receipts" target="_blank" rel="noopener noreferrer" data-receipt-viewer data-receipt-title="Pedido #@order.OrderNumber · @order.Branch">@(order.DeliveryEvidenceCount == 1 ? "Ver boleta" : $"Ver boletas ({order.DeliveryEvidenceCount})")</a> } else { <span>Sin boleta</span><button type="button" class="evidence-view-button" @onclick="() => _attachBoletaOrder = order">Adjuntar boleta</button> }<small>Pagos: @order.PaymentEvidenceCount</small></span>
                             </div>
                         }
                         <div class="order-row totals"><strong>Totales</strong><span></span><span></span><strong>@Money(visibleOrders.Sum(x => x.Total))</strong><strong>@Money(visibleOrders.Sum(x => x.Paid))</strong><strong>@Money(visibleOrders.Sum(x => x.Balance))</strong><span></span><span></span><span></span></div>
@@ -119,7 +117,7 @@ else
                             <label class="scope-branch-title"><input type="checkbox" checked="@group.All(x => _selectedPaymentOrderIds.Contains(x.OrderId))" @onchange="e => SelectPaymentOrders(group.Select(x => x.OrderId), CheckboxValue(e))" /><span><strong>@group.Key.Customer · @group.Key.Branch</strong><small>@group.Count() pedidos · @Money(group.Sum(x => x.Balance))</small></span></label>
                             @foreach (var order in group)
                             {
-                                <div class="payment-order-with-evidence"><label class="payment-order-choice"><input type="checkbox" checked="@_selectedPaymentOrderIds.Contains(order.OrderId)" @onchange="e => SelectPaymentOrders([order.OrderId], CheckboxValue(e))" /><span><strong>#@order.OrderNumber · @Money(order.Balance) pendiente</strong><small>Entrega: @(order.DeliveredAtUtc is { } delivered ? DeliveryDates.LocalDate(delivered).ToString("dd/MM/yyyy") : "Sin fecha") · Total @Money(order.Total) · Pagado @Money(order.Paid)</small></span></label>@if (order.DeliveryEvidenceCount > 0) { <button type="button" class="evidence-view-button" @onclick="() => OpenDeliveryBoletasAsync(order)">@(order.DeliveryEvidenceCount == 1 ? "Ver boleta" : $"Ver boletas ({order.DeliveryEvidenceCount})")</button> } else { <small>Sin boleta</small> }</div>
+                                <div class="payment-order-with-evidence"><label class="payment-order-choice"><input type="checkbox" checked="@_selectedPaymentOrderIds.Contains(order.OrderId)" @onchange="e => SelectPaymentOrders([order.OrderId], CheckboxValue(e))" /><span><strong>#@order.OrderNumber · @Money(order.Balance) pendiente</strong><small>Entrega: @(order.DeliveredAtUtc is { } delivered ? DeliveryDates.LocalDate(delivered).ToString("dd/MM/yyyy") : "Sin fecha") · Total @Money(order.Total) · Pagado @Money(order.Paid)</small></span></label>@if (order.DeliveryEvidenceCount > 0) { <a class="evidence-view-button" href="/media/orders/@order.OrderId/delivery-receipts" target="_blank" rel="noopener noreferrer" data-receipt-viewer data-receipt-title="Pedido #@order.OrderNumber · @order.Branch">@(order.DeliveryEvidenceCount == 1 ? "Ver boleta" : $"Ver boletas ({order.DeliveryEvidenceCount})")</a> } else { <small>Sin boleta</small><button type="button" class="evidence-view-button" @onclick="() => _attachBoletaOrder = order">Adjuntar boleta</button> }</div>
                             }
                         </div>
                     }
@@ -225,83 +223,23 @@ else
     </section></div>
 }
 
-@if (_boletaOrder is { } boletaOrder)
+@if (_attachBoletaOrder is { } attachment)
 {
-    <div class="receivables-photo-overlay" @onclick="CloseBoletas" @onkeydown="BoletaKeyDown" tabindex="-1">
-        <section id="receivable-boleta-dialog" class="receivables-photo-dialog boleta-dialog" role="dialog" aria-modal="true" aria-labelledby="boleta-title" @onclick:stopPropagation>
-            <div><div><h2 id="boleta-title">Boleta · Pedido #@boletaOrder.OrderNumber</h2><p>@boletaOrder.Customer · @boletaOrder.Branch</p></div><button type="button" @onclick="CloseBoletas">Cerrar</button></div>
-            @if (_boletaLoading) { <p role="status">Cargando boleta…</p> }
-            @if (_boletaError is not null) { <p role="alert">@_boletaError</p><button type="button" @onclick="() => OpenDeliveryBoletasAsync(boletaOrder)">Reintentar</button> }
-            @if (_boletaUrl is not null)
-            {
-                <div class="boleta-image-area @(_boletaZoom ? "zoomed" : null)"><img src="@_boletaUrl" alt="Boleta del pedido @boletaOrder.OrderNumber, @boletaOrder.Branch" @onerror="BoletaImageFailed" /></div>
-                <div class="boleta-tools"><button type="button" @onclick="() => _boletaZoom = !_boletaZoom">@(_boletaZoom ? "Ajustar imagen" : "Ampliar")</button><a href="@_boletaUrl" target="_blank" rel="noopener noreferrer">Abrir imagen</a></div>
-            }
-            @if (_boletas.Count > 1)
-            {
-                <nav class="boleta-tools" aria-label="Fotos de entrega"><button type="button" disabled="@(_boletaLoading || _boletaIndex == 0)" @onclick="() => ShowBoletaAsync(_boletaIndex - 1)">Anterior</button><span>@(_boletaIndex + 1) de @_boletas.Count</span><button type="button" disabled="@(_boletaLoading || _boletaIndex == _boletas.Count - 1)" @onclick="() => ShowBoletaAsync(_boletaIndex + 1)">Siguiente</button></nav>
-            }
-        </section>
-    </div>
+    <div class="receivables-photo-overlay" @onclick="() => _attachBoletaOrder = null"><section class="receivables-photo-dialog" role="dialog" aria-modal="true" aria-labelledby="attach-boleta-title" @onclick:stopPropagation>
+        <div><div><h2 id="attach-boleta-title">Adjuntar boleta · Pedido #@attachment.OrderNumber</h2><p>@attachment.Customer · @attachment.Branch</p></div><button type="button" @onclick="() => _attachBoletaOrder = null">Cerrar</button></div>
+        <OrderDeliveryEvidenceEditor OrderId="@attachment.OrderId" OnSaved="ReceiptAttachmentSavedAsync" />
+    </section></div>
 }
 
 @code {
-    private IJSObjectReference? _boletaModule;
-    private bool _boletaFocusActive;
-    protected override async Task OnAfterRenderAsync(bool firstRender)
+    private ReceivableOrderItem? _attachBoletaOrder;
+    private async Task ReceiptAttachmentSavedAsync()
     {
-        var active = _boletaOrder is not null;
-        if (active == _boletaFocusActive) return;
-        try
-        {
-            _boletaModule ??= await JS.InvokeAsync<IJSObjectReference>("import", "./js/receivable-boletas.js");
-            await _boletaModule.InvokeVoidAsync("setActive", active);
-            _boletaFocusActive = active;
-        }
-        catch (JSDisconnectedException) { }
-    }
-    public async ValueTask DisposeAsync()
-    {
-        if (_boletaModule is null) return;
-        try { await _boletaModule.InvokeVoidAsync("setActive", false); await _boletaModule.DisposeAsync(); }
-        catch (JSDisconnectedException) { }
-    }
-    private ReceivableOrderItem? _boletaOrder;
-    private IReadOnlyList<EvidenceItem> _boletas = [];
-    private int _boletaIndex, _boletaRequest;
-    private bool _boletaLoading, _boletaZoom;
-    private string? _boletaUrl, _boletaError;
-    private void CloseBoletas() { _boletaRequest++; _boletaOrder = null; _boletaUrl = null; _boletaError = null; _boletas = []; _boletaZoom = false; }
-    private void BoletaKeyDown(KeyboardEventArgs e) { if (e.Key == "Escape") CloseBoletas(); }
-    private void BoletaImageFailed() { _boletaUrl = null; _boletaError = "No se pudo cargar la imagen. Puedes volver a intentarlo."; }
-    private async Task OpenDeliveryBoletasAsync(ReceivableOrderItem order)
-    {
-        var request = ++_boletaRequest;
-        _boletaOrder = order; _boletaLoading = true; _boletaUrl = null; _boletaError = null; _boletas = []; _boletaIndex = 0; _boletaZoom = false;
-        try
-        {
-            var evidence = await DeliveryService.GetOrderEvidenceAsync(order.OrderId);
-            if (request != _boletaRequest) return;
-            _boletas = evidence;
-            if (evidence.Count == 0) { _boletaError = "Este pedido no tiene boletas disponibles."; return; }
-            await ShowBoletaAsync(0);
-        }
-        catch (Exception ex) { if (request == _boletaRequest) { Logger.LogWarning(ex, "No se pudieron cargar las boletas del pedido {OrderId}", order.OrderId); _boletaError = "No se pudieron cargar las boletas. Intenta nuevamente."; } }
-        finally { if (request == _boletaRequest) _boletaLoading = false; }
-    }
-    private async Task ShowBoletaAsync(int index)
-    {
-        if (index < 0 || index >= _boletas.Count) return;
-        var request = _boletaRequest;
-        _boletaLoading = true; _boletaUrl = null; _boletaError = null; _boletaZoom = false; _boletaIndex = index;
-        try
-        {
-            var result = await DeliveryEvidenceService.GetSignedUrlAsync(_boletas[index].Id, await CurrentUserIdAsync());
-            if (request != _boletaRequest) return;
-            if (result.Succeeded) _boletaUrl = result.Url; else _boletaError = string.Join(" ", result.Errors);
-        }
-        catch (Exception ex) { if (request == _boletaRequest) { Logger.LogWarning(ex, "No se pudo abrir una boleta"); _boletaError = "No se pudo abrir la boleta. Intenta nuevamente."; } }
-        finally { if (request == _boletaRequest) _boletaLoading = false; }
+        _attachBoletaOrder = null;
+        await ReloadAsync();
+        if (_paymentPayer is not null && _paymentResult is null)
+            _paymentPayer = _overview?.ResponsibleParties.FirstOrDefault(x => x.ResponsiblePartyId == _paymentPayer.ResponsiblePartyId) ?? _paymentPayer;
+        SetMessage("Boleta adjuntada. Los saldos y pagos no se modificaron.", false);
     }
     private string _accountType = "All", _accountId = "All";
     private bool MatchesAccount(PayerAccountItem payer) => (_accountType == "All" || payer.AccountKind == _accountType) && (_accountId == "All" || payer.ResponsiblePartyId.ToString() == _accountId);

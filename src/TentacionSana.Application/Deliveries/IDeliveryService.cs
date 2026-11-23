@@ -26,6 +26,7 @@ public interface IDeliveryService
     Task<IReadOnlyList<ReceivableItem>> ReceivablesAsync(CancellationToken cancellationToken = default);
     Task<IReadOnlyList<PaymentHistoryItem>> PaymentsAsync(Guid orderId, CancellationToken cancellationToken = default);
     Task<IReadOnlyList<EvidenceItem>> GetOrderEvidenceAsync(Guid orderId, CancellationToken cancellationToken = default);
+    Task<IReadOnlyList<ReceiptDeliveryItem>> ReceiptDeliveriesAsync(Guid orderId, CancellationToken cancellationToken = default);
     Task<SignedEvidenceResult> GetPaymentEvidenceUrlAsync(Guid evidenceId, Guid userId, CancellationToken cancellationToken = default);
     Task<EvidenceContentResult> GetPaymentEvidenceContentAsync(Guid evidenceId, Guid userId, CancellationToken cancellationToken = default);
 }
@@ -50,6 +51,7 @@ public sealed record PlanDeliveryRouteCommand(DateOnly PromisedDate, Guid Driver
 public sealed record ReorderDeliveryRouteCommand(Guid RouteId, int ExpectedVersion, IReadOnlyList<Guid> DeliveryIds);
 public sealed record RegisterPaymentCommand(Guid OrderId, int ExpectedReceivableVersion, string IdempotencyKey, decimal Amount, string PaymentMethod, string? ExternalReference, bool CollectedByCurrentUser, bool IsAdvancePayment = false, DateTimeOffset? PaymentDateUtc = null, string? Notes = null, Stream? EvidenceContent = null, string? EvidenceFileName = null, string? EvidenceContentType = null, long EvidenceLength = 0, Guid? DeliveryId = null);
 public sealed record UploadEvidenceCommand(Guid DeliveryId, Stream Content, string FileName, string ContentType, long Length);
+public sealed record ReceiptDeliveryItem(Guid Id, string Status, DateTimeOffset ScheduledAtUtc, DateTimeOffset? CompletedAtUtc, int EvidenceCount);
 public sealed record DeliveryResult(bool Succeeded, Guid? Id, IReadOnlyList<string> Errors);
 public sealed record EvidenceResult(bool Succeeded, Guid? Id, IReadOnlyList<string> Errors);
 public sealed record SignedEvidenceResult(bool Succeeded, string? Url, IReadOnlyList<string> Errors);

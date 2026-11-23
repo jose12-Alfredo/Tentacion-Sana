@@ -211,6 +211,8 @@ public sealed class DeliveryService(ApplicationDbContext db, TimeProvider clock,
             if (delivery is null) return Fail("La entrega no existe.");
             if (!await CanOperateAsync(delivery, userId, cancellationToken)) return Fail("Solo el repartidor asignado puede operar esta entrega.");
             if (delivery.Version != command.ExpectedVersion) return Conflict();
+            if (!await db.DeliveryEvidence.AnyAsync(x => x.DeliveryId == delivery.Id && x.IsActive, cancellationToken))
+                return Fail("Debes adjuntar la foto de la boleta de esta entrega antes de confirmarla.");
             var order = await db.Orders.Include(x => x.Lines).Include(x => x.Reservations).Include(x => x.StatusHistory).SingleAsync(x => x.Id == delivery.OrderId, cancellationToken);
             var delivered = command.Lines.GroupBy(x => x.DeliveryLineId).ToDictionary(
                 x => x.Key,
@@ -935,6 +937,13 @@ public sealed class DeliveryService(ApplicationDbContext db, TimeProvider clock,
             .OrderByDescending(evidence => evidence.UploadedAtUtc)
             .Select(evidence => new EvidenceItem(evidence.Id, evidence.FileName, evidence.UploadedAtUtc))
             .ToListAsync(cancellationToken);
+
+    public async Task<IReadOnlyList<ReceiptDeliveryItem>> ReceiptDeliveriesAsync(Guid orderId, CancellationToken cancellationToken = default) =>
+        await db.Deliveries.AsNoTracking().Where(x => x.OrderId == orderId && x.Status != DeliveryStatus.Cancelled &&
+                db.Orders.Any(o => o.Id == orderId && o.ArchivedAtUtc == null))
+            .OrderBy(x => x.CompletedAtUtc ?? x.ScheduledAtUtc)
+            .Select(x => new ReceiptDeliveryItem(x.Id, x.Status.ToString(), x.ScheduledAtUtc, x.CompletedAtUtc,
+                db.DeliveryEvidence.Count(e => e.DeliveryId == x.Id && e.IsActive))).ToListAsync(cancellationToken);
 
     public async Task<SignedEvidenceResult> GetPaymentEvidenceUrlAsync(Guid evidenceId,Guid userId,CancellationToken cancellationToken=default)
     {

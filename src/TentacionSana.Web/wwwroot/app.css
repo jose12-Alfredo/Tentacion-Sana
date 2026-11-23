@@ -10,6 +10,8 @@
     --font-utility: Consolas, 'Courier New', monospace;
 }
 
+.native-receipt-dialog{width:min(70rem,calc(100vw - 2rem));height:min(90dvh,60rem);max-width:calc(100vw - 2rem);max-height:94dvh;padding:1rem;border:1px solid #bdcdb8;border-radius:.75rem;background:#fff;color:#24332a;box-shadow:0 16px 55px #0004;overflow:hidden}.native-receipt-dialog[open]{display:flex;flex-direction:column;gap:.7rem}.native-receipt-dialog::backdrop{background:#102316a6}.native-receipt-dialog header{display:flex;align-items:center;justify-content:space-between;gap:1rem}.native-receipt-dialog header strong{overflow-wrap:anywhere}.native-receipt-dialog button,.native-receipt-dialog>a{min-height:2.75rem;padding:.5rem .75rem;border:1px solid #b8ccb9;border-radius:.4rem;background:#fff;color:#245d29;font:inherit;font-weight:700;cursor:pointer}.native-receipt-dialog iframe{width:100%;flex:1 1 auto;min-height:0;border:0}.native-receipt-dialog>a{align-self:center;text-align:center}.native-receipt-dialog :is(button,a):focus-visible{outline:3px solid #267537;outline-offset:3px}
+
 html { max-width: 100%; overflow-x: clip; scroll-behavior: smooth; }
 
 html, body {

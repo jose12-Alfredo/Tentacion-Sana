@@ -147,7 +147,7 @@ else
                                 }
                                 <label>Fecha real de entrega según boleta *<input type="date" @bind="_deliveryDateLocal" max="@DeliveryDates.LocalDate(DateTimeOffset.UtcNow).ToString("yyyy-MM-dd")" /><small>Elige cuándo se entregó, aunque estés registrándolo hoy. No modifica la fecha prometida.</small></label>
                                 <label>Recibió<input @bind="_receiver" placeholder="Nombre de quien recibe" /></label>
-                                <label class="file-field">Evidencia de entrega <small>JPG, PNG o WebP; máximo 10 MB</small><InputFile OnChange="SelectEvidence" accept="image/jpeg,image/png,image/webp" /></label>
+                                <label class="file-field">Foto de la boleta de entrega * <small>@(_detail.Evidence.Count > 0 ? "Ya hay una boleta adjunta. Puedes añadir otra foto." : "Obligatoria para confirmar. JPG, PNG o WebP; máximo 10 MB.")</small><InputFile OnChange="SelectEvidence" accept="image/jpeg,image/png,image/webp" /></label>
 
                                 <div class="collection-card">
                                     <label class="payment-toggle"><input type="checkbox" @bind="_receivedPayment" /> ¿Recibió pago durante la entrega?</label>
@@ -390,6 +390,7 @@ else
     private async Task CompleteAsync()
     {
         if (_detail is null || _saving) return;
+        if (_evidence is null && _detail.Evidence.Count == 0) { SetMessage("Adjunta la foto de la boleta antes de confirmar la entrega.", true); return; }
         if (_deliveryDateLocal is null || _deliveryDateLocal.Value.Date > DeliveryDates.LocalDate(DateTimeOffset.UtcNow)) { SetMessage("Indica la fecha real de entrega según la boleta; no puede ser futura.", true); return; }
         if (_receivedPayment && (_paymentDateLocal is null || _paymentDateLocal.Value.Date > DeliveryDates.LocalDate(DateTimeOffset.UtcNow))) { SetMessage("Indica la fecha real del pago; no puede ser futura.", true); return; }
         if (StockShortages.Count > 0) { var shortage = StockShortages[0]; SetMessage($"Faltan {shortage.Missing} unidades de {shortage.Product}: quieres registrar {shortage.Requested} y el inventario tiene {shortage.Physical}.", true); return; }
@@ -397,7 +398,11 @@ else
         if (_receivedPayment && _paymentAmount <= 0) { SetMessage("Indica el monto recibido.", true); return; }
         if (_receivedPayment && _paymentEvidence is null) { SetMessage("Debes adjuntar un respaldo para registrar este pago.", true); return; }
         _saving = true;
-        if (_evidence is not null && !await UploadEvidenceAsync(_evidence)) { _saving = false; return; }
+        if (_evidence is not null)
+        {
+            if (!await UploadEvidenceAsync(_evidence)) { _saving = false; return; }
+            _evidence = null;
+        }
         var lines = _complete.Select(x => new CompleteLine(x.Key, x.Value.Sale, x.Value.Replacement, x.Value.Tasting)).ToList();
         var result = await Service.CompleteAsync(new(_detail.Id, _detail.Version, Guid.NewGuid().ToString("N"), _receiver, lines, 0, null, null, false, DeliveryDates.ToUtc(_deliveryDateLocal.Value)), _userId);
         if (!result.Succeeded) { _saving = false; await FinishAsync(result); return; }
@@ -419,7 +424,11 @@ else
         if (_detail is null) return false;
         await using var stream = file.OpenReadStream(10 * 1024 * 1024);
         var uploaded = await EvidenceService.UploadAsync(new(_detail.Id, stream, file.Name, file.ContentType, file.Size), _userId);
-        if (uploaded.Succeeded) return true;
+        if (uploaded.Succeeded)
+        {
+            _detail = _detail with { Evidence = [.. _detail.Evidence, new EvidenceItem(uploaded.Id!.Value, file.Name, DateTimeOffset.UtcNow)] };
+            return true;
+        }
         SetMessage(string.Join(" ", uploaded.Errors), true);
         return false;
     }

@@ -14,6 +14,7 @@ using TentacionSana.Domain.Catalog;
 using TentacionSana.Domain.Customers;
 using TentacionSana.Domain.Orders;
 using TentacionSana.Application.Deliveries;
+using TentacionSana.Domain.Deliveries;
 using TentacionSana.Application.Customers;
 using TentacionSana.Application.Finance;
 using TentacionSana.Application.Security;
@@ -225,6 +226,9 @@ if (args.Contains("--check-phase6", StringComparer.OrdinalIgnoreCase))
         if (!started.Succeeded) throw new InvalidOperationException(string.Join(" ", started.Errors));
         db.ChangeTracker.Clear();
         detail = await deliveries.GetAsync(deliveryId.Value) ?? throw new InvalidOperationException();
+        // Evidencia simulada exclusivamente para este pedido temporal de verificación.
+        db.DeliveryEvidence.Add(DeliveryEvidence.Create(detail.Id, $"tests/phase6/{suffix}", "boleta-prueba.jpg", "jpg", 1, userId, DateTimeOffset.UtcNow));
+        await db.SaveChangesAsync();
         var completeCommand = new CompleteDeliveryCommand(detail.Id, detail.Version, completeKey, "Receptor fase 6", detail.Lines.Select(x => new CompleteLine(x.Id, x.PendingQuantity)).ToList(), 0, "Cash", null, false, DateTimeOffset.UtcNow);
         await using var concurrentScope1 = app.Services.CreateAsyncScope();
         await using var concurrentScope2 = app.Services.CreateAsyncScope();
@@ -249,7 +253,11 @@ if (args.Contains("--check-phase6", StringComparer.OrdinalIgnoreCase))
         db.Payments.RemoveRange(await db.Payments.Where(x => x.OrderId == order.Id).ToListAsync());
         db.Receivables.RemoveRange(await db.Receivables.Where(x => x.OrderId == order.Id).ToListAsync());
         db.Sales.RemoveRange(await db.Sales.Where(x => x.OrderId == order.Id).ToListAsync());
-        if (deliveryId is not null) db.Deliveries.RemoveRange(await db.Deliveries.Where(x => x.Id == deliveryId).ToListAsync());
+        if (deliveryId is not null)
+        {
+            db.DeliveryEvidence.RemoveRange(await db.DeliveryEvidence.Where(x => x.DeliveryId == deliveryId).ToListAsync());
+            db.Deliveries.RemoveRange(await db.Deliveries.Where(x => x.Id == deliveryId).ToListAsync());
+        }
         db.IdempotencyRecords.RemoveRange(await db.IdempotencyRecords.Where(x => x.Operation == "CompleteDelivery" && x.Key == completeKey).ToListAsync());
         await db.SaveChangesAsync();
         db.Orders.RemoveRange(await db.Orders.Where(x => x.Id == order.Id).ToListAsync()); await db.SaveChangesAsync();
@@ -448,6 +456,8 @@ app.MapGet("/media/delivery-points/{pointId:guid}", GetDeliveryPointImageAsync)
     .RequireAuthorization(AppPolicies.InternalAccess);
 app.MapGet("/media/delivery-evidence/{evidenceId:guid}", GetDeliveryEvidenceAsync)
     .RequireAuthorization(AppPolicies.InternalAccess);
+app.MapGet("/media/orders/{orderId:guid}/delivery-receipts", GetOrderReceiptGalleryAsync)
+    .RequireAuthorization(AppPolicies.InternalAccess);
 app.MapGet("/media/payment-evidence/{evidenceId:guid}", GetPaymentEvidenceAsync)
     .RequireAuthorization(AppPolicies.InternalAccess);
 app.MapGet("/media/cash-evidence/{movementId:guid}", GetCashEvidenceAsync)
@@ -470,6 +480,17 @@ static async Task<IResult> GetDeliveryEvidenceAsync(Guid evidenceId, ClaimsPrinc
     if (userId is null) return Results.Unauthorized();
     var evidence = await evidenceService.GetContentAsync(evidenceId, userId.Value, cancellationToken);
     return EvidenceFile(evidence.Succeeded, evidence.Content, evidence.ContentType);
+}
+
+static async Task<IResult> GetOrderReceiptGalleryAsync(Guid orderId, HttpContext context, ApplicationDbContext db, IDeliveryService deliveries, CancellationToken cancellationToken)
+{
+    context.Response.Headers.CacheControl = "no-store";
+    var order = await db.Orders.AsNoTracking().Where(x => x.Id == orderId && x.ArchivedAtUtc == null)
+        .Select(x => new { x.Number, Customer = db.Customers.Where(c => c.Id == x.CustomerId).Select(c => c.Name).Single(),
+            Point = db.DeliveryPoints.Where(p => p.Id == x.DeliveryPointId).Select(p => p.Label).SingleOrDefault() }).SingleOrDefaultAsync(cancellationToken);
+    if (order is null) return Results.NotFound();
+    var evidence = await deliveries.GetOrderEvidenceAsync(orderId, cancellationToken);
+    return Results.Content(TentacionSana.Web.ReceiptGalleryPage.Render(orderId, order.Number, order.Customer, order.Point, evidence), "text/html; charset=utf-8");
 }
 
 static async Task<IResult> GetPaymentEvidenceAsync(Guid evidenceId, ClaimsPrincipal user, IDeliveryService deliveryService, CancellationToken cancellationToken)

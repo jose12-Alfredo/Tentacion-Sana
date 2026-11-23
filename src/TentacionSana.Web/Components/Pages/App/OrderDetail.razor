@@ -62,6 +62,7 @@ else
                 <p><strong>@selectedDelivery.Lines.Sum(x => x.PendingQuantity) unidades por registrar</strong> · Valor de venta: Bs @DeliverySaleTotal.ToString("N2")</p>
                 <label>Fecha real de entrega según boleta <span class="required">*</span><input type="date" @bind="_deliveryDateLocal" max="@DeliveryDates.LocalDate(DateTimeOffset.UtcNow).ToString("yyyy-MM-dd")" /><small>Puede ser una fecha pasada. La fecha prometida no se modifica.</small></label>
                 <label>Persona que recibió <span class="required">*</span><input @bind="_deliveryReceiver" @bind:event="oninput" autocomplete="name" /></label>
+                <label>Foto de la boleta de entrega <span class="required">*</span><InputFile OnChange="e => _deliveryReceiptFile = e.File" accept="image/jpeg,image/png,image/webp" /><small>@(selectedDelivery.Evidence.Count > 0 ? "Ya hay boleta adjunta. Puedes añadir otra foto." : "Obligatoria para confirmar. JPG, PNG o WebP; máximo 10 MB.")</small></label>
                 <p class="workflow-note">¿La cantidad no coincide o la entrega fue parcial? Ajusta las cantidades antes de confirmar o registra la entrega parcial desde Mis entregas.</p>
                 @if (_deliveryDateLocal is { } deliveryDate) { <p role="status">Se registrará la entrega del <strong>@deliveryDate.ToString("dd/MM/yyyy")</strong>. La carga en el sistema quedará registrada por separado.</p> }
                 <div class="workflow-actions"><button type="button" class="workflow-secondary" @onclick="CloseDeliveryForm" disabled="@_saving">Cancelar</button><button type="button" @onclick="CompleteDeliveryAsync" disabled="@(_saving || _deliveryDateLocal is null || string.IsNullOrWhiteSpace(_deliveryReceiver))">@(_saving ? "Registrando…" : "Confirmar unidades entregadas")</button></div>
@@ -248,6 +249,7 @@ else
                         <div class="form-grid">
                             <label>Fecha real de entrega según boleta <span class="required">*</span><input type="date" @bind="_completedLocal" max="@DeliveryDates.LocalDate(DateTimeOffset.UtcNow).ToString("yyyy-MM-dd")" /></label>
                             <label>Persona receptora <span class="required">*</span><input @bind="_historicalReceiver" placeholder="Nombre de quien recibió" /></label>
+                            <label>Foto de la boleta <span class="required">*</span><InputFile OnChange="e => _historicalEvidence = e.File" accept="image/jpeg,image/png,image/webp" /><small>Obligatoria. JPG, PNG o WebP; máximo 10 MB.</small></label>
                         </div>
                         <button class="historical-action" @onclick="RegisterCompletedOrderAsync" disabled="@(!CanRegisterCompletedOrder)">Registrar pedido ya realizado</button>
                     </details>
@@ -290,6 +292,7 @@ else
             <section class="side-card payment-card"><header><h2>Pago</h2><span class="badge @PaymentClass(_order.PaymentStatus)">@PaymentText(_order.PaymentStatus)</span></header><dl><div><dt>Productos</dt><dd>Bs @ProductSubtotal.ToString("N2")</dd></div><div><dt>Envío</dt><dd>Bs @_form.DeliveryFee.ToString("N2")</dd></div><div><dt>Total</dt><dd>Bs @OrderTotal.ToString("N2")</dd></div><div><dt>Pagado</dt><dd class="paid">Bs @_order.Paid.ToString("N2")</dd></div><div><dt>Saldo</dt><dd class="pending">Bs @_order.Balance.ToString("N2")</dd></div><div><dt>Estado</dt><dd>@PaymentText(_order.PaymentStatus)</dd></div><div><dt>Método</dt><dd>@MethodText(_order.PaymentMethod)</dd></div></dl>@if (_payments.Count > 0) { <h3>Historial de pagos</h3><ul class="payment-history">@foreach (var payment in _payments) { <li><span>@payment.PaymentDateUtc.ToLocalTime().ToString("dd/MM/yyyy · HH:mm") · @MethodText(payment.Method)</span><strong>Bs @payment.Amount.ToString("N2")</strong>@if (payment.EvidenceId != Guid.Empty) { <button class="link-button" @onclick="() => OpenPaymentEvidence(payment.EvidenceId)">Ver comprobante</button> }</li> }</ul> }@if (_paymentEvidenceUrl is not null) { <a class="panel-link" href="@_paymentEvidenceUrl" target="_blank">Abrir comprobante ↗</a> }</section>
             @if (_order.Status != "Cancelled" && _order.Balance > 0) { <AuthorizeView Policy="@AppPolicies.ManageFinance"><Authorized><details class="side-card payment-entry"><summary>Registrar pago</summary><p>El respaldo es obligatorio.</p><label>Monto<input type="number" min="0.01" max="@_order.Balance" step="0.01" @bind="_paymentAmount" /></label><label>Método<select @bind="_paymentMethod"><option value="Qr">QR</option><option value="Cash">Efectivo</option></select></label><label>Fecha<input type="date" @bind="_paymentDate" /></label><label>Respaldo obligatorio<InputFile OnChange="e => _paymentEvidence = e.File" accept="image/jpeg,image/png,image/webp" /></label><label>Observación<input @bind="_paymentNotes" /></label><button @onclick="RegisterPaymentAsync">Guardar pago</button></details></Authorized></AuthorizeView> }
             <section class="side-card delivery-card"><header><h2>Entrega</h2></header><dl><div><dt>Fecha prometida</dt><dd>@(_order.PromisedAtUtc?.ToLocalTime().ToString("dd/MM/yyyy") ?? "Sin definir")</dd></div><div><dt>Sucursal</dt><dd>@(_order.DeliveryPoint ?? "Sin asignar")</dd></div><div><dt>Contacto</dt><dd>@(_order.Contact ?? "Sin asignar")</dd></div><div><dt>Repartidor</dt><dd>@(_order.Driver ?? "Sin asignar")</dd></div><div><dt>Estado</dt><dd>@DeliveryText(_order.DeliveryStatus)</dd></div></dl>@if (!string.IsNullOrWhiteSpace(SelectedPoint?.Location)) { <a class="panel-link location-panel-link" href="@SelectedPoint.Location" target="_blank" rel="noopener noreferrer">Abrir ubicación ↗</a> }@if (_order.DeliveryStatus == "InRoute") { <button class="panel-link return-delivery-action" @onclick="ReturnDeliveryToPendingAsync">Volver a pendiente de salida</button> }@if (_order.Status is "Confirmed" or "InPreparation" or "Ready") { <a class="panel-link" href="/app/entregas">Organizar en Entregas →</a> }</section>
+            <details class="side-card payment-entry"><summary>Adjuntar boleta de entrega</summary><OrderDeliveryEvidenceEditor OrderId="@OrderId" OnSaved="ReloadEvidenceAsync" /></details>
             @if (_deliveryEvidence.Count > 0)
             {
                 <section class="side-card"><h2>Fotos de entrega</h2><ul class="payment-history">@foreach (var evidence in _deliveryEvidence) { <li><span>@evidence.UploadedAtUtc.ToLocalTime().ToString("dd/MM/yyyy · HH:mm")</span><button type="button" class="link-button" @onclick="() => OpenDeliveryEvidence(evidence.Id)">Ver foto</button></li> }</ul></section>
@@ -345,6 +348,7 @@ else
     private string _cancelReason = "", _revisionReason = "", _lineRevisionReason = "", _paymentMethod = "Qr", _paymentNotes = "";
     private string? _pointImageUrl, _paymentEvidenceUrl, _deliveryEvidenceUrl;
     private IBrowserFile? _paymentEvidence;
+    private IBrowserFile? _deliveryReceiptFile, _historicalEvidence;
     private decimal _paymentAmount;
     private DateTime _paymentDate = DateTime.Today;
     private DateTime? _completedLocal;
@@ -373,7 +377,7 @@ else
         ? SelectedRevisionLine?.StandardUnitPrice ?? 0
         : _products.FirstOrDefault(x => x.Id == _revisionProductId)?.CurrentPrice ?? 0;
     private bool CanConfirm => IsDraft && _order!.Lines.Count > 0 && _form.PromisedLocal is not null;
-    private bool CanRegisterCompletedOrder => CanConfirm && _completedLocal is { } completed && completed.Date <= DeliveryDates.LocalDate(DateTimeOffset.UtcNow) && !string.IsNullOrWhiteSpace(_historicalReceiver);
+    private bool CanRegisterCompletedOrder => CanConfirm && _completedLocal is { } completed && completed.Date <= DeliveryDates.LocalDate(DateTimeOffset.UtcNow) && !string.IsNullOrWhiteSpace(_historicalReceiver) && _historicalEvidence is not null;
     private OrderOption? SelectedCustomer => _customers.FirstOrDefault(x => x.Id == _form.CustomerId);
     private OrderPointOption? SelectedPoint => SelectedCustomer?.DeliveryPoints.FirstOrDefault(x => x.Id == _form.DeliveryPointId);
     private OrderSubOption? SelectedContact => SelectedCustomer?.Contacts.FirstOrDefault(x => x.Id == _form.ContactId);
@@ -414,7 +418,7 @@ else
     private async Task OpenDeliveryAsync()
     {
         if (_saving || !CanRegisterDelivery) return;
-        _saving = true; CloseLineEditor(); CloseDateCorrection(); CloseDeliveryForm(); _showDeliveryForm = true; _deliveryReceiver = ""; _deliveryDateLocal = null; _deliveryKey = Guid.NewGuid().ToString("N");
+        _saving = true; CloseLineEditor(); CloseDateCorrection(); CloseDeliveryForm(); _showDeliveryForm = true; _deliveryReceiver = ""; _deliveryReceiptFile = null; _deliveryDateLocal = null; _deliveryKey = Guid.NewGuid().ToString("N");
         try
         {
             var items = await DeliveryService.ListAsync();
@@ -434,9 +438,18 @@ else
     {
         if (_saving || SelectedDelivery is not { } delivery || string.IsNullOrWhiteSpace(_deliveryReceiver)) return;
         if (_deliveryDateLocal is null || _deliveryDateLocal.Value.Date > DeliveryDates.LocalDate(DateTimeOffset.UtcNow)) { _deliveryErrors.Clear(); _deliveryErrors.Add("Indica la fecha real de entrega según la boleta; no puede ser futura."); return; }
+        if (_deliveryReceiptFile is null && delivery.Evidence.Count == 0) { _deliveryErrors.Clear(); _deliveryErrors.Add("Adjunta la foto de la boleta antes de confirmar la entrega."); return; }
         _saving = true; _deliveryErrors.Clear();
         try
         {
+            if (_deliveryReceiptFile is { } receipt)
+            {
+                await using var stream = receipt.OpenReadStream(10 * 1024 * 1024);
+                var upload = await DeliveryEvidenceService.UploadAsync(new(delivery.Id, stream, receipt.Name, receipt.ContentType, receipt.Size), await UserId());
+                if (!upload.Succeeded) { _deliveryErrors.AddRange(upload.Errors); return; }
+                _deliveries = _deliveries.Select(x => x.Id == delivery.Id ? x with { Evidence = [.. x.Evidence, new EvidenceItem(upload.Id!.Value, receipt.Name, DateTimeOffset.UtcNow)] } : x).ToList();
+                _deliveryReceiptFile = null;
+            }
             var lines = delivery.Lines.Where(x => x.PendingQuantity > 0).Select(x => new CompleteLine(x.Id, x.PendingSaleQuantity, x.PendingReplacementQuantity, x.PendingTastingQuantity)).ToList();
             var result = await DeliveryService.CompleteAsync(new(delivery.Id, delivery.Version, _deliveryKey, _deliveryReceiver, lines, 0, null, null, false, DeliveryDates.ToUtc(_deliveryDateLocal.Value)), await UserId());
             if (!result.Succeeded) { _deliveryErrors.AddRange(result.Errors); return; }
@@ -568,7 +581,24 @@ else
         catch { _actionErrors.Add("No se pudo confirmar el pedido. Intenta nuevamente."); }
         finally { _saving = false; }
     }
-    private async Task RegisterCompletedOrderAsync() { if (!CanRegisterCompletedOrder) { _errors.Clear(); _errors.Add("Agrega un producto, define la fecha prometida y completa la fecha real de entrega según boleta con la persona receptora."); return; } var userId = await UserId(); var completedAt = DeliveryDates.ToUtc(_completedLocal!.Value); await Handle(await Service.RegisterCompletedOrderAsync(OrderId, _order!.Version, new(_form.CustomerId, _form.DeliveryPointId, _form.ContactId, _form.PayerId, UtcDate(_form.PromisedLocal), _form.Notes, _form.DeliveryFee), completedAt, _historicalReceiver, userId), false); }
+    private async Task ReloadEvidenceAsync() { await LoadAsync(); _message = "Boleta guardada correctamente."; }
+    private async Task RegisterCompletedOrderAsync()
+    {
+        if (_saving) return;
+        if (!CanRegisterCompletedOrder) { _errors.Clear(); _errors.Add("Completa productos, fecha real, persona receptora y foto obligatoria de la boleta."); return; }
+        _saving = true; _errors.Clear();
+        try
+        {
+            var file = _historicalEvidence!;
+            await using var stream = file.OpenReadStream(10 * 1024 * 1024);
+            var result = await Service.RegisterCompletedOrderAsync(OrderId, _order!.Version,
+                new(_form.CustomerId, _form.DeliveryPointId, _form.ContactId, _form.PayerId, UtcDate(_form.PromisedLocal), _form.Notes, _form.DeliveryFee),
+                DeliveryDates.ToUtc(_completedLocal!.Value), _historicalReceiver, await UserId(), evidence: new(stream, file.Name, file.ContentType, file.Size));
+            await Handle(result, false);
+        }
+        catch (Exception ex) { LoggerFactory.CreateLogger("OrderDetail").LogError(ex, "No se pudo registrar el pedido histórico {OrderId}", OrderId); _errors.Add("No se pudo confirmar el registro. Recarga el pedido para comprobar su estado antes de intentar otra vez."); }
+        finally { _saving = false; }
+    }
     private Task<OrderOperationResult> SaveDraftAsync(Guid userId) => Service.ConfigureDraftAsync(OrderId, _order!.Version, new(_form.CustomerId, _form.DeliveryPointId, _form.ContactId, _form.PayerId, UtcDate(_form.PromisedLocal), _form.Notes, _form.DeliveryFee), userId);
     private async Task CancelAsync() => await Handle(await Service.CancelAsync(OrderId, _order!.Version, _cancelReason, await UserId()), false);
     private async Task ReviseConfigurationAsync()

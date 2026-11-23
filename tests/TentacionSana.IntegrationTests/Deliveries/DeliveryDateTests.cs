@@ -173,6 +173,7 @@ public sealed class DeliveryDateTests
             order.Reservations[0].Allocate(stock.Reserve(10));
             var delivery = Delivery.Create(order.Id, user, Now, [(line.Id, 10)], user, Now);
             db.Customers.Add(customer); db.Products.Add(product); db.Orders.Add(order); db.Deliveries.Add(delivery); db.ProductStockBalances.Add(stock);
+            db.DeliveryEvidence.Add(DeliveryEvidence.Create(delivery.Id, "test/receipt", "boleta.jpg", "jpg", 3, user, Now));
             db.ProductionBatches.Add(ProductionBatch.Create("TEST", product.Id, null, Actual.AddDays(-1), 20, 0, 5m, user));
             await db.SaveChangesAsync(); db.ChangeTracker.Clear();
             return new Fixture { Db = db, Service = new DeliveryService(db, new FixedClock(), Options.Create(new CloudinaryOptions()), null!, null!), UserId = user, OrderId = order.Id, DeliveryId = delivery.Id, DeliveryLineId = delivery.Lines[0].Id };

@@ -1,0 +1,63 @@
+@inject IDeliveryService DeliveryService
+@inject IDeliveryEvidenceService EvidenceService
+@inject AuthenticationStateProvider Auth
+@inject ILogger<OrderDeliveryEvidenceEditor> Logger
+
+<section class="receipt-editor" aria-label="Adjuntar boleta de entrega">
+    @if (_loading) { <p role="status">Cargando entregas del pedido…</p> }
+    else if (_deliveries.Count == 0) { <p>El pedido todavía no tiene una entrega disponible. Organiza primero su entrega.</p> }
+    else
+    {
+        <p>Adjunta la foto de la boleta correspondiente a esta entrega. Esto no modifica cantidades, fechas ni pagos.</p>
+        <fieldset disabled="@_saving">
+            <label>Entrega<select @bind="_deliveryId" @bind:after="SelectionChanged">@foreach (var delivery in _deliveries) { <option value="@delivery.Id">@DeliveryDates.LocalDate(delivery.CompletedAtUtc ?? delivery.ScheduledAtUtc).ToString("dd/MM/yyyy") · @(delivery.EvidenceCount == 0 ? "Sin boleta" : $"{delivery.EvidenceCount} foto(s)")</option> }</select></label>
+            <label>Foto de la boleta *<InputFile @key="_deliveryId" OnChange="e => { _file = e.File; _error = null; }" accept="image/jpeg,image/png,image/webp" /><small>JPG, PNG o WebP; máximo 10 MB.</small></label>
+            <button type="button" @onclick="SaveAsync" disabled="@(_saving || _file is null)">@(_saving ? "Subiendo boleta…" : "Guardar boleta")</button>
+        </fieldset>
+    }
+    @if (_error is not null) { <p class="receipt-error" role="alert">@_error</p> }
+    @if (_message is not null) { <p role="status">@_message</p> }
+</section>
+
+@code {
+    [Parameter] public Guid OrderId { get; set; }
+    [Parameter] public EventCallback OnSaved { get; set; }
+    private IReadOnlyList<ReceiptDeliveryItem> _deliveries = [];
+    private Guid? _deliveryId;
+    private Guid? _loadedOrderId;
+    private IBrowserFile? _file;
+    private bool _loading, _saving;
+    private string? _error, _message;
+    protected override async Task OnParametersSetAsync()
+    {
+        if (_loadedOrderId != OrderId) { _loadedOrderId = OrderId; _deliveryId = null; _file = null; _message = null; _deliveries = []; }
+        _loading = true; _error = null;
+        try
+        {
+            _deliveries = await DeliveryService.ReceiptDeliveriesAsync(OrderId);
+            if (!_deliveries.Any(x => x.Id == _deliveryId)) _deliveryId = (_deliveries.FirstOrDefault(x => x.EvidenceCount == 0) ?? _deliveries.FirstOrDefault())?.Id;
+        }
+        catch (Exception ex) { Logger.LogWarning(ex, "No se pudieron consultar entregas del pedido {OrderId}", OrderId); _error = "No se pudieron cargar las entregas. Cierra y vuelve a abrir esta sección."; }
+        finally { _loading = false; }
+    }
+    private void SelectionChanged() { _file = null; _error = null; _message = null; }
+    private async Task SaveAsync()
+    {
+        if (_saving || _file is null || _deliveryId is null) return;
+        if (_file.Size is <= 0 or > 10 * 1024 * 1024 || _file.ContentType.ToLowerInvariant() is not ("image/jpeg" or "image/png" or "image/webp")) { _error = "Selecciona una imagen JPG, PNG o WebP de hasta 10 MB."; return; }
+        _saving = true; _error = null; _message = null;
+        try
+        {
+            var state = await Auth.GetAuthenticationStateAsync();
+            var userId = Guid.Parse(state.User.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)!.Value);
+            await using var stream = _file.OpenReadStream(10 * 1024 * 1024);
+            var result = await EvidenceService.UploadAsync(new(_deliveryId.Value, stream, _file.Name, _file.ContentType, _file.Size), userId);
+            if (!result.Succeeded) { _error = string.Join(" ", result.Errors); return; }
+            _file = null; _message = "Boleta guardada correctamente.";
+            await OnParametersSetAsync();
+            await OnSaved.InvokeAsync();
+        }
+        catch (Exception ex) { Logger.LogError(ex, "No se pudo adjuntar la boleta del pedido {OrderId}", OrderId); _error = "No se pudo confirmar la subida. Actualiza las boletas del pedido antes de intentar nuevamente."; }
+        finally { _saving = false; }
+    }
+}

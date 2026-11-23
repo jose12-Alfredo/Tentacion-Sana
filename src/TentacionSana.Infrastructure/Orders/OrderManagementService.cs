@@ -3,6 +3,7 @@ using Microsoft.AspNetCore.Identity;
 using System.Text.Json;
 using TentacionSana.Application.Orders;
 using TentacionSana.Application.Customers;
+using TentacionSana.Application.Deliveries;
 using TentacionSana.Application.Security;
 using TentacionSana.Domain.Orders;
 using TentacionSana.Domain.Deliveries;
@@ -16,7 +17,7 @@ using TentacionSana.Infrastructure.Persistence;
 
 namespace TentacionSana.Infrastructure.Orders;
 
-public sealed class OrderManagementService(ApplicationDbContext db, TimeProvider clock, UserManager<ApplicationUser> users, IDeliveryPointImageService pointImages) : IOrderManagementService
+public sealed class OrderManagementService(ApplicationDbContext db, TimeProvider clock, UserManager<ApplicationUser> users, IDeliveryPointImageService pointImages, IDeliveryEvidenceService? deliveryEvidence = null) : IOrderManagementService
 {
     public async Task<OrderOperationResult> CreateDraftAsync(Guid customerId, Guid userId, CancellationToken ct = default)
     {
@@ -93,11 +94,34 @@ public sealed class OrderManagementService(ApplicationDbContext db, TimeProvider
         catch(DbUpdateException){return Fail("No se pudo confirmar el pedido en la base de datos. Intenta nuevamente.");}
     }
 
-    public async Task<OrderOperationResult> RegisterCompletedOrderAsync(Guid id,int version,OrderConfiguration configuration,DateTimeOffset completedAtUtc,string receiverName,Guid user,CancellationToken ct=default)
+    public async Task<OrderOperationResult> RegisterCompletedOrderAsync(Guid id,int version,OrderConfiguration configuration,DateTimeOffset completedAtUtc,string receiverName,Guid user,HistoricalDeliveryEvidence? evidence=null,CancellationToken ct=default)
+    {
+        if (evidence is null) return Fail("Adjunta la foto de la boleta antes de registrar el pedido ya realizado.");
+        if (evidence.Length is <= 0 or > 10 * 1024 * 1024 || evidence.ContentType.ToLowerInvariant() is not ("image/jpeg" or "image/png" or "image/webp"))
+            return Fail("La boleta debe ser una imagen JPG, PNG o WebP de hasta 10 MB.");
+        if (deliveryEvidence is null) return Fail("El servicio de boletas no está disponible.");
+        await using var buffer = new MemoryStream();
+        var chunk = new byte[81920];
+        int read;
+        while ((read = await evidence.Content.ReadAsync(chunk, ct)) > 0)
+        {
+            if (buffer.Length + read > 10 * 1024 * 1024) return Fail("La boleta supera el tamaño máximo de 10 MB.");
+            await buffer.WriteAsync(chunk.AsMemory(0, read), ct);
+        }
+        if (buffer.Length != evidence.Length) return Fail("La foto de la boleta no se cargó completa. Vuelve a seleccionarla.");
+        return await db.Database.CreateExecutionStrategy().ExecuteAsync(async () =>
+        {
+            db.ChangeTracker.Clear();
+            buffer.Position = 0;
+            return await RegisterCompletedOrderTransactionalAsync(id, version, configuration, completedAtUtc, receiverName, user, evidence with { Content = buffer }, ct);
+        });
+    }
+
+    private async Task<OrderOperationResult> RegisterCompletedOrderTransactionalAsync(Guid id,int version,OrderConfiguration configuration,DateTimeOffset completedAtUtc,string receiverName,Guid user,HistoricalDeliveryEvidence evidence,CancellationToken ct)
     {
         configuration = await ResolvePointPayerAsync(configuration, ct);
         if(!await IsAdministrator(user)) return Fail("Solo una persona administradora puede registrar un pedido ya realizado.");
-        if(completedAtUtc>clock.GetUtcNow()) return Fail("La fecha de un pedido ya realizado no puede ser futura.");
+        if(completedAtUtc==default||completedAtUtc>clock.GetUtcNow()) return Fail("Indica la fecha real de entrega; no puede ser futura.");
         if(string.IsNullOrWhiteSpace(receiverName)) return Fail("La persona receptora es obligatoria.");
 
         await using var transaction=await db.Database.BeginTransactionAsync(ct);
@@ -187,7 +211,13 @@ public sealed class OrderManagementService(ApplicationDbContext db, TimeProvider
                 db.Receivables.Add(receivable);
             }
 
-            Audit("HistoricalOrderCompleted",order.Id,user,clock.GetUtcNow(),"Pedido registrado como ya realizado.");
+            // La entrega debe existir dentro de esta transacción antes de adjuntar su
+            // evidencia. Si la subida falla, se revierten venta, stock y entrega.
+            await db.SaveChangesAsync(ct);
+            var upload = await deliveryEvidence!.UploadAsync(new(delivery.Id, evidence.Content, evidence.FileName, evidence.ContentType, evidence.Length), user, ct);
+            if (!upload.Succeeded || !await db.DeliveryEvidence.AnyAsync(x => x.DeliveryId == delivery.Id && x.IsActive, ct))
+                throw new InvalidOperationException(upload.Succeeded ? "No se pudo vincular la boleta a la entrega." : string.Join(" ", upload.Errors));
+            Audit("HistoricalOrderCompleted",order.Id,user,clock.GetUtcNow(),"Pedido registrado como ya realizado con boleta.");
             await db.SaveChangesAsync(ct);
             await transaction.CommitAsync(ct);
             return Ok(order.Id);

@@ -7,7 +7,7 @@ public interface IOrderManagementService
     Task<OrderOperationResult> AddLineAsync(Guid orderId, int expectedVersion, OrderLineCommand command, Guid userId, CancellationToken cancellationToken = default);
     Task<OrderOperationResult> RemoveLineAsync(Guid orderId, Guid lineId, int expectedVersion, Guid userId, CancellationToken cancellationToken = default);
     Task<OrderOperationResult> ConfirmAsync(Guid orderId, int expectedVersion, Guid userId, CancellationToken cancellationToken = default);
-    Task<OrderOperationResult> RegisterCompletedOrderAsync(Guid orderId, int expectedVersion, OrderConfiguration configuration, DateTimeOffset completedAtUtc, string receiverName, Guid userId, CancellationToken cancellationToken = default);
+    Task<OrderOperationResult> RegisterCompletedOrderAsync(Guid orderId, int expectedVersion, OrderConfiguration configuration, DateTimeOffset completedAtUtc, string receiverName, Guid userId, HistoricalDeliveryEvidence? evidence = null, CancellationToken cancellationToken = default);
     Task<OrderOperationResult> CancelAsync(Guid orderId, int expectedVersion, string reason, Guid userId, CancellationToken cancellationToken = default);
     Task<OrderOperationResult> DeleteDraftAsync(Guid orderId, int expectedVersion, Guid userId, CancellationToken cancellationToken = default);
     Task<OrderOperationResult> ArchiveAsync(Guid orderId, int expectedVersion, string reason, Guid userId, CancellationToken cancellationToken = default);
@@ -23,6 +23,7 @@ public interface IOrderManagementService
 }
 
 public sealed record OrderConfiguration(Guid CustomerId, Guid? DeliveryPointId, Guid? ContactId, Guid? PaymentResponsiblePartyId, DateTimeOffset? PromisedAtUtc, string? Notes, decimal DeliveryFee = 0);
+public sealed record HistoricalDeliveryEvidence(Stream Content, string FileName, string ContentType, long Length);
 public sealed record OrderLineCommand(Guid ProductId, int SaleQuantity, int ReplacementQuantity, int TastingQuantity, decimal SoldUnitPrice, string? DiscountReason, string? ReplacementReason, string? ReplacementNotes, string? TastingReason = null, string? TastingNotes = null);
 public sealed record ConfirmedLineCommand(int SaleQuantity, int ReplacementQuantity, int TastingQuantity, decimal SoldUnitPrice, string? DiscountReason, string? ReplacementReason, string? ReplacementNotes, string? TastingReason, string? TastingNotes, string Reason, Guid? ProductId = null, bool AdditionalUnitsAlreadyDelivered = false);
 public sealed record OrderOperationResult(bool Succeeded, Guid? Id, IReadOnlyList<string> Errors, string? ErrorCode = null);
