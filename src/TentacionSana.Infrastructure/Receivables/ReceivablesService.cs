@@ -9,6 +9,7 @@ using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using TentacionSana.Application.Receivables;
+using TentacionSana.Application.Deliveries;
 using TentacionSana.Domain.Deliveries;
 using TentacionSana.Infrastructure.Auditing;
 using TentacionSana.Infrastructure.Idempotency;
@@ -272,9 +273,12 @@ public sealed class ReceivablesService(
         var selected = selectedOrderIds?.Distinct().ToHashSet();
         return eligibleOrders
             .Where(x => selected is null || selected.Contains(x.OrderId))
-            .OrderBy(x => x.Customer)
-            .ThenBy(x => x.Branch)
+            .OrderBy(x => x.DeliveredAtUtc is null)
+            .ThenBy(x => x.DeliveredAtUtc is { } date ? DeliveryDates.LocalDate(date) : DateTime.MaxValue)
             .ThenBy(x => x.OrderNumber)
+            .ThenBy(x => x.Customer)
+            .ThenBy(x => x.Branch)
+            .ThenBy(x => x.OrderId)
             .ToList();
     }
 
@@ -312,7 +316,8 @@ public sealed class ReceivablesService(
         {
             items.AddRange(await db.DeliveryEvidence.AsNoTracking()
                 .Where(x => x.IsActive && db.Deliveries.Any(d => d.Id == x.DeliveryId && orderIds.Contains(d.OrderId)))
-                .Select(x => new EvidenceSource(db.Deliveries.Where(d => d.Id == x.DeliveryId).Select(d => d.OrderId).First(), x.PublicId, x.Format, x.FileName, x.UploadedAtUtc, "BOLETA DE ENTREGA", 1))
+                .Select(x => new EvidenceSource(db.Deliveries.Where(d => d.Id == x.DeliveryId).Select(d => d.OrderId).First(), x.PublicId, x.Format, x.FileName,
+                    db.Deliveries.Where(d => d.Id == x.DeliveryId).Select(d => d.CompletedAtUtc).First() ?? x.UploadedAtUtc, "BOLETA DE ENTREGA", 1))
                 .ToListAsync(cancellationToken));
         }
         if (command.IncludePaymentEvidence || command.IncludePartialPayments)
@@ -324,7 +329,7 @@ public sealed class ReceivablesService(
                 .ToListAsync(cancellationToken);
             foreach (var group in payments.GroupBy(x => x.payment.Id))
             {
-                var payment = group.OrderBy(x => orders.Single(order => order.OrderId == x.allocation.OrderId).OrderNumber).First();
+                var payment = group.OrderBy(x => orderIds.IndexOf(x.allocation.OrderId)).First();
                 var order = orders.Single(x => x.OrderId == payment.allocation.OrderId);
                 var partial = group.Any(x => x.allocation.Amount < orders.Single(orderItem => orderItem.OrderId == x.allocation.OrderId).Total);
                 if (!command.IncludePaymentEvidence && !(command.IncludePartialPayments && partial)) continue;
@@ -337,7 +342,8 @@ public sealed class ReceivablesService(
         var result = new List<AccountStatementEvidence>();
         var errors = new List<string>();
         var numberByOrder = orders.ToDictionary(x => x.OrderId, x => x.OrderNumber);
-        foreach (var source in items.OrderBy(x => numberByOrder[x.OrderId]).ThenBy(x => x.SortOrder).ThenBy(x => x.AtUtc))
+        var positionByOrder = orderIds.Select((id, index) => (id, index)).ToDictionary(x => x.id, x => x.index);
+        foreach (var source in items.OrderBy(x => positionByOrder[x.OrderId]).ThenBy(x => x.SortOrder).ThenBy(x => x.AtUtc).ThenBy(x => x.FileName))
         {
             try
             {

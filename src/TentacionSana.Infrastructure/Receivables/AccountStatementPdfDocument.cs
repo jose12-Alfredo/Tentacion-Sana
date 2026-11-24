@@ -2,6 +2,7 @@ using QuestPDF.Fluent;
 using QuestPDF.Helpers;
 using QuestPDF.Infrastructure;
 using TentacionSana.Application.Receivables;
+using TentacionSana.Application.Deliveries;
 using System.Globalization;
 
 namespace TentacionSana.Infrastructure.Receivables;
@@ -47,13 +48,28 @@ internal static class AccountStatementPdfDocument
         return BuildDocument(model).GenerateImages(new ImageGenerationSettings { RasterDpi = 120 }).ToList();
     }
 
-    private static Document BuildDocument(AccountStatementPdfModel model) =>
-        Document.Create(document =>
+    internal static AccountStatementPdfModel InChronologicalOrder(AccountStatementPdfModel model)
+    {
+        var orders = ReceivablesService.SelectStatementOrders(model.Orders, null);
+        var positions = orders.Select((order, index) => (order.OrderNumber, index)).ToDictionary(x => x.OrderNumber, x => x.index);
+        return model with
+        {
+            Orders = orders,
+            Evidence = model.Evidence.OrderBy(x => positions.GetValueOrDefault(x.OrderNumber, int.MaxValue))
+                .ThenBy(x => x.Type == "BOLETA DE ENTREGA" ? 0 : 1).ThenBy(x => x.AtUtc).ToList()
+        };
+    }
+
+    private static Document BuildDocument(AccountStatementPdfModel source)
+    {
+        var model = InChronologicalOrder(source);
+        return Document.Create(document =>
         {
             document.Page(page => ComposeSummary(page, model));
             if (model.ReportType == "History" && model.Movements.Count > 0) document.Page(page => ComposeMovements(page, model));
             foreach (var evidence in model.Evidence) document.Page(page => ComposeEvidence(page, model, evidence));
         });
+    }
 
     private static void ComposeSummary(PageDescriptor page, AccountStatementPdfModel model)
     {
@@ -71,7 +87,7 @@ internal static class AccountStatementPdfDocument
             row.ConstantItem(135).AlignRight().Column(column =>
             {
                 column.Item().Text(model.ReportNumber).SemiBold().FontColor(Green);
-                column.Item().PaddingTop(3).Text(model.GeneratedAtUtc.ToLocalTime().ToString("dd/MM/yyyy HH:mm", CultureInfo.InvariantCulture));
+                column.Item().PaddingTop(3).Text(model.GeneratedAtUtc.ToOffset(DeliveryDates.BusinessOffset).ToString("dd/MM/yyyy HH:mm", CultureInfo.InvariantCulture));
                 column.Item().Text($"Generado por {model.GeneratedBy}").FontSize(8).FontColor(Muted);
             });
         });
@@ -106,6 +122,7 @@ internal static class AccountStatementPdfDocument
                 });
             }
 
+            column.Item().Text("Pedidos ordenados por fecha real de entrega, del más antiguo al más reciente.").FontSize(8).FontColor(Muted);
             column.Item().Table(table =>
             {
                 table.ColumnsDefinition(columns =>
@@ -122,7 +139,7 @@ internal static class AccountStatementPdfDocument
                 {
                     BodyCell(table.Cell(), $"#{order.OrderNumber}", true);
                     BodyCell(table.Cell(), order.Branch);
-                    BodyCell(table.Cell(), order.DeliveredAtUtc?.ToLocalTime().ToString("dd/MM/yyyy", CultureInfo.InvariantCulture) ?? "Sin fecha");
+                    BodyCell(table.Cell(), order.DeliveredAtUtc?.ToOffset(DeliveryDates.BusinessOffset).ToString("dd/MM/yyyy", CultureInfo.InvariantCulture) ?? "Sin fecha");
                     BodyCell(table.Cell(), Money(order.Total)); BodyCell(table.Cell(), Money(order.Paid));
                     BodyCell(table.Cell(), Money(order.Balance), order.Balance > 0);
                     BodyCell(table.Cell(), StatusText(order.Status));
@@ -181,7 +198,7 @@ internal static class AccountStatementPdfDocument
             });
             foreach (var movement in model.Movements)
             {
-                BodyCell(table.Cell(), movement.AtUtc.ToLocalTime().ToString("dd/MM/yyyy", CultureInfo.InvariantCulture));
+                BodyCell(table.Cell(), movement.AtUtc.ToOffset(DeliveryDates.BusinessOffset).ToString("dd/MM/yyyy", CultureInfo.InvariantCulture));
                 BodyCell(table.Cell(), $"#{movement.OrderNumber}", true); BodyCell(table.Cell(), movement.Method == "Qr" ? "QR" : "Efectivo");
                 BodyCell(table.Cell(), Money(movement.Amount)); BodyCell(table.Cell(), Money(movement.BalanceAfter), movement.BalanceAfter > 0);
                 BodyCell(table.Cell(), movement.Notes ?? "-");
@@ -206,7 +223,7 @@ internal static class AccountStatementPdfDocument
             {
                 column.Item().Text($"PEDIDO #{evidence.OrderNumber}").FontSize(15).Bold();
                 column.Item().PaddingTop(2).Text(evidence.Type).FontSize(11).SemiBold().FontColor(Green);
-                column.Item().Text(evidence.AtUtc.ToLocalTime().ToString("dd/MM/yyyy HH:mm", CultureInfo.InvariantCulture)).FontColor(Muted);
+                column.Item().Text($"{(evidence.Type == "BOLETA DE ENTREGA" ? "Fecha de entrega" : "Fecha de pago")}: {evidence.AtUtc.ToOffset(DeliveryDates.BusinessOffset).ToString("dd/MM/yyyy", CultureInfo.InvariantCulture)}").FontColor(Muted);
             });
             row.ConstantItem(135).AlignRight().Text(model.ReportNumber).FontSize(8).FontColor(Muted);
         });
