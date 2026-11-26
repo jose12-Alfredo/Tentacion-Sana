@@ -25,6 +25,7 @@ else
             <span><strong>@_order.Customer</strong>@if (_order.DeliveryPoint is not null) { <text> · @_order.DeliveryPoint</text> }</span>
         </div>
         <span class="badge status-@_order.Status.ToLowerInvariant()">@OrderStatusText</span>
+        @if (_order.Status == "Cancelled") { <button type="button" @onclick="() => _showDeliveryNote = true">Consultar notas emitidas</button> }
     </header>
 
     @if (_errors.Count > 0)
@@ -38,6 +39,7 @@ else
         <section class="order-workflow" aria-label="Acciones del pedido">
             <div><strong>@(_order.Status == "Delivered" ? "Entrega registrada" : "Ajusta el pedido y registra lo que se entregó")</strong><p>@(_order.Status == "Delivered" ? "Puedes consultar el cobro y corregir las cantidades con autorización administrativa." : "Si entregaste más unidades, cambia primero la cantidad de venta. El total se recalcula al guardar.")</p></div>
             <div class="workflow-actions">
+                <button type="button" class="workflow-secondary" @onclick="() => _showDeliveryNote = true" disabled="@_saving">Generar nota de entrega</button>
                 @if (CanEditConfirmedOrder) { <button type="button" class="workflow-secondary" @onclick="BeginQuantityEdit" disabled="@_saving">Ajustar cantidades</button> }
                 @if (CanRegisterDelivery) { <button type="button" @onclick="OpenDeliveryAsync" disabled="@_saving">Registrar entrega</button> }
                 @if (_canCorrectDelivered && _order.DeliveredAtUtc is not null) { <button type="button" class="workflow-secondary" @onclick="OpenDateCorrectionAsync" disabled="@_saving">Corregir fecha de entrega</button> }
@@ -310,7 +312,13 @@ else
     </section></div>
 }
 
+@if (_showDeliveryNote && _order is not null)
+{
+    <DeliveryNoteDialog OrderId="@OrderId" OrderNumber="@_order.Number" OnClose="() => _showDeliveryNote = false" />
+}
+
 @code {
+    private bool _showDeliveryNote;
     [Parameter] public Guid OrderId { get; set; }
     [SupplyParameterFromQuery(Name = "accion")] public string? RequestedAction { get; set; }
     private Guid? _actionOrderId;
@@ -362,7 +370,7 @@ else
     private decimal _revisionPrice;
     private string? _revisionDiscountReason, _revisionReplacementReason, _revisionReplacementNotes, _revisionTastingReason, _revisionTastingNotes;
     private static readonly string[] ReplacementReasons = ["Producto dañado", "Producto vencido", "Problema de conservación", "Error de entrega", "Producto defectuoso", "Acuerdo comercial", "Otro"];
-    private static readonly string[] TastingReasons = ["Degustación en punto de venta", "Muestra comercial", "Evento", "Influencer", "Promoción", "Prueba interna", "Otro"];
+    private static readonly string[] TastingReasons = ["Degustación en punto de venta", "Muestra comercial", "Evento", "Influencer", "Promoción", "Publicidad", "Prueba interna", "Otro"];
 
     private bool IsDraft => _order?.Status == "Draft";
     private bool _canCorrectDelivered;

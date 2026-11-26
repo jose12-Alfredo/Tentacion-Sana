@@ -139,6 +139,8 @@ public static class DependencyInjection
         services.AddScoped<IOperationsQueryService, OperationsQueryService>();
         services.AddScoped<ICustomerManagementService, CustomerManagementService>();
         services.AddScoped<IOrderManagementService, OrderManagementService>();
+        services.Configure<ThermalNoteOptions>(configuration.GetSection(ThermalNoteOptions.Section));
+        services.AddScoped<IDeliveryNoteService, DeliveryNoteService>();
         services.AddScoped<IInventoryService, InventoryService>();
         services.AddMemoryCache();
         services.AddHttpClient<LocationCoordinateResolver>(client =>

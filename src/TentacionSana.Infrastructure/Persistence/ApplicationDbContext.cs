@@ -34,6 +34,7 @@ public sealed class ApplicationDbContext(DbContextOptions<ApplicationDbContext> 
     public DbSet<DeliveryPoint> DeliveryPoints => Set<DeliveryPoint>();
     public DbSet<PaymentResponsibleParty> PaymentResponsibleParties => Set<PaymentResponsibleParty>();
     public DbSet<Order> Orders => Set<Order>();
+    public DbSet<DeliveryNote> DeliveryNotes => Set<DeliveryNote>();
     public DbSet<OrderLine> OrderLines => Set<OrderLine>();
     public DbSet<OrderStatusHistory> OrderStatusHistory => Set<OrderStatusHistory>();
     public DbSet<OrderChangeHistory> OrderChangeHistory => Set<OrderChangeHistory>();
@@ -222,6 +223,23 @@ public sealed class ApplicationDbContext(DbContextOptions<ApplicationDbContext> 
         builder.Entity<PaymentResponsibleParty>(entity => { entity.ToTable("PaymentResponsibleParties"); entity.HasKey(x => x.Id); entity.Property(x => x.Kind).HasConversion<string>().HasMaxLength(30); entity.Property(x => x.Label).HasMaxLength(120); entity.Property(x => x.Name).HasMaxLength(160).IsRequired(); entity.Property(x => x.Phone).HasMaxLength(40).IsRequired(); entity.Property(x => x.Email).HasMaxLength(256); entity.HasOne<CustomerContact>().WithMany().HasForeignKey(x => x.ContactId).OnDelete(DeleteBehavior.SetNull); entity.HasIndex(x => new { x.CustomerId, x.IsActive }); });
         builder.Entity<DeliveryPoint>(entity => { entity.ToTable("DeliveryPoints"); entity.HasKey(x => x.Id); entity.Property(x => x.Kind).HasConversion<string>().HasMaxLength(20); entity.Property(x => x.Label).HasMaxLength(120).IsRequired(); entity.Property(x => x.Address).HasMaxLength(500).IsRequired(); entity.Property(x => x.Reference).HasMaxLength(500); entity.Property(x => x.Location).HasMaxLength(1000); entity.Property(x => x.Notes).HasMaxLength(1500); entity.Property(x => x.ImagePublicId).HasMaxLength(300); entity.Property(x => x.ImageFormat).HasMaxLength(20); entity.Property(x => x.ImageFileName).HasMaxLength(255); entity.HasOne<CustomerContact>().WithMany().HasForeignKey(x => x.ContactId).OnDelete(DeleteBehavior.SetNull); entity.HasOne<PaymentResponsibleParty>().WithMany().HasForeignKey(x => x.PaymentResponsiblePartyId).OnDelete(DeleteBehavior.SetNull); });
         builder.HasSequence<long>("OrderNumberSequence").StartsAt(1001);
+        builder.HasSequence<long>("DeliveryNoteNumberSequence").StartsAt(1);
+        builder.Entity<DeliveryNote>(entity =>
+        {
+            entity.ToTable("DeliveryNotes"); entity.HasKey(x => x.Id);
+            entity.Property(x => x.Number).ValueGeneratedNever();
+            entity.HasIndex(x => x.Number).IsUnique();
+            entity.HasIndex(x => x.RequestId).IsUnique();
+            entity.HasIndex(x => new { x.OrderId, x.Fingerprint }).IsUnique();
+            entity.Property(x => x.Fingerprint).HasMaxLength(64).IsRequired();
+            entity.Property(x => x.Scope).HasMaxLength(30).IsRequired();
+            entity.Property(x => x.TemplateVersion).HasMaxLength(30).IsRequired();
+            entity.Property(x => x.SnapshotJson).HasColumnType("jsonb").IsRequired();
+            entity.Property(x => x.Pdf).IsRequired(); entity.Property(x => x.Png).IsRequired();
+            entity.HasOne<Order>().WithMany().HasForeignKey(x => x.OrderId).OnDelete(DeleteBehavior.Restrict);
+            entity.HasOne<Delivery>().WithMany().HasForeignKey(x => x.DeliveryId).OnDelete(DeleteBehavior.Restrict);
+            entity.HasOne<ApplicationUser>().WithMany().HasForeignKey(x => x.IssuedByUserId).OnDelete(DeleteBehavior.Restrict);
+        });
         builder.Entity<Order>(entity =>
         {
             entity.ToTable("Orders"); entity.HasKey(x => x.Id);

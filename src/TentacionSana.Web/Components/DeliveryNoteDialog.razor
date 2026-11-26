@@ -1,0 +1,163 @@
+@inject IDeliveryNoteService Notes
+@inject AuthenticationStateProvider Auth
+@inject IJSRuntime JS
+@inject ILogger<DeliveryNoteDialog> Logger
+@implements IAsyncDisposable
+
+<div class="thermal-backdrop" @onkeydown="KeyDown">
+    <section id="thermal-note-dialog" class="thermal-dialog" role="dialog" aria-modal="true" aria-labelledby="thermal-title">
+        <header><div><h2 id="thermal-title">Nota de entrega</h2><p>Pedido #@OrderNumber · papel de 58 mm</p></div><button type="button" class="thermal-close" @onclick="CloseAsync" disabled="@_busy" aria-label="Cerrar nota de entrega">Cerrar</button></header>
+        <div class="thermal-body">
+            @if (_context is not null)
+            {
+                <div class="thermal-controls">
+                    @if (_context.Scopes.Count > 0)
+                    {
+                        <label>Salida a documentar<select @bind="_scopeKey" @bind:after="PreviewAsync" disabled="@_busy">@foreach (var scope in _context.Scopes) { <option value="@(scope.DeliveryId?.ToString() ?? "order")">@scope.Label</option> }</select></label>
+                        <button type="button" @onclick="PreviewAsync" disabled="@_busy">Actualizar vista previa</button>
+                    }
+                    @if (_context.Issued.Count > 0)
+                    {
+                        <label>Consultar o reimprimir<select @bind="_historyKey" disabled="@_busy"><option value="">Selecciona una nota emitida</option>@foreach (var note in _context.Issued) { <option value="@note.Id">@note.Number · @note.IssuedAtUtc.ToOffset(DeliveryDates.BusinessOffset).ToString("dd/MM/yyyy HH:mm")</option> }</select></label>
+                        <button type="button" @onclick="LoadIssuedAsync" disabled="@(_busy || string.IsNullOrWhiteSpace(_historyKey))">Abrir original</button>
+                    }
+                </div>
+                @if (_context.Scopes.Count > 0)
+                {
+                    <label class="thermal-payment-option"><input type="checkbox" @bind="_showPaymentStatus" @bind:after="PreviewAsync" disabled="@(_busy || _issuedNumber is not null)" />Mostrar estado de pago en la nota</label>
+                }
+                @if (_context.Scopes.Count == 0 && _context.Issued.Count == 0) { <p>No hay cantidades verificables disponibles para generar una nota.</p> }
+            }
+            @if (_busy) { <p role="status">Preparando documento…</p> }
+            @if (_error is not null) { <p class="thermal-error" role="alert">@_error</p> }
+            @if (_content is not null)
+            {
+                <div class="thermal-document-status"><strong>@(_issuedNumber ?? "Vista previa · sin número definitivo")</strong><p>@(_issuedNumber is null ? "Revisa las cantidades antes de emitir. Esto no registra la entrega ni modifica inventario o cobros." : "Archivo original conservado. Descargar, compartir o reimprimir no crea otra numeración ni cambia el pedido.")</p></div>
+                @if (_content.PaymentWarning is { } paymentWarning) { <p class="thermal-payment-warning" role="status">@paymentWarning</p> }
+                @if (_warnings.Count > 0) { <details class="thermal-warnings"><summary>Información de formato y alcance</summary>@foreach (var warning in _warnings.Where(x => x != _content.PaymentWarning)) { <p>@warning</p> }</details> }
+                <p class="thermal-totals">@_content.SaleUnits venta · @_content.ReplacementUnits reposición · @_content.TastingUnits degustación · <strong>@_content.PhysicalUnits unidades físicas</strong> · Bs @_content.Total.ToString("N2")</p>
+                <div class="thermal-preview">@if (_imageUrl is not null) { <img src="@_imageUrl" alt="@($"Nota de entrega del pedido {OrderNumber}, {_issuedNumber ?? "vista previa"}")" /> } else { <p role="status">Preparando imagen monocromática…</p> }</div>
+            }
+        </div>
+        <footer>
+            <p class="thermal-client-status" data-note-status role="status">La impresión física se realiza con tu aplicación Android o un servicio de impresión compatible.</p>
+            <div class="thermal-file-actions">
+                <button type="button" data-note-download="pdf" disabled="@(!_filesReady || _busy)">Descargar PDF</button>
+                <button type="button" data-note-download="png" disabled="@(!_filesReady || _busy)">Descargar PNG</button>
+                <button type="button" data-note-share="png" disabled="@(!_filesReady || _busy)">Compartir PNG</button>
+                <button type="button" data-note-share="pdf" disabled="@(!_filesReady || _busy)">Compartir PDF</button>
+                <button type="button" data-note-print disabled="@(!_filesReady || _busy)">Abrir PDF / Imprimir</button>
+            </div>
+            @if (_content is not null && _issuedNumber is null) { <button type="button" class="thermal-issue" @onclick="IssueAsync" disabled="@(_busy || !_filesReady)">Emitir nota de entrega</button> }
+        </footer>
+    </section>
+</div>
+
+@code {
+    [Parameter] public Guid OrderId { get; set; }
+    [Parameter] public long OrderNumber { get; set; }
+    [Parameter] public EventCallback OnClose { get; set; }
+    private DeliveryNoteContext? _context;
+    private ThermalNoteContent? _content;
+    private DeliveryNotePreview? _preview;
+    private byte[] _pdf = [], _png = [];
+    private string _scopeKey = "order", _historyKey = "";
+    private string? _error, _issuedNumber, _imageUrl;
+    private IReadOnlyList<string> _warnings = [];
+    private Guid _userId, _requestId = Guid.NewGuid();
+    private bool _busy, _pendingPrepare, _filesReady, _showPaymentStatus;
+    private IJSObjectReference? _module;
+    private Guid? _loadedOrder;
+    private Guid? SelectedDeliveryId => Guid.TryParse(_scopeKey, out var id) ? id : null;
+    protected override async Task OnParametersSetAsync()
+    {
+        if (_loadedOrder == OrderId) return;
+        _loadedOrder = OrderId; _busy = true;
+        try
+        {
+            var state = await Auth.GetAuthenticationStateAsync();
+            _userId = Guid.Parse(state.User.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)!.Value);
+            var context = await Notes.GetContextAsync(OrderId, _userId);
+            if (!context.Succeeded) { _error = string.Join(" ", context.Errors); return; }
+            _context = context.Value!;
+            _scopeKey = _context.Scopes.FirstOrDefault()?.DeliveryId?.ToString() ?? "order";
+        }
+        catch (Exception ex) { ShowException(ex); }
+        finally { _busy = false; }
+        if (_context?.Scopes.Count > 0) await PreviewAsync();
+        else if (_context?.Issued.Count > 0) { _historyKey = _context.Issued[0].Id.ToString(); await LoadIssuedAsync(); }
+    }
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (!_pendingPrepare) return;
+        _pendingPrepare = false;
+        try
+        {
+            _module ??= await JS.InvokeAsync<IJSObjectReference>("import", "./js/thermal-notes.js");
+            using var pdfStream = new MemoryStream(_pdf, false); using var pngStream = new MemoryStream(_png, false);
+            using var pdfRef = new DotNetStreamReference(pdfStream); using var pngRef = new DotNetStreamReference(pngStream);
+            _imageUrl = await _module.InvokeAsync<string>("prepare", "thermal-note-dialog", pdfRef, pngRef, _issuedNumber ?? $"vista-previa-pedido-{OrderNumber}");
+            _filesReady = true;
+        }
+        catch (Exception ex) when (ex is JSException or JSDisconnectedException) { _error = "No se pudieron preparar los archivos en el navegador. Cierra y vuelve a abrir la nota."; }
+        StateHasChanged();
+    }
+    private async Task PreviewAsync()
+    {
+        if (_busy) return;
+        _busy = true; _filesReady = false; _error = null; _issuedNumber = null; _preview = null; _content = null; _imageUrl = null;
+        try
+        {
+            var result = await Notes.PreviewAsync(OrderId, SelectedDeliveryId, _userId, showPaymentStatus: _showPaymentStatus);
+            if (!result.Succeeded) { _error = string.Join(" ", result.Errors); return; }
+            _preview = result.Value!; _content = _preview.Content; _pdf = _preview.Pdf; _png = _preview.Png; _warnings = _preview.Warnings;
+            _requestId = Guid.NewGuid(); _pendingPrepare = true;
+        }
+        catch (Exception ex) { ShowException(ex); }
+        finally { _busy = false; }
+    }
+    private async Task IssueAsync()
+    {
+        if (_busy || _preview is null || _issuedNumber is not null) return;
+        _busy = true; _filesReady = false; _error = null;
+        try
+        {
+            var result = await Notes.IssueAsync(new(OrderId, SelectedDeliveryId, _preview.Fingerprint, _requestId, _showPaymentStatus), _userId);
+            if (!result.Succeeded) { _error = string.Join(" ", result.Errors); return; }
+            UseIssued(result.Value!);
+            var context = await Notes.GetContextAsync(OrderId, _userId);
+            if (context.Succeeded) _context = context.Value;
+        }
+        catch (Exception ex) { ShowException(ex); }
+        finally { _busy = false; if (_issuedNumber is null) _filesReady = true; }
+    }
+    private async Task LoadIssuedAsync()
+    {
+        if (_busy || !Guid.TryParse(_historyKey, out var noteId)) return;
+        _busy = true; _filesReady = false; _error = null;
+        try
+        {
+            var result = await Notes.GetIssuedAsync(noteId, _userId);
+            if (!result.Succeeded) { _error = string.Join(" ", result.Errors); return; }
+            UseIssued(result.Value!);
+        }
+        catch (Exception ex) { ShowException(ex); }
+        finally { _busy = false; }
+    }
+    private void UseIssued(DeliveryNoteFiles value)
+    {
+        _content = value.Content; _pdf = value.Pdf; _png = value.Png; _issuedNumber = value.Number;
+        _showPaymentStatus = value.Content.ShowPaymentStatus;
+        _warnings = ["Se conservan los datos y archivos originales de esta emisión. No se afirma que la impresión física haya terminado."];
+        _imageUrl = null; _pendingPrepare = true;
+    }
+    private void ShowException(Exception ex) { Logger.LogError(ex, "No se pudo preparar la nota del pedido {OrderId}", OrderId); _error = "No se pudo completar la operación documental. Si estabas emitiendo, vuelve a consultar las notas emitidas antes de reintentar. Comprueba que la migración documental esté instalada en este entorno."; }
+    private void KeyDown(KeyboardEventArgs e) { if (e.Key == "Escape" && !_busy) _ = CloseAsync(); }
+    private Task CloseAsync() => _busy ? Task.CompletedTask : OnClose.InvokeAsync();
+    public async ValueTask DisposeAsync()
+    {
+        if (_module is null) return;
+        try { await _module.InvokeVoidAsync("release"); await _module.DisposeAsync(); }
+        catch (Exception ex) when (ex is JSException or JSDisconnectedException) { Logger.LogDebug(ex, "Se cerró la conexión al liberar la nota"); }
+    }
+}
