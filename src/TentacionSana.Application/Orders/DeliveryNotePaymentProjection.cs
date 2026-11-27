@@ -12,7 +12,7 @@ public static class DeliveryNotePaymentProjection
             return (null, "Se omitió el estado de pago: la información de cobranza no permite verificar el importe cubierto de este documento.");
         if (confirmedAllocatedPayments >= orderTotal) return (null, null);
         if (confirmedAllocatedPayments == 0) return ("PENDIENTE DE PAGO", null);
-        if (coversWholeOrder) return ("PAGO PARCIAL", null);
+        if (coversWholeOrder) return ("PENDIENTE DE PAGO", null);
         return (null, "Se omitió el estado de pago: los cobros están aplicados al pedido y no permiten atribuir con fiabilidad el saldo a esta entrega parcial.");
     }
 }

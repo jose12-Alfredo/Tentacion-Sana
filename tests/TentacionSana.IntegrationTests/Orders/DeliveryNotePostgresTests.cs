@@ -33,6 +33,115 @@ public sealed class IsolatedPostgresFactAttribute : FactAttribute
 public sealed class DeliveryNotePostgresTests
 {
     [IsolatedPostgresFact]
+    public async Task BeforeDeliveryWithoutReceivableAutomaticallyShowsDebtAndRespectsManualHide()
+    {
+        await using var fixture = await Fixture.CreateAsync();
+        await using var db = fixture.Open();
+        Assert.Empty(await db.Receivables.ToListAsync()); Assert.Empty(await db.Deliveries.ToListAsync());
+        var before = await fixture.BusinessSnapshotAsync();
+        var automatic = await fixture.Service.PreviewAsync(fixture.OrderId, null, fixture.UserId, showPaymentStatus: null);
+        Assert.True(automatic.Succeeded, string.Join(" ", automatic.Errors));
+        Assert.True(automatic.Value!.Content.ShowPaymentStatus);
+        Assert.Equal("PENDIENTE DE PAGO", automatic.Value.Content.PaymentLabel);
+        Assert.Equal("78969873", automatic.Value.Content.CommercialPhone);
+        Assert.Equal("58mm-v2.2", automatic.Value.Content.TemplateVersion);
+        SaveSample("antes-confirmar-visible", automatic.Value, false);
+        var hidden = (await fixture.Service.PreviewAsync(fixture.OrderId, null, fixture.UserId, false)).Value!;
+        Assert.False(hidden.Content.ShowPaymentStatus); Assert.Null(hidden.Content.PaymentLabel);
+        SaveSample("antes-confirmar-oculto", hidden, false);
+        Assert.Equal(before, await fixture.BusinessSnapshotAsync());
+        await fixture.AddPaymentAsync(100, createReceivable: false);
+        var paidBefore = await fixture.BusinessSnapshotAsync();
+        var deposit = (await fixture.Service.PreviewAsync(fixture.OrderId, null, fixture.UserId, showPaymentStatus: null)).Value!;
+        Assert.True(deposit.Content.ShowPaymentStatus); Assert.Equal("PENDIENTE DE PAGO", deposit.Content.PaymentLabel);
+        SaveSample("antes-confirmar-abono", deposit, false);
+        Assert.Equal(paidBefore, await fixture.BusinessSnapshotAsync());
+        await fixture.AddPaymentAsync(165, createReceivable: false);
+        var covered = (await fixture.Service.PreviewAsync(fixture.OrderId, null, fixture.UserId, showPaymentStatus: null)).Value!;
+        Assert.False(covered.Content.ShowPaymentStatus); Assert.Null(covered.Content.PaymentLabel);
+        SaveSample("antes-confirmar-cubierto", covered, false);
+        Assert.Empty(await db.Receivables.ToListAsync());
+        var snapshot = await fixture.BusinessSnapshotAsync();
+        var issued = await fixture.Service.IssueAsync(new(fixture.OrderId, null, covered.Fingerprint, Guid.NewGuid(), covered.Content.ShowPaymentStatus), fixture.UserId);
+        Assert.True(issued.Succeeded, string.Join(" ", issued.Errors));
+        Assert.Equal(snapshot, await fixture.BusinessSnapshotAsync());
+    }
+
+    [IsolatedPostgresFact]
+    public async Task DirectLegacyPaymentsWithoutAllocationsOrReceivableAreNotIgnoredOrCountedTwice()
+    {
+        await using var fixture = await Fixture.CreateAsync();
+        await fixture.AddPaymentAsync(100, createReceivable: false, allocate: false);
+        var before = await fixture.BusinessSnapshotAsync();
+        var partial = (await fixture.Service.PreviewAsync(fixture.OrderId, null, fixture.UserId, showPaymentStatus: null)).Value!;
+        Assert.Equal("PENDIENTE DE PAGO", partial.Content.PaymentLabel);
+        Assert.Equal(before, await fixture.BusinessSnapshotAsync());
+        // Este segundo pago sí tiene aplicación; no se debe volver a sumar por Payment.OrderId.
+        await fixture.AddPaymentAsync(100, createReceivable: false);
+        var remaining = (await fixture.Service.PreviewAsync(fixture.OrderId, null, fixture.UserId, showPaymentStatus: null)).Value!;
+        Assert.True(remaining.Content.ShowPaymentStatus); Assert.Equal("PENDIENTE DE PAGO", remaining.Content.PaymentLabel);
+        await fixture.AddPaymentAsync(65, createReceivable: false, allocate: false);
+        var covered = (await fixture.Service.PreviewAsync(fixture.OrderId, null, fixture.UserId, showPaymentStatus: null)).Value!;
+        Assert.False(covered.Content.ShowPaymentStatus); Assert.Null(covered.Content.PaymentLabel);
+        await using var db = fixture.Open(); Assert.Empty(await db.Receivables.ToListAsync());
+    }
+
+    [IsolatedPostgresFact]
+    public async Task AfterConfirmedDeliveryUsesSamePendingLabelAndNeverChangesFinancialData()
+    {
+        await using var fixture = await Fixture.CreateAsync();
+        await using var db = fixture.Open();
+        var order = await db.Orders.Include(x => x.Lines).Include(x => x.StatusHistory).SingleAsync(x => x.Id == fixture.OrderId);
+        var priorHistory = order.StatusHistory.Select(x => x.Id).ToHashSet();
+        var line = order.Lines[0]; var now = DateTimeOffset.UtcNow;
+        var delivery = Delivery.Create(order.Id, fixture.UserId, now.AddDays(-1), [(line.Id, 15, 1, 2)], fixture.UserId, now.AddDays(-1));
+        delivery.Complete(new Dictionary<Guid, (int, int, int)> { [delivery.Lines[0].Id] = (15, 1, 2) }, "Receptor de prueba", fixture.UserId, now);
+        order.AdvanceTo(OrderStatus.InPreparation, "Estado de prueba", fixture.UserId, now);
+        order.AdvanceTo(OrderStatus.Ready, "Estado de prueba", fixture.UserId, now);
+        order.MarkDelivered(fixture.UserId, now);
+        db.OrderStatusHistory.AddRange(order.StatusHistory.Where(x => !priorHistory.Contains(x.Id)));
+        var receivable = Receivable.Create(order.Id, order.CustomerId, null); receivable.CorrectInvoice(265);
+        db.Receivables.Add(receivable); db.Deliveries.Add(delivery); await db.SaveChangesAsync();
+        var before = await fixture.BusinessSnapshotAsync();
+        var visible = (await fixture.Service.PreviewAsync(order.Id, delivery.Id, fixture.UserId, showPaymentStatus: null)).Value!;
+        Assert.True(visible.Content.ShowPaymentStatus); Assert.Equal("PENDIENTE DE PAGO", visible.Content.PaymentLabel);
+        Assert.Equal("RegisteredSummary", visible.Content.Scope); Assert.Equal(18, visible.Content.PhysicalUnits);
+        var storedCompletedAt = await db.Deliveries.AsNoTracking().Where(x => x.Id == delivery.Id).Select(x => x.CompletedAtUtc).SingleAsync();
+        Assert.Equal(storedCompletedAt, visible.Content.CompletedAtUtc);
+        SaveSample("despues-confirmar-visible", visible, true);
+        var hidden = (await fixture.Service.PreviewAsync(order.Id, delivery.Id, fixture.UserId, false)).Value!;
+        SaveSample("despues-confirmar-oculto", hidden, true);
+        Assert.Equal(before, await fixture.BusinessSnapshotAsync());
+        await fixture.AddPaymentAsync(100);
+        var deposit = (await fixture.Service.PreviewAsync(order.Id, delivery.Id, fixture.UserId, showPaymentStatus: null)).Value!;
+        Assert.Equal("PENDIENTE DE PAGO", deposit.Content.PaymentLabel); SaveSample("despues-confirmar-abono", deposit, true);
+        await fixture.AddPaymentAsync(165);
+        var covered = (await fixture.Service.PreviewAsync(order.Id, delivery.Id, fixture.UserId, showPaymentStatus: null)).Value!;
+        Assert.False(covered.Content.ShowPaymentStatus); Assert.Null(covered.Content.PaymentLabel);
+        SaveSample("despues-confirmar-cubierto", covered, true);
+    }
+
+    [IsolatedPostgresFact]
+    public async Task FreeOnlyAutomaticOptionIsOffAndCanStillBeIssued()
+    {
+        await using var fixture = await Fixture.CreateAsync(onlyFree: true);
+        var automatic = (await fixture.Service.PreviewAsync(fixture.OrderId, null, fixture.UserId, showPaymentStatus: null)).Value!;
+        Assert.False(automatic.Content.ShowPaymentStatus); Assert.Null(automatic.Content.PaymentLabel);
+        var result = await fixture.Service.IssueAsync(new(fixture.OrderId, null, automatic.Fingerprint, Guid.NewGuid(), false), fixture.UserId);
+        Assert.True(result.Succeeded, string.Join(" ", result.Errors));
+    }
+
+    private static void SaveSample(string name, DeliveryNotePreview preview, bool hasReceivable)
+    {
+        var output = Environment.GetEnvironmentVariable("TENTACION_THERMAL_SAMPLES");
+        if (string.IsNullOrWhiteSpace(output)) return;
+        Directory.CreateDirectory(output);
+        File.WriteAllBytes(Path.Combine(output, name + ".pdf"), preview.Pdf);
+        File.WriteAllBytes(Path.Combine(output, name + ".png"), preview.Png);
+        File.WriteAllText(Path.Combine(output, name + ".json"), JsonSerializer.Serialize(new { HasReceivable = hasReceivable, preview.Content }));
+    }
+
+    [IsolatedPostgresFact]
     public async Task OnlyFreeProductsNeverShowDebtEvenWhenAnExistingShippingFeeApplies()
     {
         await using var fixture = await Fixture.CreateAsync(onlyFree: true);
@@ -64,7 +173,7 @@ public sealed class DeliveryNotePostgresTests
         await fixture.AddPaymentAsync(100);
         var afterPayment = await fixture.BusinessSnapshotAsync();
         var partial = (await fixture.Service.PreviewAsync(fixture.OrderId, null, fixture.UserId, showPaymentStatus: true)).Value!;
-        Assert.Equal("PAGO PARCIAL", partial.Content.PaymentLabel);
+        Assert.Equal("PENDIENTE DE PAGO", partial.Content.PaymentLabel);
         var original = (await fixture.Service.GetIssuedAsync(issued.Value!.Id, fixture.UserId)).Value!;
         Assert.Equal("PENDIENTE DE PAGO", original.Content.PaymentLabel);
         Assert.True(original.Content.ShowPaymentStatus);
@@ -92,6 +201,11 @@ public sealed class DeliveryNotePostgresTests
         var uncertain = (await fixture.Service.PreviewAsync(order.Id, delivery.Id, fixture.UserId, showPaymentStatus: true)).Value!;
         Assert.Null(uncertain.Content.PaymentLabel); Assert.NotNull(uncertain.Content.PaymentWarning);
         Assert.Contains(uncertain.Content.PaymentWarning, uncertain.Warnings);
+        var automatic = (await fixture.Service.PreviewAsync(order.Id, delivery.Id, fixture.UserId, showPaymentStatus: null)).Value!;
+        Assert.False(automatic.Content.ShowPaymentStatus); Assert.Null(automatic.Content.PaymentLabel);
+        Assert.Contains(automatic.Warnings, x => x.Contains("entrega parcial", StringComparison.Ordinal));
+        var autoIssued = await fixture.Service.IssueAsync(new(order.Id, delivery.Id, automatic.Fingerprint, Guid.NewGuid(), false), fixture.UserId);
+        Assert.True(autoIssued.Succeeded, string.Join(" ", autoIssued.Errors));
         var issued = await fixture.Service.IssueAsync(new(order.Id, delivery.Id, uncertain.Fingerprint, Guid.NewGuid(), true), fixture.UserId);
         Assert.True(issued.Succeeded, string.Join(" ", issued.Errors));
         Assert.Equal(before, await fixture.BusinessSnapshotAsync());
@@ -103,14 +217,31 @@ public sealed class DeliveryNotePostgresTests
         await using var fixture = await Fixture.CreateAsync();
         var hidden = (await fixture.Service.PreviewAsync(fixture.OrderId, null, fixture.UserId)).Value!;
         var visible = (await fixture.Service.PreviewAsync(fixture.OrderId, null, fixture.UserId, showPaymentStatus: true)).Value!;
-        await fixture.AddPaymentAsync(50);
+        await fixture.AddPaymentAsync(265);
         Assert.False((await fixture.Service.IssueAsync(new(fixture.OrderId, null, visible.Fingerprint, Guid.NewGuid(), true), fixture.UserId)).Succeeded);
         var issued = await fixture.Service.IssueAsync(new(fixture.OrderId, null, hidden.Fingerprint, Guid.NewGuid()), fixture.UserId);
         Assert.True(issued.Succeeded, string.Join(" ", issued.Errors));
-        await fixture.AddPaymentAsync(215);
         var original = (await fixture.Service.GetIssuedAsync(issued.Value!.Id, fixture.UserId)).Value!;
         Assert.False(original.Content.ShowPaymentStatus); Assert.Null(original.Content.PaymentLabel);
         Assert.Equal(issued.Value.Pdf, original.Pdf);
+    }
+
+    [IsolatedPostgresFact]
+    public async Task PreviouslyIssuedPartialPaymentLabelAndContactArePreservedExactly()
+    {
+        await using var fixture = await Fixture.CreateAsync();
+        var content = (await fixture.Service.PreviewAsync(fixture.OrderId, null, fixture.UserId)).Value!.Content with
+            { TemplateVersion = "58mm-v2.1", ShowPaymentStatus = true, PaymentLabel = "PAGO PARCIAL", CommercialPhone = "Contacto histórico" };
+        byte[] pdf = "%PDF-original-v2.1-PAGO PARCIAL"u8.ToArray(), png = [137, 80, 78, 71, 10, 20];
+        var note = DeliveryNote.Create(900, fixture.OrderId, null, Guid.NewGuid(), fixture.UserId, content.IssuedAtUtc,
+            content.Scope, new string('C', 64), JsonSerializer.Serialize(content), pdf, png);
+        await using var db = fixture.Open(); db.DeliveryNotes.Add(note);
+        db.Entry(note).Property(x => x.TemplateVersion).CurrentValue = "58mm-v2.1"; await db.SaveChangesAsync();
+        var original = (await fixture.Service.GetIssuedAsync(note.Id, fixture.UserId)).Value!;
+        Assert.Equal(pdf, original.Pdf); Assert.Equal(png, original.Png);
+        Assert.Equal("PAGO PARCIAL", original.Content.PaymentLabel);
+        Assert.Equal("Contacto histórico", original.Content.CommercialPhone);
+        Assert.Equal("58mm-v2.1", original.Content.TemplateVersion);
     }
 
     [IsolatedPostgresFact]
@@ -285,20 +416,20 @@ public sealed class DeliveryNotePostgresTests
             Service = new(options, TimeProvider.System, Options.Create(new ThermalNoteOptions()), new TestEnvironment { ContentRootPath = root }, config);
         }
         public ApplicationDbContext Open() => new(_options);
-        public async Task AddPaymentAsync(decimal amount)
+        public async Task AddPaymentAsync(decimal amount, bool createReceivable = true, bool allocate = true)
         {
             await using var db = Open();
             var order = await db.Orders.SingleAsync(x => x.Id == OrderId);
             var receivable = await db.Receivables.SingleOrDefaultAsync(x => x.OrderId == OrderId);
-            if (receivable is null)
+            if (receivable is null && createReceivable)
             {
                 receivable = Receivable.Create(OrderId, order.CustomerId, null);
                 receivable.CorrectInvoice(265); db.Receivables.Add(receivable);
             }
             var payment = Payment.Create(OrderId, null, amount, PaymentMethod.Cash, UserId, null, DateTimeOffset.UtcNow);
-            receivable.ApplyPayment(amount);
+            receivable?.ApplyPayment(amount);
             db.Payments.Add(payment);
-            db.PaymentAllocations.Add(PaymentAllocation.Create(payment.Id, OrderId, amount, 1, DateTimeOffset.UtcNow));
+            if (allocate) db.PaymentAllocations.Add(PaymentAllocation.Create(payment.Id, OrderId, amount, 1, DateTimeOffset.UtcNow));
             await db.SaveChangesAsync();
         }
         public static async Task<Fixture> CreateAsync(bool onlyFree = false)

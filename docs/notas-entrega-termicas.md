@@ -6,7 +6,7 @@ Dentro de **Pedidos → detalle → Generar nota de entrega**:
 
 1. Seleccionar la entrega cuando exista más de una. Sin entrega asignada se documentan las unidades pendientes verificables del pedido.
 2. Revisar venta, reposición y degustación. La vista previa lleva «VISTA PREVIA» y no consume números ni escribe documentos.
-   Opcionalmente activar **Mostrar estado de pago en la nota**: se regenera inmediatamente la vista previa con el estado verificable. La casilla comienza desactivada.
+   Revisar **Mostrar pendiente de pago**: se activa automáticamente cuando hay un importe pendiente verificable, incluso antes de confirmar la entrega y sin cuenta por cobrar. Puede desactivarse antes de emitir; esa decisión se respeta al actualizar la vista previa.
 3. Pulsar **Emitir nota de entrega** para conservar la emisión definitiva `NE-000001`.
 4. Descargar PDF/PNG o compartir con la aplicación Android de impresión.
 5. Para reimprimir, seleccionar una nota en **Consultar o reimprimir → Abrir original**. Se descargan los mismos bytes y el mismo número, aunque el pedido haya cambiado.
@@ -35,12 +35,13 @@ Sección `ThermalNotes` de la aplicación:
 | `PrintableWidthMm` | 48 |
 | `PixelWidth` | 384 |
 | `LogoPath` | `wwwroot/images/brand/logo_tentacion_sana_termico.png` |
+| `ContactPhone` | `78969873` |
 
 48 mm útiles, aproximadamente 203 DPI y 384 puntos son estimaciones iniciales, no especificaciones verificadas de una Knup concreta. El PDF tiene página de 58 mm y márgenes laterales para el área útil; el PNG recorta esos márgenes externos, conserva un pequeño margen de seguridad interno y tiene el ancho digital exacto configurado. No se reduce una hoja A4.
 
 El PNG se codifica como escala de grises **de 1 bit**, sin transparencia, con píxeles exclusivamente negros o blancos. PDF y PNG parten de la misma composición QuestPDF. No se añadieron dependencias gráficas ni una integración Bluetooth.
 
-El pie recupera `Business:WhatsAppNumber` de la configuración existente. Si falta, se informa en la vista previa y no se inventa un número. El nombre histórico se toma de `OrderLine.ProductName`; no se deducen sabores ni se incorpora una presentación actual como si fuese histórica.
+El pie recupera `ThermalNotes:ContactPhone`, restaurado por instrucción comercial a **78969873**. Es exclusivo de las notas: no modifica `Business:WhatsAppNumber` ni los enlaces de WhatsApp de otras pantallas. Puede configurarse mediante `ThermalNotes__ContactPhone`; si se configura explícitamente vacío, se informa en la vista previa. El nombre histórico se toma de `OrderLine.ProductName`; no se deducen sabores ni se incorpora una presentación actual como si fuese histórica.
 
 ### Diseño comercial v2 y logotipo autorizado
 
@@ -52,14 +53,17 @@ La composición sigue la referencia `C:\Users\jose1\Downloads\nota_entrega_tenta
 
 Se usa Lato, texto base de 8 pt, detalles de 7–7,5 pt, título de 11,5 pt e importe total de 12 pt en negrita. Moneda uniforme `Bs 17,00`, subtotales alineados a la derecha, separadores finos y ausencia de bloques negros. Categorías con cero unidades se omiten; se muestran **TOTAL A ENTREGAR** o **TOTAL ENTREGADO**, según el alcance. Las fechas programada y realizada conservan sus etiquetas y fuentes diferentes. Cliente, sucursal y dirección tienen etiquetas; se omiten duplicados exactos ignorando espacios exteriores y mayúsculas.
 
-### Estado de pago opcional
+### Mostrar pendiente de pago — comportamiento actual v2.2
 
 - Apagado: no se imprime estado de pago ni se reserva espacio para su recuadro.
-- Activado y sin pagos aplicados confirmados al pedido: **PENDIENTE DE PAGO**, si hay productos cobrables.
-- Pedido completo cubierto parcialmente: **PAGO PARCIAL**.
-- Importe completo cubierto o productos exclusivamente sin cargo: no aparece estado alguno. Nunca se imprime un indicador de pago completado.
+- La selección automática se activa ante una deuda verificable. La ausencia de una cuenta por cobrar **no** significa que el pedido esté cubierto: se compara el importe comercial con los pagos confirmados atribuibles.
+- Activado y sin pagos confirmados: **PENDIENTE DE PAGO**, si hay productos cobrables.
+- Pedido completo cubierto parcialmente: también **PENDIENTE DE PAGO**. Las nuevas emisiones nunca imprimen `PAGADO` ni `PAGO PARCIAL`.
+- Importe completo cubierto o productos exclusivamente sin cargo: se omite el indicador y la selección automática queda apagada.
 - Una entrega parcial sin pagos registrados tiene deuda verificable. Si hay cobros al pedido que no permiten determinar qué parte corresponde a esa salida, se omite el estado y se muestra un aviso visible en el modal. No se distribuyen arbitrariamente pagos entre entregas, aunque un pago tenga una entrega como referencia contextual.
-- Se consultan únicamente `PaymentAllocations` del pedido y sus `Payments` confirmados. Se contrasta `Receivable.PaidAmount` cuando existe; una discrepancia impide mostrar un estado no verificable. No se consulta la deuda global del cliente como sustituto del importe de la nota.
+- Se consultan `PaymentAllocations` del pedido y sus `Payments` confirmados. Además se reconocen pagos directos antiguos con `Payment.OrderId` atribuible, **solo si no tienen aplicaciones a ningún pedido**, evitando duplicarlos o atribuir al pedido importes aplicados a otros. Si una entrega referenciada no pertenece al pedido, se omite el indicador y se avisa. Se contrasta `Receivable.PaidAmount` cuando existe; una discrepancia impide mostrar un estado no verificable. No se consulta la deuda global del cliente como sustituto del importe de la nota.
+- Si no se puede atribuir el pendiente de una entrega parcial, la selección automática queda apagada y se muestra un aviso visible. Una selección manual no puede forzar un estado no verificable.
+- La selección automática se aplica mientras el usuario no haya elegido explícitamente. Marcar o desmarcar fija la decisión durante la preparación de la nota, incluida la actualización de vista previa.
 - El control no cambia datos financieros. No muestra importes de deuda en el documento ni permite editar el estado real. Al abrir un original, refleja la preferencia guardada y queda deshabilitado; **Actualizar vista previa** vuelve al flujo de nueva emisión.
 
 ## Persistencia y migración
@@ -72,7 +76,7 @@ Se usa Lato, texto base de 8 pt, detalles de 7–7,5 pt, título de 11,5 pt e im
 
 La numeración usa `nextval`, nunca `Count + 1`. Puede tener huecos por transacciones revertidas; eso no implica una emisión existente. Dos solicitudes concurrentes del mismo contenido recuperan una única nota. Cambiar el pedido no altera archivos ya emitidos. La emisión añade únicamente documento y auditoría documental.
 
-El rediseño **no requiere otra migración**. Se reutiliza `SnapshotJson` para `ShowPaymentStatus`, `PaymentLabel`, `PaymentWarning` y `TemplateVersion`. El rediseño inicial se identificó como `58mm-v2`; el ajuste compacto actual usa `58mm-v2.1`. La huella incluye la preferencia, el resultado y la versión de diseño; si el resultado cambia entre vista previa y emisión, se solicita actualizar la vista previa. No se reescriben filas ni archivos históricos. Los snapshots v1 sin estos campos se leen con pago oculto y versión v1. La reimpresión devuelve los bytes guardados, sin renderizar de nuevo, incluso después de un pago o un cambio de logo.
+El rediseño **no requiere otra migración**. Se reutiliza `SnapshotJson` para `ShowPaymentStatus`, `PaymentLabel`, `PaymentWarning` y `TemplateVersion`. El rediseño inicial se identificó como `58mm-v2`; el ajuste compacto usa `58mm-v2.1`; la política de pendiente único y contacto restaurado usa `58mm-v2.2`. La huella incluye la preferencia, el resultado y la versión de diseño; si el resultado impreso cambia entre vista previa y emisión, se solicita actualizar la vista previa. No se reescriben filas ni archivos históricos. Los snapshots v1 sin estos campos se leen con pago oculto y versión v1. La reimpresión devuelve los bytes guardados, sin renderizar de nuevo, incluso después de un pago o un cambio de contacto. Una nota antigua que ya incluyera otra leyenda conserva exactamente su original; la política nueva se aplica solo a nuevas emisiones.
 
 El servicio usa contextos propios de lectura y escritura documental. Requiere usuario habilitado, sin cambio de contraseña pendiente, con política equivalente a ventas/administración. No crea nuevas entradas en el menú.
 
@@ -146,9 +150,42 @@ Comparación con **el mismo contenido** de la muestra normal anterior, incluido 
 
 Mediciones e informe: `ajuste-final/LONGITUDES.md` y `ajuste-final/longitudes-y-verificacion.json`. Verificador temporal: `C:\Users\jose1\AppData\Local\Temp\opencode\review-compact-notes.py`. Este ajuste modifica la plantilla, su identificación de versión en servicio/entidad documental y las pruebas; no modifica reglas de negocio ni documentos emitidos. No se desplegó ni se ejecutó migración en producción.
 
+## Revisión v2.2 — pendiente único antes y después de confirmar
+
+Referencia visual aprobada: `NE-000004.pdf`. Se conserva el recurso PNG circular original, su escala de 248 px, proporción, tipografía, márgenes, espacios y composición. El único ajuste de la plantilla restringe el recuadro a `PENDIENTE DE PAGO`; se restaura el contacto por configuración, sin rediseñar el pie.
+
+### Resultados reales
+
+- Compilación de la solución Release: sin errores ni advertencias.
+- **231 pruebas aprobadas: 147 unitarias y 84 de integración, sin omisiones**. PostgreSQL real aislado; incluye ausencia de cuenta por cobrar, abonos y cobertura completa antes de confirmar, pagos directos antiguos sin aplicaciones, ausencia de doble cómputo, cuenta por cobrar después de confirmar, importes no atribuibles, emisión con selección automática apagada y reimpresión histórica intacta.
+- Se compararon snapshots de pedidos, inventario, ventas, pagos y cuentas por cobrar para verificar que vista previa/emisión no modifican datos comerciales ni financieros.
+- Edge/Playwright: casilla activada automáticamente antes de confirmar; desactivación conservada después de **dos** actualizaciones; regeneración inmediata al marcar, emisión, original bloqueado, reimpresión con los mismos bytes, PDF/PNG, compartir/fallback, móvil y teclado. Web Share utiliza un simulador de API; no prueba una impresión Android física.
+- Ocho parejas PDF/PNG generadas desde el servicio documental con PostgreSQL, no solo desde una plantilla sintética. Las cuatro muestras anteriores a confirmar se generaron **sin filas de Receivables**. Las posteriores usan pedido/entrega completados y cuenta por cobrar de prueba.
+- Inspección visual y verificador PDF/Pillow: logo original sin alteraciones, ancho 58 mm, PNG 384 px de 1 bit, total 12 pt, textos dentro del área útil, cantidades/motivos/observaciones completos, fechas según alcance, contacto **78969873**, sin referencias fiscales ni las otras leyendas de pago. El PNG con abono es idéntico al pendiente sin abono; oculto y cubierto son idénticos entre sí y no reservan espacio para el recuadro.
+- Detector de interfaz sin hallazgos. No se modificó la arquitectura financiera, no hay migración adicional ni despliegue.
+
+### Archivos finales
+
+Carpeta: `.artifacts/thermal-notes/revision-v2.2/`. Son vistas previas de datos ficticios, no documentos comerciales nuevos.
+
+| Archivo base (.pdf y .png) | Cuenta por cobrar | Indicador | Longitud PDF |
+|---|---|---|---:|
+| `antes-confirmar-visible` | No existe | Pendiente | 246,7 mm |
+| `antes-confirmar-oculto` | No existe | Oculto por elección | 237,4 mm |
+| `antes-confirmar-abono` | No existe | Pendiente | 246,7 mm |
+| `antes-confirmar-cubierto` | No existe | Omitido por cobertura completa | 237,4 mm |
+| `despues-confirmar-visible` | Registrada | Pendiente | 254,8 mm |
+| `despues-confirmar-oculto` | Registrada | Oculto por elección | 245,5 mm |
+| `despues-confirmar-abono` | Registrada | Pendiente | 254,8 mm |
+| `despues-confirmar-cubierto` | Registrada | Omitido por cobertura completa | 245,5 mm |
+
+Todas conservan 15 unidades de venta + 1 reposición + 2 degustaciones, subtotal Bs 255,00 y envío Bs 10,00. Las diferencias de longitud corresponden al recuadro y a los datos de recepción del alcance completado. Las medidas no incluyen avance adicional de la impresora.
+
+Capturas: `vista-previa-desktop.png`, `configuracion-movil.png` y `vista-previa-movil.png`. Informe: `verificacion-pendiente.json`. Verificador temporal externo al repositorio: `C:\Users\jose1\AppData\Local\Temp\opencode\review-pending-only.py`. El script de navegador está en el host temporal ya documentado. Las muestras anteriores siguen disponibles en sus carpetas previas.
+
 ## Prueba desde Android
 
-1. Comprobar `Business:WhatsAppNumber` y mantener la copia térmica circular autorizada. Las muestras usan el contacto de la referencia, no cambian la configuración comercial.
+1. Comprobar `ThermalNotes:ContactPhone` (**78969873**) y mantener la copia térmica circular autorizada.
 2. Instalar y revisar primero la migración en un entorno de prueba.
 3. Abrir un pedido de prueba confirmado y generar/emitir su nota.
 4. Pulsar **Compartir PNG** y elegir la aplicación Android que ya se utiliza con la Knup. Si Web Share no admite archivos, el sistema descarga el PNG para abrirlo desde esa aplicación.

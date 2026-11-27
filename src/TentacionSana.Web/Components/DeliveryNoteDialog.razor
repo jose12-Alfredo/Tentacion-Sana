@@ -24,7 +24,7 @@
                 </div>
                 @if (_context.Scopes.Count > 0)
                 {
-                    <label class="thermal-payment-option"><input type="checkbox" @bind="_showPaymentStatus" @bind:after="PreviewAsync" disabled="@(_busy || _issuedNumber is not null)" />Mostrar estado de pago en la nota</label>
+                    <label class="thermal-payment-option"><input type="checkbox" @bind="_showPaymentStatus" @bind:after="PaymentVisibilityChangedAsync" disabled="@(_busy || _issuedNumber is not null)" />Mostrar pendiente de pago</label>
                 }
                 @if (_context.Scopes.Count == 0 && _context.Issued.Count == 0) { <p>No hay cantidades verificables disponibles para generar una nota.</p> }
             }
@@ -33,8 +33,9 @@
             @if (_content is not null)
             {
                 <div class="thermal-document-status"><strong>@(_issuedNumber ?? "Vista previa · sin número definitivo")</strong><p>@(_issuedNumber is null ? "Revisa las cantidades antes de emitir. Esto no registra la entrega ni modifica inventario o cobros." : "Archivo original conservado. Descargar, compartir o reimprimir no crea otra numeración ni cambia el pedido.")</p></div>
-                @if (_content.PaymentWarning is { } paymentWarning) { <p class="thermal-payment-warning" role="status">@paymentWarning</p> }
-                @if (_warnings.Count > 0) { <details class="thermal-warnings"><summary>Información de formato y alcance</summary>@foreach (var warning in _warnings.Where(x => x != _content.PaymentWarning)) { <p>@warning</p> }</details> }
+                var paymentWarning = _content.PaymentWarning ?? _warnings.FirstOrDefault(x => x.StartsWith("Se omitió el estado de pago:", StringComparison.Ordinal));
+                @if (paymentWarning is not null) { <p class="thermal-payment-warning" role="status">@paymentWarning</p> }
+                @if (_warnings.Count > 0) { <details class="thermal-warnings"><summary>Información de formato y alcance</summary>@foreach (var warning in _warnings.Where(x => x != paymentWarning)) { <p>@warning</p> }</details> }
                 <p class="thermal-totals">@_content.SaleUnits venta · @_content.ReplacementUnits reposición · @_content.TastingUnits degustación · <strong>@_content.PhysicalUnits unidades físicas</strong> · Bs @_content.Total.ToString("N2")</p>
                 <div class="thermal-preview">@if (_imageUrl is not null) { <img src="@_imageUrl" alt="@($"Nota de entrega del pedido {OrderNumber}, {_issuedNumber ?? "vista previa"}")" /> } else { <p role="status">Preparando imagen monocromática…</p> }</div>
             }
@@ -66,6 +67,7 @@
     private IReadOnlyList<string> _warnings = [];
     private Guid _userId, _requestId = Guid.NewGuid();
     private bool _busy, _pendingPrepare, _filesReady, _showPaymentStatus;
+    private bool? _paymentVisibilityChoice;
     private IJSObjectReference? _module;
     private Guid? _loadedOrder;
     private Guid? SelectedDeliveryId => Guid.TryParse(_scopeKey, out var id) ? id : null;
@@ -102,15 +104,21 @@
         catch (Exception ex) when (ex is JSException or JSDisconnectedException) { _error = "No se pudieron preparar los archivos en el navegador. Cierra y vuelve a abrir la nota."; }
         StateHasChanged();
     }
+    private async Task PaymentVisibilityChangedAsync()
+    {
+        _paymentVisibilityChoice = _showPaymentStatus;
+        await PreviewAsync();
+    }
     private async Task PreviewAsync()
     {
         if (_busy) return;
         _busy = true; _filesReady = false; _error = null; _issuedNumber = null; _preview = null; _content = null; _imageUrl = null;
         try
         {
-            var result = await Notes.PreviewAsync(OrderId, SelectedDeliveryId, _userId, showPaymentStatus: _showPaymentStatus);
+            var result = await Notes.PreviewAsync(OrderId, SelectedDeliveryId, _userId, showPaymentStatus: _paymentVisibilityChoice);
             if (!result.Succeeded) { _error = string.Join(" ", result.Errors); return; }
             _preview = result.Value!; _content = _preview.Content; _pdf = _preview.Pdf; _png = _preview.Png; _warnings = _preview.Warnings;
+            _showPaymentStatus = _content.ShowPaymentStatus;
             _requestId = Guid.NewGuid(); _pendingPrepare = true;
         }
         catch (Exception ex) { ShowException(ex); }
@@ -148,6 +156,7 @@
     {
         _content = value.Content; _pdf = value.Pdf; _png = value.Png; _issuedNumber = value.Number;
         _showPaymentStatus = value.Content.ShowPaymentStatus;
+        _paymentVisibilityChoice = null;
         _warnings = ["Se conservan los datos y archivos originales de esta emisión. No se afirma que la impresión física haya terminado."];
         _imageUrl = null; _pendingPrepare = true;
     }

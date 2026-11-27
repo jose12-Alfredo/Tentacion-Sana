@@ -7,7 +7,7 @@ public sealed class DeliveryNotePaymentProjectionTests
     [Theory]
     [InlineData(false, 265, 265, 0, true, null)]
     [InlineData(true, 265, 265, 0, true, "PENDIENTE DE PAGO")]
-    [InlineData(true, 265, 265, 100, true, "PAGO PARCIAL")]
+    [InlineData(true, 265, 265, 100, true, "PENDIENTE DE PAGO")]
     [InlineData(true, 265, 265, 265, true, null)]
     [InlineData(true, 265, 265, 300, true, null)]
     [InlineData(true, 0, 0, 0, true, null)]
@@ -17,6 +17,14 @@ public sealed class DeliveryNotePaymentProjectionTests
     {
         var result = DeliveryNotePaymentProjection.Evaluate(show, total, orderTotal, paid, whole, paid);
         Assert.Equal(expected, result.Label); Assert.Null(result.Warning);
+    }
+
+    [Fact]
+    public void AbsenceOfReceivableDoesNotImplyPayment()
+    {
+        Assert.Equal("PENDIENTE DE PAGO", DeliveryNotePaymentProjection.Evaluate(true, 265, 265, 0, true, null).Label);
+        Assert.Equal("PENDIENTE DE PAGO", DeliveryNotePaymentProjection.Evaluate(true, 265, 265, 100, true, null).Label);
+        Assert.Null(DeliveryNotePaymentProjection.Evaluate(true, 265, 265, 265, true, null).Label);
     }
 
     [Fact]

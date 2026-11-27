@@ -49,7 +49,7 @@ public sealed class DeliveryNoteService(DbContextOptions<ApplicationDbContext> d
     public Task<NoteResult<DeliveryNotePreview>> PreviewAsync(Guid orderId, Guid? deliveryId, Guid userId, CancellationToken cancellationToken = default) =>
         PreviewAsync(orderId, deliveryId, userId, false, cancellationToken);
 
-    public async Task<NoteResult<DeliveryNotePreview>> PreviewAsync(Guid orderId, Guid? deliveryId, Guid userId, bool showPaymentStatus, CancellationToken cancellationToken = default)
+    public async Task<NoteResult<DeliveryNotePreview>> PreviewAsync(Guid orderId, Guid? deliveryId, Guid userId, bool? showPaymentStatus, CancellationToken cancellationToken = default)
     {
         try
         {
@@ -58,10 +58,13 @@ public sealed class DeliveryNoteService(DbContextOptions<ApplicationDbContext> d
             return await db.Database.CreateExecutionStrategy().ExecuteAsync(async () =>
             {
                 await using var transaction = await db.Database.BeginTransactionAsync(IsolationLevel.RepeatableRead, cancellationToken);
-                var content = await ReadContentAsync(db, orderId, deliveryId, showPaymentStatus, cancellationToken);
+                var content = await ReadContentAsync(db, orderId, deliveryId, showPaymentStatus ?? true, cancellationToken);
+                var paymentWarning = content.PaymentWarning;
+                if (showPaymentStatus is null && content.PaymentLabel is null)
+                    content = content with { ShowPaymentStatus = false, PaymentWarning = null };
                 var files = ThermalDeliveryNoteDocument.Generate(content, "VISTA PREVIA");
                 var warnings = new List<string>();
-                if (content.PaymentWarning is { } paymentWarning) warnings.Add(paymentWarning);
+                if (paymentWarning is not null) warnings.Add(paymentWarning);
                 if (content.Scope == "RegisteredSummary") warnings.Add("Es un resumen acumulado de datos registrados; no reconstruye recepciones parciales anteriores.");
                 if (content.Scope == "RegisteredSummary" && content.DeliveryFee == 0) warnings.Add("El resumen no atribuye cargos de envío históricos a una entrega cuando no hay una asignación individual verificable.");
                 if (string.IsNullOrWhiteSpace(content.CommercialPhone)) warnings.Add("El número de contacto comercial no está configurado; se omitirá del pie.");
@@ -165,11 +168,18 @@ public sealed class DeliveryNoteService(DbContextOptions<ApplicationDbContext> d
         var content = new ThermalNoteContent(order.Id, order.Number, deliveryId, summary ? "RegisteredSummary" : selected is null ? "PendingOrder" : "PendingDelivery", sourceVersion,
             clock.GetUtcNow(), customer.Name, point?.Label, point?.Address, contact?.Phone ?? customer.Phone, selected?.Driver,
             summary ? selected?.Receiver : null, selected?.ScheduledAtUtc ?? order.PromisedAtUtc,
-            summary ? selected?.CompletedAtUtc : null, lines, fee, configuration["Business:WhatsAppNumber"], settings.PixelWidth,
-            settings.PaperWidthMm, settings.PrintableWidthMm, logo) { TemplateVersion = "58mm-v2.1" };
+            summary ? selected?.CompletedAtUtc : null, lines, fee, configuration["ThermalNotes:ContactPhone"] ?? settings.ContactPhone, settings.PixelWidth,
+            settings.PaperWidthMm, settings.PrintableWidthMm, logo) { TemplateVersion = "58mm-v2.2" };
         if (!showPaymentStatus) return content;
         var allocated = await db.PaymentAllocations.AsNoTracking().Where(x => x.OrderId == orderId &&
             db.Payments.Any(p => p.Id == x.PaymentId && p.Status == PaymentStatus.Confirmed)).SumAsync(x => (decimal?)x.Amount, ct) ?? 0;
+        // Compatibilidad con pagos directos anteriores al esquema de aplicaciones:
+        // solo se consideran si no tienen aplicaciones a ningún pedido, para no duplicar ni reasignar importes.
+        var direct = await db.Payments.AsNoTracking().Where(p => p.OrderId == orderId && p.Status == PaymentStatus.Confirmed &&
+            !db.PaymentAllocations.Any(a => a.PaymentId == p.Id)).ToListAsync(ct);
+        if (direct.Any(p => p.DeliveryId is { } id && rows.All(d => d.Id != id)))
+            return content with { ShowPaymentStatus = true, PaymentWarning = "Se omitió el estado de pago: hay un pago cuya entrega no corresponde a este pedido." };
+        allocated += direct.Sum(p => p.Amount);
         var receivablePaid = await db.Receivables.AsNoTracking().Where(x => x.OrderId == orderId).Select(x => (decimal?)x.PaidAmount).SingleOrDefaultAsync(ct);
         var wholeOrder = lines.Count == orderLines.Count && orderLines.All(x => lines.Any(l => l.OrderLineId == x.Id &&
             l.SaleQuantity == x.Sale && l.ReplacementQuantity == x.Replacement && l.TastingQuantity == x.Tasting)) && fee == order.DeliveryFee;

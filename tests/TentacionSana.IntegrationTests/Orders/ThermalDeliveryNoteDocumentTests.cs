@@ -177,6 +177,7 @@ public sealed class ThermalDeliveryNoteDocumentTests
         var note = Sample("normal");
         var plain = ThermalDeliveryNoteDocument.Generate(note, "NE-000001").Png;
         Assert.Equal(plain, ThermalDeliveryNoteDocument.Generate(note with { ShowPaymentStatus = true, PaymentLabel = "PAGADO" }, "NE-000001").Png);
+        Assert.Equal(plain, ThermalDeliveryNoteDocument.Generate(note with { ShowPaymentStatus = true, PaymentLabel = "PAGO PARCIAL" }, "NE-000001").Png);
         var free = Sample("solo-sin-cargo");
         Assert.Equal(ThermalDeliveryNoteDocument.Generate(free, "NE-000001").Png,
             ThermalDeliveryNoteDocument.Generate(free with { ShowPaymentStatus = true, PaymentLabel = "PENDIENTE DE PAGO" }, "NE-000001").Png);
@@ -212,6 +213,6 @@ public sealed class ThermalDeliveryNoteDocumentTests
             "Sucursal de ejemplo", "Dirección comercial de ejemplo", null, "", null, new(2026, 10, 29, 14, 0, 0, TimeSpan.Zero), null,
              lines, sample is "entrega-parcial" or "solo-sin-cargo" ? 0 : 10, "78969873", 384, 58, 48, logo)
              { TemplateVersion = "58mm-v2", ShowPaymentStatus = sample is "pago-pendiente" or "pago-parcial",
-                 PaymentLabel = sample == "pago-pendiente" ? "PENDIENTE DE PAGO" : sample == "pago-parcial" ? "PAGO PARCIAL" : null };
+                  PaymentLabel = sample is "pago-pendiente" or "pago-parcial" ? "PENDIENTE DE PAGO" : null };
     }
 }

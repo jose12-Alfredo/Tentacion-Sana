@@ -85,7 +85,7 @@ public static class ThermalDeliveryNoteDocument
                     row.RelativeItem().Text("TOTAL").Bold().FontSize(12);
                     row.AutoItem().Text(Money(note.Total)).Bold().FontSize(12);
                 });
-                if (note.ShowPaymentStatus && note.SaleUnits > 0 && note.Total > 0 && note.PaymentLabel is "PENDIENTE DE PAGO" or "PAGO PARCIAL")
+                if (note.ShowPaymentStatus && note.SaleUnits > 0 && note.Total > 0 && note.PaymentLabel == "PENDIENTE DE PAGO")
                     column.Item().PaddingTop(3).Border(.6f).PaddingVertical(5).AlignCenter().Text(note.PaymentLabel).Bold().FontSize(9);
                 Line(column);
                 column.Item().Text("OBSERVACIONES").Bold();

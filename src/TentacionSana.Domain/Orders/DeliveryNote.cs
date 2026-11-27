@@ -25,6 +25,6 @@ public sealed class DeliveryNote
             throw new ArgumentException("La nota emitida requiere identificación, contenido y ambos archivos.");
         return new() { Id = Guid.NewGuid(), Number = number, OrderId = orderId, DeliveryId = deliveryId, RequestId = requestId,
             IssuedByUserId = userId, IssuedAtUtc = now, Scope = scope, Fingerprint = fingerprint, SnapshotJson = snapshot,
-            TemplateVersion = "58mm-v2.1", Pdf = pdf.ToArray(), Png = png.ToArray() };
+            TemplateVersion = "58mm-v2.2", Pdf = pdf.ToArray(), Png = png.ToArray() };
     }
 }

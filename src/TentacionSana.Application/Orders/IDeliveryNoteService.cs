@@ -4,7 +4,7 @@ public interface IDeliveryNoteService
 {
     Task<NoteResult<DeliveryNoteContext>> GetContextAsync(Guid orderId, Guid userId, CancellationToken cancellationToken = default);
     Task<NoteResult<DeliveryNotePreview>> PreviewAsync(Guid orderId, Guid? deliveryId, Guid userId, CancellationToken cancellationToken = default);
-    Task<NoteResult<DeliveryNotePreview>> PreviewAsync(Guid orderId, Guid? deliveryId, Guid userId, bool showPaymentStatus, CancellationToken cancellationToken = default);
+    Task<NoteResult<DeliveryNotePreview>> PreviewAsync(Guid orderId, Guid? deliveryId, Guid userId, bool? showPaymentStatus, CancellationToken cancellationToken = default);
     Task<NoteResult<DeliveryNoteFiles>> IssueAsync(IssueDeliveryNote command, Guid userId, CancellationToken cancellationToken = default);
     Task<NoteResult<DeliveryNoteFiles>> GetIssuedAsync(Guid noteId, Guid userId, CancellationToken cancellationToken = default);
 }
@@ -50,4 +50,5 @@ public sealed class ThermalNoteOptions
     public float PrintableWidthMm { get; set; } = 48;
     public int PixelWidth { get; set; } = 384;
     public string LogoPath { get; set; } = "wwwroot/images/brand/logo_tentacion_sana_termico.png";
+    public string ContactPhone { get; set; } = "78969873";
 }
